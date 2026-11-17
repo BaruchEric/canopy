@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { QuickNote } from "../../src/core/notes";
 import { parseRules, type TriggerRuleInfo, type TriggersInfo } from "../../src/core/trigger";
 import { DEFAULT_SWEEP } from "../../src/core/sweep";
@@ -194,6 +194,39 @@ test("a next fire already passed, a line that does not read and a time nothing f
   expect(zoneShift([{ cron: "0 9 * * *", next: at("2026-11-10T17:07") }], NOW)).toBe(0);
 });
 
+describe("on a page in Los Angeles", () => {
+  const was = process.env["TZ"] ?? "Etc/UTC";
+  beforeAll(() => {
+    process.env["TZ"] = "America/Los_Angeles";
+  });
+  afterAll(() => {
+    process.env["TZ"] = was;
+  });
+  const t = (stamp: string): number => new Date(stamp).getTime();
+
+  test("a pin that fires after this page's clock change leaves the shift the soonest pin gives, not 0", () => {
+    // Friday 30 Oct, 12:00 PDT. A backend on UTC is seven hours ahead until
+    // the clocks here go back on 1 Nov, and eight hours ahead after that.
+    const now = t("2026-10-30T12:00:00-07:00");
+    const daily = { cron: "0 9 * * *", next: t("2026-10-31T09:00:00Z") };
+    const weekly = { cron: "0 9 * * 2", next: t("2026-11-03T09:00:00Z") };
+    expect(zoneShift([daily], now)).toBe(7 * HOUR);
+    expect(zoneShift([weekly], now)).toBe(8 * HOUR);
+    expect(zoneShift([weekly, daily], now)).toBe(7 * HOUR);
+    expect(zoneShift([daily, weekly], now)).toBe(7 * HOUR);
+  });
+
+  test("a daily pin from a backend sixteen hours ahead is not read as eight hours behind, which no zone is", () => {
+    // Tuesday 10 Nov, 12:00 PST. Singapore's next 09:00 is 17:00 here, which
+    // a shift of -8 h fits too, but that would put the backend at UTC-16.
+    const now = t("2026-11-10T12:00:00-08:00");
+    expect(zoneShift([{ cron: "0 9 * * *", next: t("2026-11-11T01:00:00Z") }], now)).toBe(16 * HOUR);
+    // Honolulu, two hours behind, fits +22 h too (UTC+14, a real zone), and
+    // the nearer of the two wins
+    expect(zoneShift([{ cron: "0 9 * * *", next: t("2026-11-11T19:00:00Z") }], now)).toBe(-2 * HOUR);
+  });
+});
+
 test("a job's next fire: the backend's word, a time worked out on its clock, or none", () => {
   const due = clockJobs(input({ rangers: { mac: ranger({ wakes: [wake({ cron: "0 9 * * *", next: NOW - 60_000 })] }) } }))[0];
   if (!due) throw new Error("no job");
@@ -376,4 +409,15 @@ test("a one-time wake as typed is read on the backend's clock", () => {
   expect(readWhen("14:00", NOW, -8 * HOUR)).toBe(at("2026-11-10T22:00"));
   expect(readWhen("in 30m", NOW, -8 * HOUR)).toBe(NOW + 30 * 60_000);
   expect(readWhen("soon", NOW, 0)).toEqual({ error: '"soon" is not a time: try "in 30m", "14:00" or an ISO date and time' });
+});
+
+test("a time typed with its zone is that moment, whatever the backend's clock", () => {
+  // the backend is seven hours ahead, so its clock already reads 19:00, but
+  // 13:00Z is an hour from now
+  expect(readWhen("2026-11-10T13:00Z", NOW, 7 * HOUR)).toBe(at("2026-11-10T13:00"));
+  expect(readWhen("2026-11-10T14:00+01:00", NOW, -8 * HOUR)).toBe(at("2026-11-10T13:00"));
+  expect(readWhen("2026-11-10 14:00:30+0100", NOW, -8 * HOUR)).toBe(at("2026-11-10T13:00") + 30_000);
+  expect(readWhen("2026-11-10T11:00Z", NOW, -8 * HOUR)).toEqual({ error: "2026-11-10T11:00Z has already passed" });
+  // one with no zone is on the backend's clock, as before
+  expect(readWhen("2026-11-10T14:00", NOW, -8 * HOUR)).toBe(at("2026-11-10T22:00"));
 });

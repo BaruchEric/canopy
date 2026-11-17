@@ -28,13 +28,16 @@ function ordinal(n: number): string {
 const sorted = (set: ReadonlySet<number>): number[] => [...set].sort((a, b) => a - b);
 const full = (set: ReadonlySet<number>, lo: number, hi: number): boolean => set.size === hi - lo + 1;
 
-/** the step when the set is lo, lo+n, lo+2n and so on to the field's end */
-function stepOf(set: ReadonlySet<number>, lo: number, hi: number): number | null {
+/** The step when the set is lo, lo+n, lo+2n and so on to the field's end.
+ *  A field that comes round again (`wraps`: the minutes of an hour, the
+ *  hours of a day) also needs the gap from its last value back to lo to be
+ *  n, or "0,40" would read as every 40 minutes when :40 to :00 is 20. */
+function stepOf(set: ReadonlySet<number>, lo: number, hi: number, wraps: boolean): number | null {
   const v = sorted(set);
   const second = v[1];
   if (v[0] !== lo || second === undefined) return null;
   const n = second - lo;
-  if (n < 2) return null;
+  if (n < 2 || (wraps && (hi - lo + 1) % n !== 0)) return null;
   for (const [i, value] of v.entries()) if (value !== lo + i * n) return null;
   return lo + v.length * n > hi ? n : null;
 }
@@ -75,14 +78,14 @@ function hoursSpan(hours: ReadonlySet<number>): string {
  *  09:00"); otherwise they are a rate, which a day follows. */
 function timeWords(c: Cron): { text: string; at: boolean } {
   const everyHour = full(c.hours, 0, 23);
-  const minuteStep = stepOf(c.minutes, 0, 59);
+  const minuteStep = stepOf(c.minutes, 0, 59, true);
   const rate = full(c.minutes, 0, 59) ? "every minute" : minuteStep !== null ? `every ${minuteStep} minutes` : null;
   if (rate) return { text: everyHour ? rate : `${rate} ${hoursSpan(c.hours)}`, at: false };
   const minutes = sorted(c.minutes);
   const hours = sorted(c.hours);
   if (everyHour && minutes.length <= 4) return { text: `every hour at ${list(minutes.map((m) => `:${two(m)}`))}`, at: false };
   const minute = minutes.length === 1 ? minutes[0] : undefined;
-  const hourStep = stepOf(c.hours, 0, 23);
+  const hourStep = stepOf(c.hours, 0, 23, true);
   if (minute !== undefined && hourStep !== null) return { text: minute === 0 ? `every ${hourStep} hours` : `every ${hourStep} hours at :${two(minute)}`, at: false };
   const times = hours.flatMap((h) => minutes.map((m) => clock(h, m)));
   if (times.length <= 3) return { text: list(times), at: true };
@@ -93,7 +96,7 @@ function timeWords(c: Cron): { text: string; at: boolean } {
 }
 
 function domWords(days: ReadonlySet<number>): string {
-  const step = stepOf(days, 1, 31);
+  const step = stepOf(days, 1, 31, false);
   if (step !== null) return `every ${ordinal(step)} day`;
   const run = runOf(days);
   if (run) return `the ${ordinal(run[0])} to the ${ordinal(run[1])}`;
@@ -134,7 +137,9 @@ function dayWords(c: Cron): { lead: string; tail: string } | null {
   if (!dom && dow) return { lead: `${cap(dow)}${inMonth}`, tail: `on ${dow}${inMonth}` };
   const ofMonth = `${dom ?? ""} of ${mon ?? "the month"}`;
   if (!dow) return { lead: cap(ofMonth), tail: `on ${ofMonth}` };
-  const both = either ? `${ofMonth} and ${dow}` : `${dow} that fall on ${ofMonth}`;
+  // the month holds for both day fields, so it closes the phrase rather
+  // than sitting on the dates alone
+  const both = either ? (mon ? `${dom ?? ""} and ${dow} in ${mon}` : `${ofMonth} and ${dow}`) : `${dow} that fall on ${ofMonth}`;
   return { lead: cap(both), tail: `on ${both}` };
 }
 

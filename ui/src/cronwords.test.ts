@@ -46,6 +46,22 @@ test("the days read as cron counts them: either field when both are set, both wh
   expect(cronWords("0 9 1 * 0-6")).toBe("Every day at 09:00");
 });
 
+test("a step reads as one only when the gap back round the hour or the day is the step too", () => {
+  expect(cronWords("0,40 * * * *")).toBe("Every hour at :00 and :40");
+  expect(cronWords("*/40 * * * *")).toBe("Every hour at :00 and :40");
+  expect(cronWords("*/7 * * * *")).toBe("At minute 0, 7, 14, 21, 28, 35, 42, 49, 56 of every hour");
+  expect(cronWords("0 */5 * * *")).toBe("Every day at 00:00, 05:00, 10:00, 15:00 and 20:00");
+  expect(cronWords("*/20 * * * *")).toBe("Every 20 minutes");
+  expect(cronWords("0 */8 * * *")).toBe("Every 8 hours");
+  // the days of a month never come round evenly, and read as the month's
+  expect(cronWords("0 9 */2 * *")).toBe("Every 2nd day of the month at 09:00");
+});
+
+test("with both day fields set, a month holds for the weekdays as well as the dates", () => {
+  expect(cronWords("0 9 1 1 1")).toBe("The 1st and Mondays in January at 09:00");
+  expect(cronWords("*/15 * 1,15 6-8 1-5")).toBe("Every 15 minutes on the 1st and 15th and weekdays in June to August");
+});
+
 test("a line with too many times to list falls back on its fields", () => {
   expect(cronWords("0,10,20,35,50 * * * *")).toBe("At minute 0, 10, 20, 35, 50 of every hour");
   expect(cronWords("5,10 1,2,3,7 * * *")).toBe("At minute 5, 10 of hour 1-3, 7");

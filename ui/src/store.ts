@@ -84,7 +84,7 @@ import { normalizeRoutes, resolveAgent } from "../../src/core/route";
 import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
 import { loadNotes, noteId, notesPrompt, updateNotes, withNote, withoutNotes, type Note, REVIEW_NOTES_STORE } from "./reviewnotes";
-import { originOf, pairLabel, readPair, readToken, readsAdmin, writePair, writeToken, type AuthInfo, type BackendAuth, type SignIn } from "./callerToken";
+import { originOf, pairLabel, readPair, readToken, readsAdmin, tokenKey, writePair, writeToken, type AuthInfo, type BackendAuth, type SignIn } from "./callerToken";
 import { deviceName } from "../../src/core/presence";
 import { listedTask } from "../../src/core/tasks";
 import { startsDev } from "./tasks";
@@ -2146,10 +2146,6 @@ function openSavedPanels(
   return { panels, closedSections, popped };
 }
 
-/** A backend refused a call for want of a token: the top bar offers to sign
- *  in to it. A 401 to a call that carried one means the backend no longer
- *  knows it (revoked, or a month unused), so it is forgotten here, unless a
- *  sign-in has kept a new one since that call went out. */
 /** Whether this page holds a token for a backend. The sweep is read at start
  *  only then: its routes need the admin right, and a refusal would mark the
  *  backend as wanting a sign-in that nothing else on the page asked for. The
@@ -2188,14 +2184,26 @@ function takeSweep(get: () => CanopyState, set: (s: Partial<CanopyState> | ((s: 
   }
 }
 
-function refusedHere(set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string, sent: string | null): void {
+/** A backend refused a call for want of a token: the top bar offers to sign
+ *  in to it. A 401 says the backend does not know the caller. When the call
+ *  carried the token this page holds, that token is dead (revoked, or a
+ *  month unused) and is forgotten here. When this page holds none, the
+ *  backend takes it for nobody too, whatever it said before: another window
+ *  that signed out or forgot a revoked token leaves this one's last word
+ *  stale, and a stream dialled by that word asked for a ticket every two
+ *  seconds with no sign-in shown. A token a sign-in kept since the call went
+ *  out is not the one refused, and stays. */
+function refusedHere(set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string, status: number, sent: string | null): void {
   const origin = originOf(baseOf(b));
-  const deadToken = sent !== null && readToken(origin) === sent;
-  if (deadToken) writeToken(origin, null);
+  const held = readToken(origin);
+  const nobody = status === 401 && (held === null || held === sent);
+  if (nobody && held !== null) writeToken(origin, null);
   set((s) => {
     const was = s.authByBackend[b];
-    if (!was || (was.needed && !deadToken)) return {};
-    return { authByBackend: { ...s.authByBackend, [b]: { ...was, needed: true, ...(deadToken ? { hasToken: false, you: "none" as const, youId: null } : {}) } } };
+    if (!was) return {};
+    const stale = nobody && (was.you !== "none" || was.hasToken || was.youId !== null);
+    if (was.needed && !stale) return {};
+    return { authByBackend: { ...s.authByBackend, [b]: { ...was, needed: true, ...(stale ? { hasToken: false, you: "none" as const, youId: null } : {}) } } };
   });
 }
 
@@ -2628,7 +2636,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       if (!c) return;
       const status = backendState(c.status, sig);
       if (status !== c.status) set((s) => ({ conns: withConn(s, name, { status }) }));
-      if (sig.kind === "refused") refusedHere(set, name, sig.status === 401 ? sig.token : null);
+      if (sig.kind === "refused") refusedHere(set, name, sig.status, sig.token);
     });
     const e = ++epoch;
     // A backend that checks who calls it tells nobody its board, so there is
@@ -6451,6 +6459,29 @@ export function pairsOf(auth: Record<string, BackendAuth>): Record<string, Pendi
  *  was just refused for want of one. */
 export const wantsSignIn = (a: BackendAuth | undefined): boolean =>
   a !== undefined && a.mode !== "off" && a.you === "none" && (!a.hasToken || a.needed);
+
+/** Another window of this browser kept or forgot a backend's token (a
+ *  sign-in, a sign-out, a revoke), and this one follows; `key` is the
+ *  storage key that changed, null when all of storage was cleared. Another
+ *  backend whose load stopped at its sign-in loads now. Any other is asked
+ *  again who it takes this page for, so the sign-in chip shows or goes; its
+ *  stream takes a new token on its next look, and home's load that waits
+ *  on the sign-in screen goes again once home says who this page is. */
+export function tokenChanged(key: string | null): void {
+  if (key !== null && !key.startsWith(tokenKey(""))) return;
+  const s = useStore.getState();
+  for (const name of s.backendOrder) {
+    const home = name === s.home;
+    // another backend with no URL settled yet is still connecting
+    if (!home && baseOf(name) === "") continue;
+    const origin = originOf(baseOf(name));
+    if (key !== null && key !== tokenKey(origin)) continue;
+    if (!home && !streams.has(name) && readToken(origin) !== null) void s.connect(name);
+    else void s.loadAuth(name);
+  }
+}
+
+if (typeof window !== "undefined") window.addEventListener("storage", (e) => tokenChanged(e.key));
 
 // another window of this browser left or sent notes: show them here too
 if (typeof window !== "undefined") {

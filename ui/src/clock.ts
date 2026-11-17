@@ -172,27 +172,51 @@ export function clockJobs(input: ClockInput): Job[] {
 }
 
 const QUARTER = 15 * 60_000;
-/** every whole quarter hour two clocks can be apart, nearest first */
-const SHIFTS: readonly number[] = Array.from({ length: 209 }, (_, i) => (i === 0 ? 0 : Math.ceil(i / 2) * QUARTER * (i % 2 === 1 ? 1 : -1)));
+/** the UTC offsets a zone can have, -12 h to +14 h */
+const OFFSET_MIN = -48 * QUARTER;
+const OFFSET_MAX = 56 * QUARTER;
+
+/** Every whole quarter hour a backend's clock can be ahead of this page's
+ *  at `now`, nearest first: those that put the backend at a real UTC
+ *  offset. A daily line fits two shifts a day apart, and only one of them
+ *  is a real zone once this page's own offset is taken off. */
+function shiftsAt(now: number): number[] {
+  const page = -new Date(now).getTimezoneOffset() * 60_000;
+  const out: number[] = [];
+  for (let offset = OFFSET_MIN; offset <= OFFSET_MAX; offset += QUARTER) out.push(offset - page);
+  return out.sort((a, b) => Math.abs(a) - Math.abs(b) || b - a);
+}
 
 /**
  * How far a backend's clock is ahead of this page's, in ms: the nearest
  * shift under which every line's next fire, worked out here, lands on the
- * time the backend gave for it. 0 when the clocks agree, when no line pins
- * it down (a time already passed says nothing), and when nothing fits.
+ * time the backend gave for it. A clock change between now and a later
+ * pin's fire moves that pin by an hour, so when no one shift fits them all
+ * the pins are taken soonest first and one that no longer fits with those
+ * before it is left out. 0 when the clocks agree, when no line pins it down
+ * (a time already passed says nothing), and when no pin fits any shift.
  */
 export function zoneShift(pins: readonly { cron: string; next: number }[], now: number): number {
-  const read = pins.flatMap((p) => {
-    const c = parseCron(p.cron);
-    return "error" in c || p.next <= now ? [] : [{ c, next: p.next }];
-  });
+  const read = pins
+    .flatMap((p) => {
+      const c = parseCron(p.cron);
+      return "error" in c || p.next <= now ? [] : [{ c, next: p.next }];
+    })
+    .sort((a, b) => a.next - b.next);
   if (read.length === 0) return 0;
-  const fits = (d: number): boolean =>
-    read.every((p) => {
-      const t = nextFire(p.c, now + d);
-      return t !== null && t - d === p.next;
-    });
-  return SHIFTS.find(fits) ?? 0;
+  const fits = (p: (typeof read)[number], d: number): boolean => {
+    const t = nextFire(p.c, now + d);
+    return t !== null && t - d === p.next;
+  };
+  let left = shiftsAt(now);
+  let pinned = false;
+  for (const p of read) {
+    const fit = left.filter((d) => fits(p, d));
+    if (fit.length === 0) continue;
+    left = fit;
+    pinned = true;
+  }
+  return pinned ? (left[0] ?? 0) : 0;
 }
 
 /** Each backend's shift, from the lines its jobs carry a next fire for. */
@@ -471,9 +495,14 @@ export function nextUp(rows: readonly ClockRow[]): ClockRow | null {
   return due.find((r) => r.job.kind !== "poll") ?? due[0] ?? null;
 }
 
+/** an ISO date and time that ends in Z or an offset */
+const ZONED = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/i;
+
 /** A one-time wake as typed ("in 30m", "14:00", an ISO time), read on the
  *  backend's clock: when it would fire, or why it cannot be read. */
 export function readWhen(text: string, now: number, shift: number): number | { error: string } {
+  // a time that names its zone is the same moment on every clock
+  if (ZONED.test(text.trim())) return parseWhen(text, now);
   const got = parseWhen(text, now + shift);
   return typeof got === "number" ? got - shift : got;
 }

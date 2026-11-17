@@ -69,8 +69,13 @@ function field(text: string, lo: number, hi: number, name: string): Set<number> 
   return out;
 }
 
-/** A line with its `@` word written out as five fields; any other line trimmed. */
-export const expandCron = (line: string): string => MACROS[line.trim().toLowerCase()] ?? line.trim();
+/** A line with its `@` word written out as five fields; any other line
+ *  trimmed. Only MACROS' own keys count: a line reading "constructor" or
+ *  "__proto__" would otherwise get an Object's member back, not a string. */
+export const expandCron = (line: string): string => {
+  const key = line.trim().toLowerCase();
+  return Object.hasOwn(MACROS, key) ? (MACROS[key] ?? key) : line.trim();
+};
 
 /** A cron line read into its sets, or why it cannot be read. */
 export function parseCron(line: string): Cron | { error: string } {

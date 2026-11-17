@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { runRepoName } from "../goals";
 import { useShallow } from "zustand/react/shallow";
 import { hitStands } from "../../../src/core/capacity";
-import type { CapacityInfo } from "../../../src/core/types";
+import type { CapacityInfo, HeldStart } from "../../../src/core/types";
 import { api } from "../api";
 import { AGENT_NAME } from "../runs";
 import { leavesPop, useFitPop } from "../pop";
-import { qual } from "../registry";
+import { plainOf, qual } from "../registry";
 import { useNow } from "./Registry";
 import { useStore, idText } from "../store";
 import { escapeCloses } from "../surface";
@@ -39,6 +39,14 @@ export function ReadingRows({ rows, now, where }: { rows: CapacityRow[]; now: nu
   );
 }
 
+/** A held start's id as its backend knows it, for the release call, and its
+ *  repo's id as the page holds it. The stream's capacity event and the
+ *  capacity route both qualify them now, and a bare one reads the same. */
+export const heldIds = (backend: string, held: Pick<HeldStart, "id" | "repoId">): { id: string; repoId: string } => ({
+  id: plainOf(held.id),
+  repoId: qual(backend, plainOf(held.repoId)),
+});
+
 /** The starts the governor holds on every backend, each with "start anyway",
  *  a one-off interactive start (FR-036). */
 function HeldList({ capacity, order }: { capacity: Record<string, CapacityInfo>; order: string[] }) {
@@ -48,11 +56,11 @@ function HeldList({ capacity, order }: { capacity: Record<string, CapacityInfo>;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   if (rows.length === 0) return null;
-  const release = async (backend: string, id: string): Promise<void> => {
-    setBusy(`${backend} ${id}`);
+  const release = async (backend: string, held: HeldStart): Promise<void> => {
+    setBusy(`${backend} ${held.id}`);
     setError(null);
     try {
-      await api.capacityRelease(backend, id);
+      await api.capacityRelease(backend, heldIds(backend, held).id);
       await loadCapacity(backend);
     } catch (e) {
       setError(errText(e));
@@ -67,10 +75,10 @@ function HeldList({ capacity, order }: { capacity: Record<string, CapacityInfo>;
         {rows.map(({ backend, held }) => (
           <li key={`${backend} ${held.id}`}>
             <span className="capacity-limited-name">
-              {held.what} · {repos.find((r) => r.id === qual(backend, held.repoId))?.name ?? idText(held.repoId)}
+              {held.what} · {repos.find((r) => r.id === heldIds(backend, held).repoId)?.name ?? idText(heldIds(backend, held).repoId)}
             </span>
             <span className="capacity-limited-error">{held.priority} · {held.why}</span>
-            <button type="button" className="mini" disabled={busy !== null} title="Start it now, this once, as interactive" onClick={() => void release(backend, held.id)}>
+            <button type="button" className="mini" disabled={busy !== null} title="Start it now, this once, as interactive" onClick={() => void release(backend, held)}>
               {busy === `${backend} ${held.id}` ? "starting…" : "start anyway"}
             </button>
           </li>

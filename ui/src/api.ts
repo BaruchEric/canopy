@@ -273,6 +273,10 @@ function from<T>(b: string, v: T, f: (q: Q, v: T) => T): T {
 const fromAll = <T>(b: string, list: T[], f: (q: Q, v: T) => T): T[] =>
   b === homeName() ? list : list.map((v) => from(b, v, f));
 
+/** A capacity answer's held starts with their ids under the backend's
+ *  name, the way qEvent qualifies the capacity event. */
+const qCapacity = (q: Q, c: CapacityInfo): CapacityInfo => ({ ...c, held: c.held.map((h) => ({ ...h, id: q(h.id), repoId: q(h.repoId) })) });
+
 /** One sprout's action on the backend its id names, its answer qualified. */
 async function sproutReq(id: string, path: string, init: RequestInit): Promise<Sprout> {
   const [b, plain] = on(id);
@@ -723,16 +727,17 @@ export const api = {
     const r = await req<Partial<HealthInfo> | null>(b, "/api/health");
     return fromAll(b, Array.isArray(r?.checks) ? r.checks : [], qCheck);
   },
-  /** this backend's usage windows and any starts held for capacity */
-  capacity: (b: string = homeName()) => req<CapacityInfo>(b, "/api/capacity"),
+  /** this backend's usage windows and any starts held for capacity, the
+   *  held ids under its name as the stream's capacity event has them */
+  capacity: async (b: string = homeName()) => from(b, await req<CapacityInfo>(b, "/api/capacity"), qCapacity),
   /** reads the windows now (FR-036) */
-  capacityRead: (b: string) => req<CapacityInfo>(b, "/api/capacity/read", { method: "POST", body: "{}" }),
-  /** "start anyway": one held start, once, as interactive */
-  capacityRelease: (b: string, id: string) =>
-    req<CapacityInfo>(b, "/api/capacity/release", { method: "POST", body: JSON.stringify({ id }) }),
+  capacityRead: async (b: string) => from(b, await req<CapacityInfo>(b, "/api/capacity/read", { method: "POST", body: "{}" }), qCapacity),
+  /** "start anyway": one held start, once, as interactive; `id` is the one `b` knows */
+  capacityRelease: async (b: string, id: string) =>
+    from(b, await req<CapacityInfo>(b, "/api/capacity/release", { method: "POST", body: JSON.stringify({ id }) }), qCapacity),
   /** the governor's holds and the observed dollar figure, a patch */
-  capacitySettings: (b: string, patch: Partial<CapacitySettings>) =>
-    req<CapacityInfo>(b, "/api/capacity", { method: "POST", body: JSON.stringify(patch) }),
+  capacitySettings: async (b: string, patch: Partial<CapacitySettings>) =>
+    from(b, await req<CapacityInfo>(b, "/api/capacity", { method: "POST", body: JSON.stringify(patch) }), qCapacity),
   /** the kit on one backend: the machines it reaches, their cells and plans */
   kit: (b: string = homeName()) => req<KitInfo>(b, "/api/kit"),
   kitScan: (b: string) => req<KitInfo>(b, "/api/kit/scan", { method: "POST", body: "{}" }),
@@ -1594,7 +1599,7 @@ export function socketUrl(b: string, path: string): string {
  *  some slack. */
 export const STREAM_STALE = 70_000;
 const STREAM_CHECK = 15_000;
-const RETRY_FIRST = 1_000;
+let retryFirst = 1_000;
 const RETRY_MAX = 30_000;
 
 /** EventSource's readyState values, spelled out since the class may not
@@ -1604,7 +1609,13 @@ const OPEN = 1;
 const CLOSED = 2;
 /** how often a stream that waits for this page to sign in looks again; the
  *  look is at the page's own storage, so it costs the backend nothing */
-const STREAM_SIGNIN_WAIT = 2_000;
+let signinWait = 2_000;
+
+/** For tests: the first retry's wait and the sign-in look's, shortened. */
+export function setStreamWaits(first: number, signin: number): void {
+  retryFirst = first;
+  signinWait = signin;
+}
 
 /** What to do about the stream on a watchdog tick or when the tab shows
  *  again. An open stream that has gone quiet is half-open (a phone asleep,
@@ -1648,12 +1659,16 @@ export function subscribe(
   let stopped = false;
   let lastSeen = Date.now();
   let retry: ReturnType<typeof setTimeout> | null = null;
-  let wait = RETRY_FIRST;
+  let wait = retryFirst;
   /** the stream once it is dialled; none while a dial asks for its ticket
    *  or waits for this page to sign in */
   let es: EventSource | null = null;
   let dialling = false;
+  /** true while subscribe itself runs: a stream made then is there before
+   *  the reads its caller makes next, and those reads close the gap */
+  let subscribing = true;
   dial();
+  subscribing = false;
 
   /** An EventSource can send no header, so the stream opens with a one-use
    *  ticket this page's token asks for, a new one for every dial. With no
@@ -1672,18 +1687,22 @@ export function subscribe(
     void api
       .ticket(b, "events")
       .then(
-        (ticket): DialPlan => dialPlan(auth()?.mode, ticket || null, false),
-        (err: unknown): DialPlan => {
+        (ticket): DialPlan | null => dialPlan(auth()?.mode, ticket || null, false),
+        (err: unknown): DialPlan | null => {
           const status = (err as { status?: unknown }).status;
           // a backend from before stream tickets knows no such ticket (a
           // 400), and serves its stream to anyone
           if (status === 400) return { kind: "bare" };
-          return dialPlan(auth()?.mode, null, status === 401 || status === 403);
+          if (status === 401 || status === 403) return dialPlan(auth()?.mode, null, true);
+          // no answer, or one that was not the ticket route's (a proxy's
+          // 502, a restart): tried again at the stream's own doubling waits
+          return null;
         },
       )
       .then((plan) => {
         dialling = false;
-        land(plan);
+        if (plan === null) schedule();
+        else land(plan);
       });
   }
 
@@ -1693,7 +1712,7 @@ export function subscribe(
       retry ??= setTimeout(() => {
         retry = null;
         dial();
-      }, STREAM_SIGNIN_WAIT);
+      }, signinWait);
       return;
     }
     es = open(streamUrl(url, plan.kind === "ticket" ? plan.ticket : null), plan.kind === "ticket");
@@ -1702,12 +1721,16 @@ export function subscribe(
   function open(at: string, ticketed: boolean): EventSource {
     // another origin: the gate's cookie has to ride along
     const s = new EventSource(at, { withCredentials: base !== "" });
+    // A first stream dialled after a ticket's round trip or a wait opens
+    // after the reads the caller made to close the gap, so what changed
+    // in between is read again, as after a drop.
+    const late = !subscribing;
     lastSeen = Date.now();
     s.onopen = () => {
       signal(b, { kind: "stream-open" });
       lastSeen = Date.now();
-      wait = RETRY_FIRST;
-      if (everOpened) onReconnect?.();
+      wait = retryFirst;
+      if (everOpened || late) onReconnect?.();
       everOpened = true;
     };
     s.onmessage = (m) => {

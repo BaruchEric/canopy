@@ -46,12 +46,13 @@ import {
   activeFlowFor,
   harnessNoticeOf,
   screenLayoutOf,
+  tokenChanged,
   wantsSignIn,
 } from "./store";
 import { applyQuery } from "./filters";
 import { cellOf, columnOf, panelsOf, type DockLayout } from "./grid";
 import { projectFront } from "./front";
-import { api, onBackendSignal } from "./api";
+import { api, onBackendSignal, setStreamWaits } from "./api";
 import { setBase, setRegistry } from "./registry";
 import type { BackendAuth } from "./callerToken";
 import { hasOtherBackend, RETRY_FIRST } from "./backends";
@@ -975,6 +976,7 @@ describe("several backends", () => {
     setBase("b", "");
     setRetryFirst(RETRY_FIRST);
     setClaimEvery(2_000);
+    setStreamWaits(1_000, 2_000);
     onBackendSignal(() => {});
     useStore.setState(pristine, true);
   });
@@ -2348,6 +2350,70 @@ describe("several backends", () => {
       expect(streams().map((e) => new URL(e.url).searchParams.get("ticket"))).toEqual(["ticket-1", "ticket-2"]);
       // home enforces nothing here and holds no token: its stream goes bare
       expect(FakeEventSource.opened.find((e) => e.url.startsWith("/api/events"))?.url).not.toContain("ticket=");
+    });
+
+    test("a token another window forgot leaves this one taken for nobody: its stream stops asking for tickets and the sign-in shows", async () => {
+      setStreamWaits(5, 5);
+      kept.set("canopy.token.http://b.test", "cnp_page_b");
+      let mine = "cnp_page_b";
+      await start(homeAnswers, (path, init) => enforcing(mine, bAnswers, () => json({ waiting: true }))(path, init));
+      await settle();
+      const tickets = () => calls.filter((u) => u.split("?")[0] === "http://b.test/api/auth/ticket").length;
+      expect(tickets()).toBe(1);
+      expect(useStore.getState().authByBackend["b"]?.you).toBe("page");
+      // another window revoked the token and forgot it, then b's stream drops
+      mine = "cnp_page_other";
+      kept.delete("canopy.token.http://b.test");
+      FakeEventSource.opened.find((e) => e.url.startsWith("http://b.test/api/events"))?.onerror?.();
+      await settle(150);
+      // one refused ask, then the page waits on its own storage
+      expect(tickets()).toBe(2);
+      expect(useStore.getState().authByBackend["b"]).toMatchObject({ you: "none", hasToken: false, youId: null });
+      expect(wantsSignIn(useStore.getState().authByBackend["b"])).toBe(true);
+    });
+
+    test("a refused call that carried a token a sign-in has since replaced forgets nothing", async () => {
+      kept.set("canopy.token.http://b.test", "cnp_page_b");
+      let release = () => {};
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let held = false;
+      const b = enforcing("cnp_page_b", bAnswers, () => json({ waiting: true }));
+      await start(homeAnswers, (path, init) => ((path.split("?")[0] ?? "") === "/api/fleets" && held ? gate.then(() => json({ error: "this call needs the read right", need: "read" }, 401)) : b(path, init)));
+      await settle();
+      held = true;
+      const read = api.fleets("b").catch(() => null);
+      await settle();
+      kept.set("canopy.token.http://b.test", "cnp_page_new");
+      release();
+      await read;
+      expect(kept.get("canopy.token.http://b.test")).toBe("cnp_page_new");
+      expect(useStore.getState().authByBackend["b"]).toMatchObject({ you: "page", hasToken: true });
+    });
+
+    test("a sign-in in another window loads a backend that stopped at its sign-in here", async () => {
+      await start(homeAnswers, enforcing("cnp_page_b", bAnswers, () => json({ waiting: true })));
+      await settle(60);
+      const treeReads = () => calls.filter((u) => u.split("?")[0] === "http://b.test/api/tree").length;
+      expect(treeReads()).toBe(0);
+      expect(wantsSignIn(useStore.getState().authByBackend["b"])).toBe(true);
+      // a key that is no token's changes nothing
+      tokenChanged("canopy.layout");
+      await settle();
+      expect(treeReads()).toBe(0);
+      kept.set("canopy.token.http://b.test", "cnp_page_b");
+      tokenChanged("canopy.token.http://b.test");
+      await settle();
+      expect(treeReads()).toBe(1);
+      expect(useStore.getState().repos.some((r) => r.id === "b|x")).toBe(true);
+      expect(useStore.getState().authByBackend["b"]?.you).toBe("page");
+      expect(FakeEventSource.opened.find((e) => e.url.startsWith("http://b.test/api/events"))?.url).toContain("ticket=ticket-");
+      // and a sign-out there is a sign-in chip here
+      kept.delete("canopy.token.http://b.test");
+      tokenChanged("canopy.token.http://b.test");
+      await settle();
+      expect(useStore.getState().authByBackend["b"]).toMatchObject({ you: "none", hasToken: false });
     });
 
     test("a backend from before stream tickets answers 400 to the ask, and its stream is dialled bare", async () => {

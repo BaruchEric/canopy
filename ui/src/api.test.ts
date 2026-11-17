@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Repo, Run, WorktreesInfo } from "../../src/core/types";
-import { api, onBackendSignal, PartialFleetError, readFrame, socketUrl, staleOf, STREAM_STALE, streamAction } from "./api";
+import { api, onBackendSignal, PartialFleetError, readFrame, setStreamWaits, socketUrl, staleOf, STREAM_STALE, streamAction, subscribe } from "./api";
 import type { BackendSignal } from "./backends";
 import { setBase, setRegistry } from "./registry";
 
@@ -89,6 +89,103 @@ describe("a page with two backends", () => {
     expect(await api.dropStale("b|atlas", offer)).toEqual({ ok: true, out: "dropped" });
     expect(calls[2]?.url).toBe("http://b.test/api/repos/dropstale?id=atlas");
     expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({ stale: "a".repeat(40), onto: "f".repeat(40) });
+  });
+
+  test("capacity answers carry their held starts under the backend's name, as the stream's event does", async () => {
+    const info = { capacity: [], held: [{ id: "flow:abc", what: "flow", repoId: "proj", priority: "low", why: "past the low hold", since: 1 }], settings: {} };
+    reply = () => json(info);
+    expect((await api.capacity("b")).held[0]).toMatchObject({ id: "b|flow:abc", repoId: "b|proj" });
+    expect((await api.capacityRead("b")).held[0]?.id).toBe("b|flow:abc");
+    expect((await api.capacityRelease("b", "flow:abc")).held[0]?.id).toBe("b|flow:abc");
+    expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({ id: "flow:abc" });
+    expect((await api.capacitySettings("b", {})).held[0]?.repoId).toBe("b|proj");
+    // home's come as they came
+    expect((await api.capacity("a")).held[0]).toMatchObject({ id: "flow:abc", repoId: "proj" });
+  });
+
+  describe("b's event stream", () => {
+    class FakeEventSource {
+      static opened: FakeEventSource[] = [];
+      readyState = 0;
+      onopen: (() => void) | null = null;
+      onmessage: ((m: { data: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      closed = false;
+      constructor(public url: string) {
+        FakeEventSource.opened.push(this);
+      }
+      addEventListener(): void {}
+      close(): void {
+        this.closed = true;
+      }
+    }
+    const g = globalThis as unknown as { EventSource?: unknown; localStorage?: unknown };
+    const realES = g.EventSource;
+    const kept = new Map<string, string>();
+    let stop: () => void = () => {};
+    const settle = (ms = 20) => new Promise((r) => setTimeout(r, ms));
+    const tickets = () => calls.filter((c) => c.url === "http://b.test/api/auth/ticket");
+    const enforce = () => ({ mode: "enforce" as const, you: "page" as const });
+    beforeEach(() => {
+      FakeEventSource.opened = [];
+      g.EventSource = FakeEventSource;
+      kept.clear();
+      kept.set("canopy.token.http://b.test", "cnp_page_b");
+      g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) };
+    });
+    afterEach(() => {
+      stop();
+      stop = () => {};
+      g.EventSource = realES;
+      delete g.localStorage;
+      setStreamWaits(1_000, 2_000);
+    });
+
+    test("a ticket ask that gets no answer is tried again at doubling waits, not every look for a sign-in", async () => {
+      setStreamWaits(20, 2);
+      reply = () => {
+        throw new Error("connection refused");
+      };
+      stop = subscribe("b", () => {}, undefined, {}, enforce);
+      await settle(170);
+      // asks at about 0, 20, 60 and 140 ms; a look every 2 ms would be dozens
+      expect(tickets().length).toBeGreaterThanOrEqual(3);
+      expect(tickets().length).toBeLessThanOrEqual(5);
+      expect(FakeEventSource.opened).toEqual([]);
+      // a proxy's error page in place of the ticket is no answer either
+      const before = tickets().length;
+      reply = () => new Response("<html>bad gateway</html>", { status: 502 });
+      await settle(170);
+      expect(tickets().length - before).toBeLessThanOrEqual(2);
+      // once b answers, the stream opens with its ticket
+      reply = () => json({ ticket: "t-1" });
+      for (let i = 0; i < 40 && FakeEventSource.opened.length === 0; i++) await settle(20);
+      expect(FakeEventSource.opened[0]?.url).toBe("http://b.test/api/events?ticket=t-1");
+    });
+
+    test("the first stream opened after its ticket reads again what changed while the ticket was out; one dialled at once does not", async () => {
+      reply = () => json({ ticket: "t-1" });
+      let resyncs = 0;
+      stop = subscribe("b", () => {}, () => resyncs++, {}, enforce);
+      await settle();
+      const first = FakeEventSource.opened[0];
+      expect(first?.url).toBe("http://b.test/api/events?ticket=t-1");
+      first?.onopen?.();
+      expect(resyncs).toBe(1);
+      stop();
+      // with no token and a backend that does not check, the stream is
+      // dialled bare inside subscribe, before the caller's own reads
+      kept.clear();
+      resyncs = 0;
+      stop = subscribe("b", () => {}, () => resyncs++, {}, () => ({ mode: "off", you: "none" }));
+      const bare = FakeEventSource.opened[1];
+      expect(bare?.url).toBe("http://b.test/api/events");
+      bare?.onopen?.();
+      expect(resyncs).toBe(0);
+      // a reopen after a drop always reads again
+      bare?.onopen?.();
+      expect(resyncs).toBe(1);
+    });
   });
 
   test("a scheduled manual fire sends the selected backend's plain repo id", async () => {

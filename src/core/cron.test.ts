@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { isCron, lastClock, leadingWhen, nextFire, parseCron, parseWhen, type Cron } from "./cron";
+import { expandCron, isCron, lastClock, leadingWhen, nextFire, parseCron, parseWhen, type Cron } from "./cron";
 
 // Bun pins JS Dates to UTC under test, so local time here is UTC
 const at = (iso: string): number => new Date(`${iso}Z`).getTime();
@@ -21,6 +21,14 @@ describe("parseCron", () => {
     expect([...cron("5,10 0 1 1,7 *").months]).toEqual([1, 7]);
     // a step from a single value runs to the top of the field
     expect([...cron("50/5 * * * *").minutes]).toEqual([50, 55]);
+  });
+
+  test("a line that names a member every object has is a line that does not read, not a crash", () => {
+    for (const line of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+      expect(parseCron(line)).toEqual({ error: "a cron line has five fields: minute hour day-of-month month day-of-week" });
+      expect(isCron(line)).toBe(false);
+      expect(expandCron(line)).toBe(line);
+    }
   });
 
   test("a 7 is Sunday, and the macros expand", () => {
