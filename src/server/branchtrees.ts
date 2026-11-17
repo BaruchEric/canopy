@@ -128,6 +128,9 @@ export class BranchTrees {
   /** what each tree's following waits on, by the tree's folder; in memory
    *  only, since the next pass asks again */
   private readonly waits = new Map<string, string>();
+  /** the tree folders a clean-up or a remove is taking away, from its first
+   *  check to its end: a card's run never starts in one (`isLeaving`) */
+  private readonly leaving = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private publishing: Promise<void> = Promise.resolve();
 
@@ -285,6 +288,13 @@ export class BranchTrees {
     if (!t) return null;
     const dir = treeDir(repoPath, t.slug, this.root);
     return existsSync(dir) ? { slug: t.slug, branch: t.branch, dir, state: t.state, ...(t.why !== undefined ? { why: t.why } : {}) } : null;
+  }
+
+  /** Whether a clean-up or a remove is taking the tree at `dir` away now.
+   *  A card's run reads it, with `treeFor`, in the stretch with no await
+   *  before its start, so it never starts in a tree that is going. */
+  isLeaving(dir: string): boolean {
+    return this.leaving.has(dir);
   }
 
   /** The tree a folder is, for a shell restored into one: its name and port. */
@@ -535,7 +545,10 @@ export class BranchTrees {
    *  run or workflow at work in it, goes with its branch. A coordinator's
    *  card that has just started in a fresh tree looks clean until it
    *  writes, and a gated workflow may have changed nothing yet, so the run
-   *  or the workflow is what holds it. The trees removed. */
+   *  or the workflow is what holds it. From its first check to its end a
+   *  tree reads as leaving, so a card's run does not start there, and the
+   *  check is made again after each await, for a run started any other
+   *  way. The trees removed. */
   async clean(repo: Repo | null): Promise<CleanedTree[]> {
     const removed: CleanedTree[] = [];
     for (const r of repo ? [repo] : this.local()) {
@@ -543,40 +556,69 @@ export class BranchTrees {
       await this.serial(r.path, async () => {
         const rec = this.record(r.path);
         const left: BranchTreeRecord[] = [];
-        for (const t of rec.trees) {
-          if (this.deps.runIn?.(treeDir(r.path, t.slug, this.root)) !== undefined || !cleanable(await this.tree(r.path, t))) {
-            left.push(t);
-            continue;
+        const going: string[] = [];
+        try {
+          for (const t of rec.trees) {
+            const dir = treeDir(r.path, t.slug, this.root);
+            const atWork = (): boolean => this.deps.runIn?.(dir) !== undefined;
+            if (atWork()) {
+              left.push(t);
+              continue;
+            }
+            this.leaving.add(dir);
+            going.push(dir);
+            if (!cleanable(await this.tree(r.path, t)) || atWork()) {
+              left.push(t);
+              continue;
+            }
+            await this.deps.stopTree?.(dir)?.catch(() => {});
+            if (atWork()) {
+              left.push(t);
+              continue;
+            }
+            // its base holds every commit, so the branch goes with it
+            await removeBranchTree(r.path, dir, t.branch, true).catch(() => {});
+            removed.push({ repoId: r.id, slug: t.slug, branch: t.branch });
           }
-          // its base holds every commit, so the branch goes with it
-          await this.deps.stopTree?.(treeDir(r.path, t.slug, this.root))?.catch(() => {});
-          await removeBranchTree(r.path, treeDir(r.path, t.slug, this.root), t.branch, true).catch(() => {});
-          removed.push({ repoId: r.id, slug: t.slug, branch: t.branch });
+          if (left.length !== rec.trees.length) await this.save(r.path, { trees: left });
+        } finally {
+          for (const dir of going) this.leaving.delete(dir);
         }
-        if (left.length !== rec.trees.length) await this.save(r.path, { trees: left });
       });
     }
     if (removed.length > 0) void this.publish();
     return removed;
   }
 
+  /** A remove reads as leaving from its first check to its end, so a card's
+   *  run does not start in the tree; without force, the run check is made
+   *  again after each await, for a run started any other way meanwhile. */
   async remove(repo: Repo, name: string, force: boolean, deleteBranch: boolean): Promise<string> {
     return this.serial(repo.path, async () => {
       const rec = this.record(repo.path);
       const t = rec.trees.find((x) => x.slug === name || x.branch === name);
       if (!t) throw new TreesError(404, `${repo.name} keeps no tree named ${name}`);
+      const dir = treeDir(repo.path, t.slug, this.root);
       if (!force) {
         if (t.state === "preparing") throw new TreesError(409, "the tree is still being prepared; wait, or remove it with force");
         if (t.state === "merging") throw new TreesError(409, "the tree is being merged; wait, or remove it with force");
         this.refuseRunIn(repo.path, t);
-        const live = await this.tree(repo.path, t);
-        const refusal = removeRefusal(live);
-        if (refusal) throw new TreesError(409, refusal);
       }
-      await this.deps.stopTree?.(treeDir(repo.path, t.slug, this.root));
-      await removeBranchTree(repo.path, treeDir(repo.path, t.slug, this.root), t.branch, deleteBranch);
-      this.waits.delete(treeDir(repo.path, t.slug, this.root));
-      await this.save(repo.path, { trees: rec.trees.filter((x) => x !== t) });
+      this.leaving.add(dir);
+      try {
+        if (!force) {
+          const refusal = removeRefusal(await this.tree(repo.path, t));
+          if (refusal) throw new TreesError(409, refusal);
+          this.refuseRunIn(repo.path, t);
+        }
+        await this.deps.stopTree?.(dir);
+        if (!force) this.refuseRunIn(repo.path, t);
+        await removeBranchTree(repo.path, dir, t.branch, deleteBranch);
+        this.waits.delete(dir);
+        await this.save(repo.path, { trees: rec.trees.filter((x) => x !== t) });
+      } finally {
+        this.leaving.delete(dir);
+      }
       void this.publish();
       return t.slug;
     });

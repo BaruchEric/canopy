@@ -65,11 +65,13 @@ export function isBranchName(name: string): boolean {
 
 /** The kept trees an active in-place run works in, by dir: a run with no
  *  branch whose repo's path is that dir, named `run <id> (<verb>)`. A run
- *  waiting on its model counts, which `treesAtWork` does not see. */
+ *  waiting on its model counts, which `treesAtWork` does not see. A
+ *  coordinator started at a tree's card does not: it works from a folder of
+ *  its own, as the runner's `activeFor` reads it. */
 export function runsInTrees(dirs: readonly string[], runs: readonly Run[], pathOf: (repoId: string) => string | undefined): Map<string, string> {
   const out = new Map<string, string>();
   for (const dir of dirs) {
-    const run = runs.find((r) => isRunActive(r) && r.branch === undefined && pathOf(r.repoId) === dir);
+    const run = runs.find((r) => isRunActive(r) && r.branch === undefined && r.action !== "coordinate" && pathOf(r.repoId) === dir);
     if (run) out.set(dir, `run ${run.id} (${run.verb})`);
   }
   return out;

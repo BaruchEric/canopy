@@ -3,8 +3,9 @@
  *  `<CANOPY_COORD_ROOT>/goal-files/<run id>/`, the same path in the canopy
  *  and coordinator containers. It outlives the coordinator's run, so a card's
  *  worker still reads it, and `pruneGoalFiles` takes it a week after its
- *  newest file once the run is gone. Node's fs, so the server's alone; the
- *  names come from `goalFileNames` in core/coordinator.ts. */
+ *  newest file once the run is gone and no run or branch record names it.
+ *  Node's fs, so the server's alone; the names come from `goalFileNames` in
+ *  core/coordinator.ts. */
 
 import { constants, type Dirent } from "node:fs";
 import { chmod, lstat, mkdir, open, readdir, readlink, realpath, rm, writeFile, type FileHandle } from "node:fs/promises";
@@ -208,12 +209,14 @@ export async function dropGoalFiles(seeds: string, runId: string): Promise<boole
   }
 }
 
-/** The run ids whose files folder a prune keeps, from the runs at work now:
- *  every coordinator, and every goal whose folder a run reads through its
- *  added folders. A card's child, and a fix or follow-up on a card's
- *  branch, can run on after its goal ended. Only an added folder that is
- *  exactly one goal's folder under these seeds counts. */
-export function liveGoalIds(seeds: string, active: readonly Pick<Run, "id" | "action" | "addDirs">[]): Set<string> {
+/** The run ids whose files folder a prune keeps, from the runs at work now
+ *  and the branches the landing records keep: every coordinator, and every
+ *  goal whose folder a run reads through its added folders or a branch's
+ *  record holds for its next run. A card's child, and a fix or follow-up on
+ *  a card's branch, can run on after its goal ended, and a fix or
+ *  follow-up can start on a card's branch any time after. Only an added
+ *  folder that is exactly one goal's folder under these seeds counts. */
+export function liveGoalIds(seeds: string, active: readonly { id: string; action?: Run["action"]; addDirs?: readonly string[] }[]): Set<string> {
   const root = resolve(seeds, GOAL_FILES);
   const live = new Set<string>();
   for (const run of active) {

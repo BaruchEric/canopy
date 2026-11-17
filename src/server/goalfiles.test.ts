@@ -266,6 +266,10 @@ describe("the goals a prune keeps", () => {
     ];
     expect([...liveGoalIds("/seeds", active)].sort()).toEqual(["0000000a", "0000000b", "c0000001"]);
   });
+  test("a branch's landing record, which names no action, keeps the folder its next fix is given", () => {
+    const record = { id: "r0000005", addDirs: [goalFilesDir("/seeds", "0000000a")] };
+    expect([...liveGoalIds("/seeds", [record])]).toEqual(["0000000a"]);
+  });
   test("a prune with that set keeps an old folder a running card reads", async () => {
     const seeds = join(scratch, "kept-by-a-card");
     const dir = goalFilesDir(seeds, "0000000a");

@@ -171,6 +171,11 @@ export interface PrDeps {
   startFix: (rec: LandingRun, prompt: string, label: string, priority?: Priority) => Promise<Run>;
   /** the governor's words when a fix at this priority must wait, else null */
   hold?: (priority: Priority) => string | null;
+  /** whether a run or flow works on the branch, or is about to, by the
+   *  branch's id; asked only while the watch has no fix of its own going.
+   *  While one does, the watch neither rebases, fixes nor merges, and a
+   *  rebase by hand is refused. Left out, none does. */
+  branchBusy?: (id: string) => boolean;
   /** a fix run's limited mark, when it ended on the plan's usage limit */
   limitedRun?: (id: string) => Run["limited"] | null;
   /** whether a run is still going, by id */
@@ -494,7 +499,8 @@ export class PrHub {
   }
 
   /** The rebase step by hand (`POST /api/prs/rebase`), auto-fix on or off:
-   *  refused while a fix or a rebase goes, or when the PR as last read is
+   *  refused while a fix, a rebase or another run on the branch goes
+   *  (`branchBusy`), or when the PR as last read is
    *  not behind on the head canopy pushed. The watch after the step is the
    *  answer, with what stopped it in `gaveUp` or `error` when it did. */
   rebaseNow(id: string): Promise<PrWatch> {
@@ -503,6 +509,7 @@ export class PrHub {
       if (!had) throw new PrError("no PR by that id", 404);
       if (had.fixing) throw new PrError("a fix is going; stop it first", 409);
       if (had.rebasing) throw new PrError("a rebase is going", 409);
+      if (this.deps.branchBusy?.(had.id) === true) throw new PrError("a run works on its branch; rebase once it ends", 409);
       if (!had.state) throw new PrError("the PR has not been read yet", 409);
       const ready = readyToRebase(had.state, had);
       if (!ready.ok) throw new PrError(ready.why, 409);
@@ -721,7 +728,12 @@ export class PrHub {
       const { waiting: _wait, ...fresh } = w;
       w = fresh;
     }
-    if (w.state?.status === "open") {
+    // another writer works on the branch, not this watch's fix (a follow-up
+    // or a card's resume that started while the PR was closed or swept):
+    // the worktree is its own until it ends, so no rebase, fix or merge goes
+    // beside it, nothing is counted, and the PR is read again soon
+    const writer = w.state?.status === "open" && !w.fixing && this.deps.branchBusy?.(w.id) === true;
+    if (w.state?.status === "open" && !writer) {
       // behind or conflicting on the head canopy pushed: rebased first, so
       // the comment loop and the merge see the pushed head on a later read
       if (w.autoFix && !w.fixing && w.gaveUp === undefined && w.state && readyToRebase(w.state, w).ok) w = await this.rebase(w);
@@ -737,7 +749,7 @@ export class PrHub {
     this.save(w);
     if (w.pushed !== had.pushed) this.fresh.set(id, this.now() + FRESH_FOR);
     let next = pace(w);
-    if (next !== null && w.swept === undefined && w.closeUnread === undefined && (this.fresh.get(id) ?? 0) > this.now()) next = Math.min(next, POLL_BUSY);
+    if (next !== null && w.swept === undefined && w.closeUnread === undefined && (writer || (this.fresh.get(id) ?? 0) > this.now())) next = Math.min(next, POLL_BUSY);
     if (next === null) this.due.delete(id);
     else this.due.set(id, this.now() + next);
     this.prune();

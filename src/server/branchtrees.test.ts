@@ -448,6 +448,56 @@ test("clean leaves a tree a run is at work in, however clean it looks, and takes
   expect(existsSync(tree.dir)).toBe(false);
 });
 
+/** A world whose tree read (its git status, then its shells) lets a run
+ *  start in place while it is armed: what a card's run starting in the gap
+ *  after the first check looks like. `leaving` is whether the tree was
+ *  marked as going while it was read. */
+async function racedWorld(): Promise<{ w: World; tree: BranchTree; arm: () => void; leaving: () => boolean | undefined; at: Map<string, string> }> {
+  const at = new Map<string, string>();
+  let armed = false;
+  let seen: boolean | undefined;
+  let trees: BranchTrees | null = null;
+  const w = await world(
+    {
+      runIn: (dir) => at.get(dir),
+      shellsIn: (dir) => {
+        if (armed && trees) {
+          armed = false;
+          seen = trees.isLeaving(dir);
+          at.set(dir, "run c1a2b3c4 (Ask)");
+        }
+        return 0;
+      },
+    },
+    "",
+  );
+  trees = w.trees;
+  const { tree } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "card/race", caches: false }));
+  await w.trees.idle();
+  return { w, tree, at, arm: () => void (armed = true), leaving: () => seen };
+}
+
+test("clean leaves a tree a run started in while it was read, and the tree reads as going until then", async () => {
+  const { w, tree, arm, leaving } = await racedWorld();
+  arm();
+  expect(await body<{ removed: unknown }>(await post(w.trees, "/api/trees/clean", { repo: w.repo.id }))).toEqual({ removed: [] });
+  expect(leaving()).toBe(true);
+  expect(w.trees.isLeaving(tree.dir)).toBe(false);
+  expect(existsSync(tree.dir)).toBe(true);
+  expect((await sh(w.repo.path, "branch", "--list", "card/race")).trim()).not.toBe("");
+});
+
+test("remove without force refuses a run started in the tree while it was read, and the tree reads as going until then", async () => {
+  const { w, tree, arm, leaving } = await racedWorld();
+  arm();
+  const remove = await post(w.trees, "/api/trees/remove", { repo: w.repo.id, tree: "card/race", deleteBranch: true });
+  expect([remove.status, await body<{ error: string }>(remove)]).toEqual([409, { error: "run c1a2b3c4 (Ask) is at work in tree card/race; stop it first" }]);
+  expect(leaving()).toBe(true);
+  expect(w.trees.isLeaving(tree.dir)).toBe(false);
+  expect(existsSync(tree.dir)).toBe(true);
+  expect(w.trees.treeFor(w.repo.path, "card/race")?.state).toBe("ready");
+});
+
 test("a record left merging by a crash comes back ready, saying so", async () => {
   const w = await world({}, "");
   const { tree } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "feat", caches: false }));

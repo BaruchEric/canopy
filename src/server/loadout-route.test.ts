@@ -40,6 +40,8 @@ let root: string;
 let config: string;
 let cli: string;
 let server: Awaited<ReturnType<typeof startServer>>;
+/** the harnesses the server has, read on each start, so a test can take one away */
+const harnesses: Harness[] = ["claude", "codex"];
 const saved: Record<string, string | undefined> = {};
 const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_CALLERS", "CANOPY_TMUX", "CANOPY_COORD_SOCKET", "CANOPY_BIND", "CANOPY_KIT", "HOME", "CODEX_HOME"];
 
@@ -140,7 +142,7 @@ beforeAll(async () => {
   const book = new CallerBook({ file: join(config, "callers.json") });
   cli = book.mint("cli", { label: "cli test" }).token;
   await book.flush();
-  server = await startServer({ root, port: 0, chan: null, harnesses: ["claude", "codex"], runner: { driver: (h: Harness) => new HeldDriver(h) } });
+  server = await startServer({ root, port: 0, chan: null, harnesses, runner: { driver: (h: Harness) => new HeldDriver(h) } });
   // a test server's kit never scans on its own
   expect((await post("/api/kit/scan", {})).status).toBe(200);
   await until(async () => ((await (await get("/api/loadouts")).json()) as LoadoutsInfo).loadouts.length === 5, "the kit's loadouts");
@@ -429,6 +431,21 @@ describe("a restart keeps the run's loadout", () => {
     expect(ctx.spec.servers).toEqual(["probe"]);
     expect(existsSync(ctx.spec.settings ?? "")).toBe(true);
     expect(existsSync(ctx.spec.mcpConfig ?? "")).toBe(true);
+  }, 30_000);
+
+  test("a landing fix checks the harness its loadout runs, not the job route's", async () => {
+    const codexJob = { harness: "codex", model: "default", effort: "default", yolo: false, extra: "" };
+    const { fix } = await fixed("docs", "fix-c.txt", async () => {
+      // the job route now names codex, which this backend no longer has; the
+      // fix runs Claude Code, its loadout's harness, so it starts all the same
+      expect((await post("/api/agents/role", { role: "job", pick: codexJob })).status).toBe(200);
+      harnesses.splice(harnesses.indexOf("codex"), 1);
+    }).finally(async () => {
+      if (!harnesses.includes("codex")) harnesses.push("codex");
+      await post("/api/agents/role", { role: "job", pick: null });
+    });
+    expect(fix.equip).toMatchObject({ loadout: "docs", model: "haiku" });
+    expect((await ctxOf(fix.id)).agent).toMatchObject({ harness: "claude", model: "haiku" });
   }, 30_000);
 
   test("a fork of a loadout run carries the same equip and a settings file", async () => {

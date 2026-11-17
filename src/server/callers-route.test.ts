@@ -263,6 +263,42 @@ describe("enforce", () => {
     }
   });
 
+  test("a pair request's event names the waiting pairs on an admin's stream alone, as /api/auth does", async () => {
+    /** the stream's first auth frame, or "" when none came in 5 s */
+    const authFrame = async (stream: Response, cut: AbortController): Promise<string> => {
+      if (!stream.body) throw new Error("the event stream has no body");
+      const reader = stream.body.getReader();
+      let seen = "";
+      const bound = setTimeout(() => cut.abort(), 5_000);
+      try {
+        while (!seen.includes(`"type":"auth"`)) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          seen += new TextDecoder().decode(value);
+        }
+      } catch {
+        // cut at the bound
+      } finally {
+        clearTimeout(bound);
+        cut.abort();
+      }
+      return seen.split("\n").find((l) => l.includes(`"type":"auth"`)) ?? "";
+    };
+    const shellCut = new AbortController();
+    const pageCut = new AbortController();
+    const shellStream = await call(s, "/api/events", { signal: shellCut.signal, token: shell });
+    const pageStream = await call(s, "/api/events", { signal: pageCut.signal, token: page });
+    const asked = (await (await post(s, "/api/auth/pair", { label: "a page asking" })).json()) as { id: string };
+    try {
+      const [shellFrame, pageFrame] = await Promise.all([authFrame(shellStream, shellCut), authFrame(pageStream, pageCut)]);
+      expect(pageFrame).toContain(asked.id);
+      // a shell's token holds no admin: it hears that the pairs changed, not which
+      expect(shellFrame).toBe(`data: {"type":"auth","pending":[]}`);
+    } finally {
+      await post(s, "/api/auth/deny", { id: asked.id }, page);
+    }
+  });
+
   test("what is in a repo takes a token: a file's bytes, a diff and a search are refused bare, and pass with a shell's or a page's", async () => {
     await Bun.write(join(scratch, "root", "app", ".env"), "KEY=not-a-real-one\n");
     const raw = "/api/repos/raw?id=app&path=.env";
@@ -583,7 +619,8 @@ describe("pairing over HTTP", () => {
     const pair = (await paired.json()) as { id: string; code: string; secret: string };
     expect(pair.code).toMatch(/^[A-Z2-9]{6}$/);
 
-    // the page hears of the pair on the event stream
+    // a stream hears that the pairs changed; a shell's, holding no admin,
+    // is not told which (an admin's stream gets them, tested under enforce)
     let seen = "";
     const until = Date.now() + 5_000;
     while (!seen.includes(`"type":"auth"`) && Date.now() < until) {
@@ -593,7 +630,7 @@ describe("pairing over HTTP", () => {
     }
     events.abort();
     expect(seen).toContain(`"type":"auth"`);
-    expect(seen).toContain(pair.id);
+    expect(seen).not.toContain(pair.id);
 
     expect((await post(s, "/api/auth/approve", { id: pair.id })).status).toBe(401);
     const lacks = await post(s, "/api/auth/approve", { id: pair.id }, shell);

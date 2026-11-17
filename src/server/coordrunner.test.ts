@@ -1500,6 +1500,51 @@ describe("a goal from the top", () => {
     expect((await driverOf(later.id)).ctx?.spec.addDirs).toEqual([dir]);
   }, 30_000);
 
+  test("a prune keeps the folder a card's ended branch may still be fixed with, and a fix whose folder went starts without it", async () => {
+    const { run, token } = await started({ goal: "favicon", files: [["shot.png", "png"]] });
+    const dir = join(s.seeds, "goal-files", run.id);
+    const plan = await postAs(s, "/api/coordinator/plan", { tasks: [{ title: "favicon", repo: "a", note: "use the logo", action: "ask", files: ["shot.png"] }] }, token);
+    expect(plan.status).toBe(200);
+    const begun = await postAs(s, "/api/coordinator/start", { run: run.id }, s.page);
+    const childId = ((await begun.json()) as { tasks: CoordTask[] }).tasks[0]?.run ?? "";
+    live.push(childId);
+    const ctx = (await driverOf(childId)).ctx;
+    if (!ctx) throw new Error("the child never reached its driver");
+    // the child commits and ends ready: no run reads the folder now, but its
+    // branch's landing record keeps it for a later fix or follow-up
+    await writeFile(join(ctx.cwd, "favicon.txt"), "x\n");
+    await Bun.$`git -C ${ctx.cwd} add -A && git -C ${ctx.cwd} -c user.name=t -c user.email=t@t commit -q -m favicon`.quiet();
+    ctx.result({ text: "Done.", durationMs: 1, turns: 1 }, null);
+    ctx.exited({ code: 0, stderr: "" });
+    const card = await until(async () => {
+      const c = (await runs()).find((r) => r.id === run.id)?.tasks?.[0];
+      return c?.state === "done" && c.outcome === "ready" ? c : null;
+    }, "the card to settle ready");
+    await postAs(s, "/api/runs/stop", { id: run.id }, s.page);
+    await until(async () => !(await exists(join(s.seeds, run.id))), "the coordinator's folder to go");
+    // the folder past the week; the decoy, read by nothing, shows the prune ran
+    const then = new Date(Date.now() - 9 * 24 * 60 * 60_000);
+    await utimes(join(dir, "shot.png"), then, then);
+    const decoy = join(s.seeds, "goal-files", "0000dec1");
+    await mkdir(decoy, { recursive: true });
+    await writeFile(join(decoy, "old.md"), "x");
+    await utimes(join(decoy, "old.md"), then, then);
+    await started({ goal: "another" });
+    await until(async () => !(await exists(decoy)), "the prune to take the decoy");
+    expect(await readdir(dir)).toEqual(["shot.png"]);
+    // the coordinator can rewrite its goal's folder: once it is gone, a
+    // follow-up starts without it rather than naming a folder that is not there
+    await rm(dir, { recursive: true, force: true });
+    const res = await postAs(s, "/api/landing/followup", { id: card.branch ?? "", note: "make it round" }, s.page);
+    const got = (await res.json()) as { run?: Run; error?: string };
+    expect([res.status, got.error]).toEqual([201, undefined]);
+    const later = got.run;
+    if (!later) throw new Error("the follow-up answered no run");
+    live.push(later.id);
+    expect((await driverOf(later.id)).ctx?.spec.addDirs).toBeUndefined();
+    expect(later.addDirs).toBeUndefined();
+  }, 30_000);
+
   test("a card whose file left the goal's folder fails at its start naming the file, and starts no run", async () => {
     const { run, token } = await started({ goal: "favicon", files: [["shot.png", "png"], ["notes.md", "# notes"]] });
     const dir = join(s.seeds, "goal-files", run.id);

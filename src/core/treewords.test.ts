@@ -32,4 +32,11 @@ describe("runsInTrees", () => {
     ];
     expect(runsInTrees(dirs, runs, pathOf)).toEqual(new Map([["/c/trees/web/feat-x", "run c1 (ask)"]]));
   });
+  test("a coordinator started at a tree card works in no tree: it holds nothing there", () => {
+    const dirs = ["/c/trees/web/feat-x"];
+    const pathOf = (id: string): string | undefined => (id === "trees:web/feat-x" ? "/c/trees/web/feat-x" : undefined);
+    expect(runsInTrees(dirs, [run({ id: "k1", action: "coordinate", verb: "coordinate" })], pathOf)).toEqual(new Map());
+    // a run in place beside it still holds the tree
+    expect(runsInTrees(dirs, [run({ id: "k1", action: "coordinate", verb: "coordinate" }), run({ id: "c1" })], pathOf)).toEqual(new Map([["/c/trees/web/feat-x", "run c1 (ask)"]]));
+  });
 });

@@ -62,7 +62,7 @@ import { unattendedRefusal } from "../core/workflow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sayInto, sendKeys, sendLine, LINE_END, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
 import { choiceOnScreen, codexAgentListOnScreen, steerWords } from "../core/steer";
-import { isPerson } from "../core/callers";
+import { allows, isPerson } from "../core/callers";
 import { cardAsks } from "../core/agentstatus";
 import { cardSession, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, resumeLine as resumeKeptLine, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
@@ -205,6 +205,7 @@ import {
   type PeerBranch,
   type PeerSeen,
   type PeerState,
+  type PendingPair,
   type PullCount,
   type Repo,
   type SpecHalf,
@@ -1822,13 +1823,14 @@ async function goalFolder(state: ServerState, coordId: string): Promise<{ seeds:
 }
 
 /** Takes the goals' files folders a week past their newest file whose
- *  coordinator is not going and that no run at work still reads
+ *  coordinator is not going, that no run at work still reads, and that no
+ *  branch's landing record holds for a later fix or follow-up
  *  (`liveGoalIds`, `pruneGoalFiles`): at each new goal and once at server
  *  start. A failure is logged and the next one tries again. */
 async function pruneGoals(state: ServerState): Promise<void> {
   const seeds = coordSeeds();
   if (!seeds) return;
-  const live = liveGoalIds(seeds, state.runner.list().filter(isRunActive));
+  const live = liveGoalIds(seeds, [...state.runner.list().filter(isRunActive), ...state.landing.info().runs]);
   try {
     await pruneGoalFiles(seeds, live, Date.now());
   } catch (err) {
@@ -2168,13 +2170,16 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
   const memberProfile = state.groups.info().find((g) => g.id === rec.group)?.members.find((m) => m.origin === rec.id)?.profile;
   const profile = memberProfile && hasProfile(agentRoutes(cfg).profiles, memberProfile) ? memberProfile : undefined;
   const agent = agentFor(cfg, repo.path, "job", profile ? { profile } : undefined, { kind: "task", name: "ask" });
-  await needHarness(state, agent.harness, repo.path);
-  const priority: Priority = how.priority ?? (rec.group ? "low" : "interactive");
-  needCapacity(state, agent.harness, priority);
-  const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id, ...(rec.work ? { work: rec.work } : {}), ...(rec.group ? { group: rec.group } : {}) };
-  // a run that started with a loadout is fixed with it, rebuilt from its equip
+  // a run that started with a loadout is fixed with it, rebuilt from its
+  // equip, and runs the loadout's harness, which may not be the route's: the
+  // harness and the governor are asked of that one, before anything is written
   const fixLoadout = rec.equip ? loadoutOfEquip(rec.equip, rec.harness) : null;
-  const resume = (fixLoadout ? rec.harness : agent.harness) === "claude" && rec.harness === "claude" ? rec.session : undefined;
+  const harness = fixLoadout ? fixLoadout.harness : agent.harness;
+  await needHarness(state, harness, repo.path);
+  const priority: Priority = how.priority ?? (rec.group ? "low" : "interactive");
+  needCapacity(state, harness, priority);
+  const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id, ...(rec.work ? { work: rec.work } : {}), ...(rec.group ? { group: rec.group } : {}) };
+  const resume = harness === "claude" && rec.harness === "claude" ? rec.session : undefined;
   const notes = rec.work ? state.work.get(rec.work)?.notes ?? [] : [];
   const fence = handoffFence(notes);
   const resumed = queueLine ? `${reason}\n\n${branchLine(b)}` : reason;
@@ -2183,23 +2188,21 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
   const askSpec = holdsTools && !resume ? { ...ACTIONS.ask, brief: await toolsBrief() } : ACTIONS.ask;
   const message = resume ? (fence ? `${fence}\n\n${resumed}` : resumed) : branchPrompt(repo, askSpec, `${rec.note}\n\n${reason}`, b, notes);
   // a fix of a child stays one, a run that held tools gets a fresh token,
-  // and one given a goal's files folder keeps it
+  // and one given a goal's files folder keeps it while the folder is there
+  // (the coordinator can remove its goal's folder, and a prune can take it)
   const parent = how.parent ?? rec.parent;
+  const addDirs = (rec.addDirs ?? []).filter((d) => existsSync(d));
   const base: StartExtras = {
     ...(rec.group ? { group: rec.group } : {}),
     ...(priority !== "interactive" ? { priority } : {}),
     ...(parent ? { parent } : {}),
     ...(rec.depth ? { depth: rec.depth } : {}),
-    ...(rec.addDirs?.length ? { addDirs: rec.addDirs } : {}),
+    ...(addDirs.length > 0 ? { addDirs } : {}),
   };
   const tools: { agent?: AgentSettings; extras: StartExtras; release: () => Promise<void> } = fixLoadout
     ? await withLoadout(state, repo, fixLoadout, agent, base, holdsTools)
     : holdsTools ? await runTools(state, repo, base) : { extras: base, release: async () => {} };
   try {
-    if (tools.agent && tools.agent.harness !== agent.harness) {
-      await needHarness(state, tools.agent.harness, repo.path);
-      needCapacity(state, tools.agent.harness, priority);
-    }
     return state.runner.start(repo, "ask", ACTIONS.ask, note, tools.agent ?? agent, undefined, undefined, {
       branch: b,
       message,
@@ -2220,7 +2223,7 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
  *  or a later run between its check and its start. A follow-up, a stopped
  *  flow's pickup, a trigger event's resume, a Linear session's message, a
  *  landing "fix it" and a card's resume after the limit each refuse while
- *  it holds. */
+ *  it holds, and the PR watch neither rebases, fixes nor merges. */
 function branchBusy(state: ServerState, origin: string): boolean {
   if (state.branchStarting.has(origin)) return true;
   if (state.runner.list().some((r) => r.branch?.origin === origin && (isRunActive(r) || state.stalls.starting(r.id)))) return true;
@@ -2644,10 +2647,12 @@ function flowInTree(state: ServerState, dir: string): string | undefined {
  *  canopy's tools. A run after the card's own
  *  (`after`) resumes its Claude session when both are Claude Code's, and
  *  is sent the card's task again ahead of its words when it cannot. The
- *  in-use check and the start share one synchronous stretch after the last
- *  await, so the runner's one-run-per-repo refusal never races it: a tree
- *  in use, or a start the governor holds, answers busy, and anything else
- *  throws. Whatever the loadout wrote goes again unless the run started. */
+ *  in-use check, a fresh read of the tree, and the start share one
+ *  synchronous stretch after the last await, so neither the runner's
+ *  one-run-per-repo refusal nor a merge, clean-up or remove that began
+ *  meanwhile races it: a tree in use, merging, leaving or gone, or a start
+ *  the governor holds, answers busy, and anything else throws. Whatever the
+ *  loadout wrote goes again unless the run started. */
 async function startTreeRun(state: ServerState, coordId: string, task: CoordTask, treeRepo: Repo, how: TreeRunHow): Promise<ChildResume> {
   const repo = state.result.repos.find((r) => r.id === task.repo);
   if (!repo) throw new Error(`${task.repo} is no longer in the tree`);
@@ -2677,8 +2682,10 @@ async function startTreeRun(state: ServerState, coordId: string, task: CoordTask
     // a manager's worker never holds canopy's tools, whatever its loadout says
     const loaded = loadout ? await withLoadout(state, treeRepo, loadout, routed, base, false) : { agent: routed, extras: base, release };
     release = loaded.release;
-    // no await from here to the start
-    if (checkoutInUse(state, treeRepo.id)) {
+    // no await from here to the start: the tree is read again here, since a
+    // merge, a clean-up or a remove may have begun during the awaits above
+    const tree = state.trees.treeFor(repo.path, task.tree ?? "");
+    if (checkoutInUse(state, treeRepo.id) || tree?.dir !== treeRepo.path || tree.state !== "ready" || state.trees.isLeaving(tree.dir)) {
       await release();
       return { busy: treeBusyWords(task.tree ?? "") };
     }
@@ -3655,14 +3662,34 @@ function broadcast(state: ServerState, event: ServerEvent): void {
   if (event.type === "repo") state.trees.touched(event.repo.path);
   if (PUSH_EVENTS.has(event.type)) state.push.poke();
   const data = enc.encode(`data: ${JSON.stringify(event)}\n\n`);
+  for (const c of state.clients) send(state, c, data);
+}
+
+/** One frame down one stream; a stream that is gone is let go. */
+function send(state: ServerState, c: ReadableStreamDefaultController<Uint8Array>, data: Uint8Array): void {
+  try {
+    c.enqueue(data);
+  } catch {
+    state.clients.delete(c);
+    state.streamCallers.delete(c);
+    state.streams.delete(c);
+  }
+}
+
+/** The pair requests waiting, to every stream as `GET /api/auth` gives them
+ *  (callers.ts `authInfo`): the whole list to a stream opened by a caller
+ *  that holds admin, or to any stream while the gate does not enforce, and
+ *  an empty one to the rest. A request names a device, an address and its
+ *  code, which a read token must not learn. */
+function broadcastPairs(state: ServerState, pending: PendingPair[]): void {
+  const whole = enc.encode(`data: ${JSON.stringify({ type: "auth", pending } satisfies ServerEvent)}\n\n`);
+  const none = enc.encode(`data: ${JSON.stringify({ type: "auth", pending: [] } satisfies ServerEvent)}\n\n`);
+  const kinds = new Map(state.callers.list().map((c) => [c.id, c.kind]));
+  const open = state.gate.mode !== "enforce";
   for (const c of state.clients) {
-    try {
-      c.enqueue(data);
-    } catch {
-      state.clients.delete(c);
-      state.streamCallers.delete(c);
-      state.streams.delete(c);
-    }
+    const id = state.streamCallers.get(c);
+    const kind = (id !== undefined ? kinds.get(id) : undefined) ?? "none";
+    send(state, c, open || allows(kind, "admin") ? whole : none);
   }
 }
 
@@ -5440,7 +5467,7 @@ async function handleApi(
     return json({ rules: state.remembered.list() });
   }
   if (path === "/api/runs/stop" && method === "POST") {
-    const b = (await req.json()) as { id?: unknown };
+    const b: { id?: unknown } = await objectBody(req);
     if (typeof b.id !== "string") return json({ error: "missing run id" }, 400);
     // the kept timeline says who ended it ("ended from Mac, Chrome")
     return json(state.runner.stop(b.id, caller ? `from ${caller.label}` : undefined));
@@ -5450,7 +5477,7 @@ async function handleApi(
     return json(await startForkRun(state, b, b["client"]), 201);
   }
   if (path === "/api/runs/say" && method === "POST") {
-    const b = (await req.json()) as { id?: unknown; text?: unknown };
+    const b: { id?: unknown; text?: unknown } = await objectBody(req);
     if (typeof b.id !== "string" || typeof b.text !== "string") {
       return json({ error: "missing run id or text" }, 400);
     }
@@ -5466,7 +5493,7 @@ async function handleApi(
     return json(steering(() => state.runner.say(id, text, { steer: isPerson(caller) })));
   }
   if (path === "/api/runs/interrupt" && method === "POST") {
-    const b = (await req.json()) as { id?: unknown; text?: unknown };
+    const b: { id?: unknown; text?: unknown } = await objectBody(req);
     if (typeof b.id !== "string" || (b.text !== undefined && typeof b.text !== "string")) {
       return json({ error: "a run id, and text to go next if any" }, 400);
     }
@@ -7476,7 +7503,7 @@ export async function startServer(opts: {
       book: callers,
       mode: callerMode,
       log: opts.callersLog ?? (process.env["NODE_ENV"] === "test" ? () => {} : (line) => console.log(line)),
-      onPairs: (pending) => broadcast(state, { type: "auth", pending }),
+      onPairs: (pending) => broadcastPairs(state, pending),
       // the check is polled; the first refusal is worth a probe at once
       onRefused: () => {
         if (state.gate.refused.count === 1) void state.health.probeNow(CALLERS_CHECK);
@@ -7497,7 +7524,11 @@ export async function startServer(opts: {
       queueHold: (id) => state.landing.queueHold(id),
       markPr: (id, pr) => state.landing.markPr(id, pr),
       forget: (id) => state.landing.forget(id),
-      startFix: (rec, prompt, label, priority) => startBranchFix(state, rec, prompt, label, false, { priority: priority ?? "normal" }),
+      // never a second writer on the branch: the watch holds off while a
+      // run or flow works there or is starting, and its own fix marks the
+      // branch as starting, so a follow-up checking meanwhile sees it taken
+      branchBusy: (id) => branchBusy(state, id),
+      startFix: (rec, prompt, label, priority) => startingOn(state, rec.id, () => startBranchFix(state, rec, prompt, label, false, { priority: priority ?? "normal" })),
       // a PR's fix is normal work (FR-036); its harness is the job route's,
       // read at the start, so the hold is asked of Claude Code's window
       hold: (priority) => {

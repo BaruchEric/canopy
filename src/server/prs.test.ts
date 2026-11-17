@@ -78,6 +78,8 @@ interface World {
   closes: string[];
   links: [string, unknown][];
   active: Set<string>;
+  /** the branches another run or flow works on, by the branch's id */
+  busy: Set<string>;
   /** runs that ended stopped or failed */
   failed: Set<string>;
   forgot: string[];
@@ -135,7 +137,7 @@ async function world(opts: { repoDefault?: string; work?: string } = {}): Promis
   const records = new Map([[id, rec]]);
   const recDir = join(root, `prs${n}`);
   const scen: World["scen"] = { root: join(root, `scen${n}`), calls: [], answers: {}, wait: null };
-  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], notes: [], closes: [], links: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], stopped: [], held: null, hold: null, limitedRuns: new Map(), recDir, clock: null, scen } as unknown as World;
+  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], notes: [], closes: [], links: [], active: new Set<string>(), busy: new Set<string>(), failed: new Set<string>(), forgot: [], stopped: [], held: null, hold: null, limitedRuns: new Map(), recDir, clock: null, scen } as unknown as World;
   const fake = async (args: string[]): Promise<ExecResult> => {
     g.calls.push(args);
     const [a, b] = args;
@@ -198,6 +200,7 @@ async function world(opts: { repoDefault?: string; work?: string } = {}): Promis
       runActive: (x) => w.active.has(x),
       runOk: (x) => !w.active.has(x) && !w.failed.has(x) && !w.limitedRuns.has(x),
       hold: () => w.hold,
+      branchBusy: (x) => w.busy.has(x),
       limitedRun: (x) => w.limitedRuns.get(x) ?? null,
       scenarios: {
         root: scen.root,
@@ -777,6 +780,39 @@ describe("the rebase step", () => {
     expect(w.fixes).toHaveLength(1);
     expect(w.fixes[0]!.prompt).toContain("rename this");
     expect(pr.fixing).toEqual({ run: "fix1", key: "comment:5" });
+  });
+
+  test("another run on the branch holds the rebase, the fix and a rebase by hand: nothing moves or counts, the PR is read again soon, and the rebase goes once the run ends", async () => {
+    const { w, pushed } = await behind();
+    // a follow-up started while the PR was closed, say, still works there
+    w.busy.add(w.rec.id);
+    let pr = await pollNow(w);
+    expect(await revOf(w.dir, "HEAD")).toBe(pushed);
+    expect(await remoteBranch(w)).toBe(pushed);
+    expect([pr.pushed, pr.rebasing, pr.attempts, pr.error, pr.gaveUp, w.fixes.length]).toEqual([pushed, undefined, {}, undefined, undefined, 0]);
+    const due = (w.hub as unknown as { due: Map<string, number> }).due.get(w.rec.id)!;
+    expect(due - Date.now()).toBeLessThanOrEqual(POLL_BUSY);
+    const byHand = await w.hub.handle(new Request("http://x/api/prs/rebase", { method: "POST", body: JSON.stringify({ run: w.rec.id }) }), new URL("http://x/api/prs/rebase"));
+    expect([byHand?.status, await byHand!.json()]).toEqual([409, { error: "a run works on its branch; rebase once it ends" }]);
+    expect(await revOf(w.dir, "HEAD")).toBe(pushed);
+    w.busy.clear();
+    pr = await pollNow(w);
+    expect(pr.pushed).not.toBe(pushed);
+    expect(await remoteBranch(w)).toBe(pr.pushed);
+  });
+
+  test("a failed check starts no fix while another run works on the branch, counts nothing, and starts once it ends", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    await w.hub.set(w.rec.id, { autoFix: true });
+    w.gh.head = await revOf(w.dir, "HEAD");
+    w.gh.checks = [checkRun("test", "COMPLETED", "FAILURE")];
+    w.busy.add(w.rec.id);
+    let pr = await pollNow(w);
+    expect([w.fixes.length, pr.fixing, pr.attempts]).toEqual([0, undefined, {}]);
+    w.busy.clear();
+    pr = await pollNow(w);
+    expect([w.fixes.length, pr.fixing, pr.attempts]).toEqual([1, { run: "fix1", key: "check:test" }, { "check:test": 1 }]);
   });
 
   test("auto-fix off: BEHIND starts no rebase", async () => {

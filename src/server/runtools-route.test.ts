@@ -392,6 +392,16 @@ describe("a person steering a run over the API (FR-066)", () => {
     expect((await post("/api/runs/interrupt", { id: "nope1234", text: 7 })).status).toBe(400);
   });
 
+  test("a body that is null, an array or no JSON is a 400 on stop, say and interrupt, never a 500", async () => {
+    const raw = (p: string, body: string) => fetch(url(p), { method: "POST", headers: { "content-type": "application/json", "x-canopy-token": cli }, body });
+    for (const path of ["/api/runs/stop", "/api/runs/say", "/api/runs/interrupt"]) {
+      for (const body of ["null", "[]", "{not json", ""]) {
+        const res = await raw(path, body);
+        expect({ path, body, status: res.status }).toEqual({ path, body, status: 400 });
+      }
+    }
+  });
+
   test("typing into a shell takes the page's shell right: words checked first, an unknown shell is a 404", async () => {
     expect((await post("/api/terms/say", { term: "abc", text: "  " }, page)).status).toBe(400);
     expect((await post("/api/terms/say", { term: "abc" }, page)).status).toBe(400);
