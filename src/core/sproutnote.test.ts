@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DAILY_EVENTS, DAILY_OWED_MAX, dailyLine, dailyNoteHead, dailyNotePath, noteElsewhere, noteMark, notePathOf, sproutNote, sproutNotePath, takeDaily } from "./sproutnote";
+import { DAILY_EVENTS, DAILY_OWED_MAX, dailyLine, dailyNoteHead, dailyNotePath, noteElsewhere, noteLegacy, noteMark, notePathOf, sproutNote, sproutNotePath, takeDaily, ymd } from "./sproutnote";
 import { marked } from "./vault";
 import type { Sprout } from "./types";
 
@@ -111,6 +111,15 @@ describe("sproutNote", () => {
     expect(noteMark(sprout())).toBe("sprout: sp_0123456789ab");
     expect(marked(md, noteMark(sprout()))).toBe(true);
     expect(marked(md, "sprout: sp_ffffffffffff")).toBe(false);
+  });
+  test("its legacy lines are in the note, and in a note written before the mark", () => {
+    const s = sprout();
+    const legacy = noteLegacy(s);
+    expect(legacy).toEqual(["source: canopy incubator", "seed: _incubator/change-counter", `created: ${ymd(new Date(s.createdAt))}`]);
+    for (const l of legacy) expect(marked(sproutNote(s, null), l)).toBe(true);
+    // the frontmatter as it was before 2026-11-14
+    const old = sproutNote(s, null).replace(`${noteMark(s)}\n`, "");
+    for (const l of legacy) expect(marked(old, l)).toBe(true);
   });
   test("a note moved off its slug's path: the slug and the sprout's id, and the daily line links there", () => {
     expect(noteElsewhere(sprout())).toBe("02 - Dev/incubator/change-counter-0123456789ab.md");

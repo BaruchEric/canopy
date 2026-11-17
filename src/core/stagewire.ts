@@ -3,6 +3,9 @@
  * per process, one JSON object per line, bytes as base64. Pure and
  * browser-safe (no Buffer: base64 through btoa/atob over byte strings).
  */
+// sproutnote is pure too, so the stage runner's bundle can take it
+import { ymd } from "./sproutnote";
+
 /** Whether the stages container's fence holds, as the runner last probed
  *  it: true once its probe target timed out, false once it answered or the
  *  probe failed some other way, "unchecked" while no target is set or the
@@ -88,8 +91,8 @@ function parseProbe(v: unknown): LoginProbe | null {
   return typeof words === "string" && words ? { said, at, words: words.slice(0, PROBE_WORDS_MAX) } : { said, at };
 }
 
-/** the day a time falls on, UTC, for a line a person reads */
-const day = (at: number): string => new Date(at).toISOString().slice(0, 10);
+/** the local day a time falls on, for a line a person reads */
+const day = (at: number): string => ymd(new Date(at));
 
 /** The file a runner reads its own claude token from, in its claude config
  *  folder beside `.credentials.json`: what `claude setup-token` prints, on

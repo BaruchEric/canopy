@@ -44,6 +44,15 @@ describe("readers", () => {
     expect(r.skipped).toEqual([1]);
   });
 
+  test("dotenv: a file with CRLF endings gives up its pairs, marked partial since a sink cannot read those lines", () => {
+    const r = readDotenv("/d/.env", "# c\r\nA=1\r\nexport B='x y'\r\nnote\r\n");
+    expect(r.found).toEqual([
+      { source: "/d/.env", key: "A", value: "1", partial: true },
+      { source: "/d/.env", key: "B", value: "x y", partial: true },
+    ]);
+    expect(r.skipped).toEqual([4]);
+  });
+
   test("dotenv: a file of pairs only is not partial", () => {
     const r = readDotenv("/d/.env", "A=1\n\n# c\nB=2\n");
     expect(r.found).toEqual([

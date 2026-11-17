@@ -389,20 +389,27 @@ export class SecretsReader {
 
   /** This machine's sources, each value sealed to the mini alone: as many
    *  as the store lets wait at once, with `left` counting the values past
-   *  that. A caller posts them a batch at a time (LIMITS.proposals).
-   *  `skipped` names the dotenv lines that are not pairs, by number only. */
-  async proposals(): Promise<{ items: SecretProposalIn[]; missing: string[]; left: number; skipped: SkippedLines[] } | { error: string }> {
+   *  that. `match` keeps only the values whose key or file holds one of
+   *  its texts, in any case, before that cap; `offset` skips that many of
+   *  the values kept, so a second call can reach past the first page. A
+   *  caller posts them a batch at a time (LIMITS.proposals). `skipped`
+   *  names the dotenv lines that are not pairs, by number only. */
+  async proposals(o: { match?: readonly string[]; offset?: number } = {}): Promise<{ items: SecretProposalIn[]; missing: string[]; left: number; skipped: SkippedLines[] } | { error: string }> {
     const mini = this.file?.keys["mini"];
     if (!mini) return { error: "no verified secrets.json here yet, so no mini key to seal to" };
     const { found, missing, skipped } = await scanFiles(this.o.sources());
+    const want = (o.match ?? []).map((t) => t.toLowerCase());
     // a value too large to seal under the proposal cap is left for a hand entry
-    const fits = found.filter((x) => x.value === null || x.value.length <= LIMITS.sealed / 2);
+    const fits = found.filter(
+      (x) => (x.value === null || x.value.length <= LIMITS.sealed / 2) && (want.length === 0 || want.some((t) => x.key.toLowerCase().includes(t) || x.source.toLowerCase().includes(t))),
+    );
+    const from = Math.max(0, Math.floor(o.offset ?? 0));
     const items: SecretProposalIn[] = [];
-    for (const x of fits.slice(0, LIMITS.pending)) {
+    for (const x of fits.slice(from, from + LIMITS.pending)) {
       const ref = { from: this.o.machine, source: x.source, key: x.key };
       items.push({ ...ref, sealed: x.value === null ? "" : await sealProposal(ref, x.value, mini), merges: null, ...(x.partial ? { partial: true } : {}) });
     }
-    return { items, missing, left: fits.length - items.length, skipped };
+    return { items, missing, left: Math.max(0, fits.length - from - items.length), skipped };
   }
 
   /** a drifted sink key's file value, sealed to the mini as an update of its secret */

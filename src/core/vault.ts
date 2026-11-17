@@ -41,17 +41,35 @@ const PUT_TRIES = 5;
 export interface NoteOwner {
   mark: string;
   elsewhere: string;
+  /** Lines the owner's notes carried in their frontmatter before marks
+   *  existed. A note with every one of them and no mark of anyone's (no line
+   *  starting with the mark's own `name:`) is the owner's too, so a note
+   *  written before marks is replaced in place, not left behind. */
+  legacy?: readonly string[];
+}
+
+/** a note's frontmatter lines (from its opening `---` to the next, or to the end), trimmed; null when it has none */
+function frontmatter(text: string): string[] | null {
+  const lines = text.split("\n").map((l) => l.trim());
+  if (lines[0] !== "---") return null;
+  const end = lines.indexOf("---", 1);
+  return end === -1 ? lines.slice(1) : lines.slice(1, end);
 }
 
 /** whether a note's frontmatter (between its opening `---` and the next) has the line `mark` */
 export function marked(text: string, mark: string): boolean {
-  const lines = text.split("\n").map((l) => l.trim());
-  if (lines[0] !== "---") return false;
-  for (const line of lines.slice(1)) {
-    if (line === "---") return false;
-    if (line === mark) return true;
-  }
-  return false;
+  return frontmatter(text)?.includes(mark) ?? false;
+}
+
+/** whether the note is the owner's: its mark, or every legacy line and no mark at all */
+function owns(text: string, owner: NoteOwner): boolean {
+  const fm = frontmatter(text);
+  if (!fm) return false;
+  if (fm.includes(owner.mark)) return true;
+  const legacy = owner.legacy ?? [];
+  if (legacy.length === 0) return false;
+  const name = owner.mark.slice(0, owner.mark.indexOf(":") + 1);
+  return name !== "" && !fm.some((l) => l.startsWith(name)) && legacy.every((l) => fm.includes(l));
 }
 
 export class VaultNotes {
@@ -104,8 +122,9 @@ export class VaultNotes {
 
   /** Writes the whole note, at `path` or, when another's note holds that,
    *  at `owner.elsewhere`. A conflict reads the note in the way and writes
-   *  over it only when its frontmatter carries `owner.mark`: two backends
-   *  can pick the same slug, and each must keep its own note. Answers where
+   *  over it only when its frontmatter carries `owner.mark`, or, for a note
+   *  written before marks, every line of `owner.legacy` and no mark: two
+   *  backends can pick the same slug, and each must keep its own note. Answers where
    *  the note went and the revision to replace it with next, undefined when
    *  the gateway queued the write. */
   async put(path: string, text: string, rev: string | undefined, owner: NoteOwner): Promise<{ rev: string | undefined; path: string }> {
@@ -126,7 +145,7 @@ export class VaultNotes {
           base = undefined;
           continue;
         }
-        if (marked(there.text, owner.mark)) {
+        if (owns(there.text, owner)) {
           if (!there.rev) throw new VaultError(409, `${at}: in conflict, with no revision to replace yet`);
           base = there.rev;
           continue;

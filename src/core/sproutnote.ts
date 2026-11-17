@@ -19,6 +19,12 @@ export const sproutNotePath = (slug: string): string => `02 - Dev/incubator/${sl
  *  its own note from another backend's that picked the same slug */
 export const noteMark = (s: Pick<Sprout, "id">): string => `sprout: ${s.id}`;
 
+/** The frontmatter lines a sprout's note carried before `noteMark` (until
+ *  2026-11-14), which together know its own old note from another's: the
+ *  source, the seed and the day it was made. The seed alone is the slug's,
+ *  which another backend can share. */
+export const noteLegacy = (s: Pick<Sprout, "repoId" | "createdAt">): string[] => ["source: canopy incubator", `seed: ${s.repoId}`, `created: ${ymd(new Date(s.createdAt))}`];
+
 /** where a sprout's note goes when another project's note holds its
  *  slug's path: the slug with the sprout's own id */
 export const noteElsewhere = (s: Pick<Sprout, "id" | "slug">): string => sproutNotePath(`${s.slug}-${s.id.slice(3)}`);
@@ -29,7 +35,8 @@ export const notePathOf = (s: Pick<Sprout, "id" | "slug" | "noteMoved">): string
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const pad2 = (n: number): string => String(n).padStart(2, "0");
-const ymd = (d: Date): string => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+/** the local day a time falls on, as YYYY-MM-DD */
+export const ymd = (d: Date): string => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
 export function dailyNotePath(d: Date): string {
   return `01 - Daily Notes/${pad2(d.getMonth() + 1)} - ${MONTHS[d.getMonth()] ?? ""} ${d.getFullYear()}/${ymd(d)}.md`;

@@ -531,6 +531,32 @@ describe("proposals", () => {
     expect(over.items.length).toBe(LIMITS.pending);
     expect(over.left).toBe(7);
   });
+
+  test("a match is applied before the cap, and an offset pages past it", async () => {
+    const mini = await newIdentity();
+    await publish(emptyFile({ mini: mini.recipient, breakglass: BREAKGLASS }), signer);
+    const lines = Array.from({ length: LIMITS.pending + 7 }, (_, i) => `KEY_${i}=value-${i}`);
+    lines.push("WANTED_TOKEN=w1");
+    await writeFile(join(dir, "long.env"), `${lines.join("\n")}\n`);
+    const r = await reader([join(dir, "long.env")]);
+    // the 508th value, past the cap, is found by a match in any case
+    const m = await r.proposals({ match: ["wanted"] });
+    if ("error" in m) throw new Error(m.error);
+    expect(m.items.map((x) => x.key)).toEqual(["WANTED_TOKEN"]);
+    expect(m.left).toBe(0);
+    expect(await openProposal(m.items[0]?.sealed ?? "", mini.identity, { from: "mac", source: join(dir, "long.env"), key: "WANTED_TOKEN" })).toBe("w1");
+    // a match on the file's path keeps every value of it
+    const byFile = await r.proposals({ match: ["LONG.ENV"], offset: LIMITS.pending });
+    if ("error" in byFile) throw new Error(byFile.error);
+    expect(byFile.items.map((x) => x.key)).toEqual(["KEY_500", "KEY_501", "KEY_502", "KEY_503", "KEY_504", "KEY_505", "KEY_506", "WANTED_TOKEN"]);
+    // the second page of everything, and an offset past the end
+    const page = await r.proposals({ offset: LIMITS.pending });
+    if ("error" in page) throw new Error(page.error);
+    expect(page.items.length).toBe(8);
+    expect(page.left).toBe(0);
+    const past = await r.proposals({ offset: 10_000 });
+    expect("error" in past ? past.error : [past.items.length, past.left]).toEqual([0, 0]);
+  });
 });
 
 describe("gpd's sinks, written by the Mac over ssh (phase 3)", () => {

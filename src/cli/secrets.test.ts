@@ -109,11 +109,13 @@ describe("propose", () => {
     item(BUNDLE, "providers.cloudflare.api_token"),
     item(NOTES, "OPENAI_API_KEY", { partial: true }),
   ];
-  const args = (over: Partial<ProposeArgs> = {}): ProposeArgs => ({ match: [], all: false, to: null, dry: false, ...over });
+  const args = (over: Partial<ProposeArgs> = {}): ProposeArgs => ({ match: [], all: false, to: null, dry: false, offset: 0, ...over });
 
   test("the flags: one or more texts or --all, never both and never neither", () => {
-    expect(parsePropose(["--match", "voice", "--match", "LIVE", "--dry-run"])).toEqual({ match: ["voice", "LIVE"], all: false, to: null, dry: true });
-    expect(parsePropose(["--all", "--to", "mini"])).toEqual({ match: [], all: true, to: "mini", dry: false });
+    expect(parsePropose(["--match", "voice", "--match", "LIVE", "--dry-run"])).toEqual({ match: ["voice", "LIVE"], all: false, to: null, dry: true, offset: 0 });
+    expect(parsePropose(["--all", "--to", "mini"])).toEqual({ match: [], all: true, to: "mini", dry: false, offset: 0 });
+    expect(parsePropose(["--all", "--offset", "500"])).toEqual({ match: [], all: true, to: null, dry: false, offset: 500 });
+    for (const bad of [["--all", "--offset"], ["--all", "--offset", "-1"], ["--all", "--offset", "1.5"], ["--all", "--offset", "x"]]) expect(parsePropose(bad)).toBe("--offset needs a whole number, 0 or more");
     expect(parsePropose([])).toContain("--match TEXT");
     expect(parsePropose(["--all", "--match", "x"])).toContain("--match TEXT");
     expect(parsePropose(["--match"])).toBe("--match needs a text");
@@ -131,17 +133,21 @@ describe("propose", () => {
   });
 
   /** a home backend that reads, a registry of two others, and whatever the writer was posted */
-  function world(o: { scan?: SecretProposalIn[]; role?: SecretsInfo["role"]; writerAway?: boolean; inStep?: number } = {}) {
+  function world(o: { scan?: SecretProposalIn[]; role?: SecretsInfo["role"]; writerAway?: boolean; inStep?: number; left?: number } = {}) {
     const lines: string[] = [];
     const posted: SecretProposalIn[][] = [];
     const asked: string[] = [];
+    const scans: unknown[] = [];
     const mini: Target = { name: "mini", urls: ["http://100.0.0.2:7850"] };
     const deps = {
       homeUrl: "http://127.0.0.1:7850",
-      home: async <T,>(method: string, path: string): Promise<T> => {
+      home: async <T,>(method: string, path: string, body?: unknown): Promise<T> => {
         asked.push(`home ${method} ${path}`);
         if (path === "/api/secrets") return info({ role: o.role ?? "reader" }) as T;
-        if (path === "/api/secrets/scan") return { items: o.scan ?? items, missing: ["/Users/e/.codex/config.toml"], left: 0, skipped: [{ path: NOTES, lines: [8, 11] }] } as T;
+        if (path === "/api/secrets/scan") {
+          scans.push(body);
+          return { items: o.scan ?? items, missing: ["/Users/e/.codex/config.toml"], left: o.left ?? 0, skipped: [{ path: NOTES, lines: [8, 11] }] } as T;
+        }
         if (path === "/api/backends") return { self: "mac", backends: [{ name: "mac", tailnet: "http://100.0.0.1:7850" }, { name: "desoto", tailnet: "http://100.0.0.3:7850" }, { name: "mini", tailnet: mini.urls[0] }] } as T;
         throw new Error(`unexpected ${path}`);
       },
@@ -164,8 +170,19 @@ describe("propose", () => {
         throw new Error(msg);
       },
     };
-    return { deps, lines, posted, asked };
+    return { deps, lines, posted, asked, scans };
   }
+
+  test("the texts and the offset go with the scan, so the backend matches before its cap, and values past it name the offset that reaches them", async () => {
+    const w = world({ left: 7 });
+    expect(await propose(args({ match: ["CANOPY_"], offset: 500 }), false, w.deps)).toBe(0);
+    expect(w.scans).toEqual([{ match: ["CANOPY_"], offset: 500 }]);
+    expect(w.lines.join("\n")).toContain("7 more values come after these: once these are approved or rejected, run this again with --offset 504");
+    const all = world();
+    await propose(args({ all: true }), false, all.deps);
+    expect(all.scans).toEqual([{ match: [], offset: 0 }]);
+    expect(all.lines.join("\n")).not.toContain("--offset");
+  });
 
   test("sends only what matched, to the backend that answers as the writer, and prints names and counts", async () => {
     const w = world();

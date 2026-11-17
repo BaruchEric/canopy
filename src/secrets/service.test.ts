@@ -539,6 +539,31 @@ describe("proposals", () => {
     expect((await svc.handle({ t: "propose", items: batch(2) })).ok).toBe(true);
     expect((await svc.handle({ t: "propose", items: batch(3) })).ok).toBe(false);
   });
+
+  test("the cap counts only new keys: one already waiting, or one a sink keeps in step, adds nothing", async () => {
+    // a value a sink keeps in step
+    const env = join(stacks, "app", ".env");
+    await mkdir(join(stacks, "app"), { recursive: true });
+    await writeFile(env, "API_KEY=k1\n");
+    found = [{ source: env, key: "API_KEY", value: "k1" }];
+    await ok({ a: "import-scan" });
+    const first = (await info()).proposals[0];
+    await ok({ a: "approve", proposal: first?.id ?? "", name: "app_api_key", description: "", tags: [], value: null, sink: { id: "app" } });
+    const batch = (n: number, count = 200) => Array.from({ length: count }, (_, i) => ({ from: "mac", source: "/Users/e/dev/.env", key: `K${n}_${i}`, sealed: "", merges: null }));
+    expect((await svc.handle({ t: "propose", items: batch(1) })).ok).toBe(true);
+    expect((await svc.handle({ t: "propose", items: batch(2) })).ok).toBe(true);
+    // the same 200 again take the places of what waits
+    expect(await svc.handle({ t: "propose", items: batch(2) })).toEqual({ ok: true, data: { added: 200, dropped: 0, inStep: 0 } });
+    // 100 waiting already and 100 new fill the list to 500
+    expect(await svc.handle({ t: "propose", items: [...batch(2, 100), ...batch(3, 100)] })).toEqual({ ok: true, data: { added: 200, dropped: 0, inStep: 0 } });
+    expect((await info()).proposals).toHaveLength(LIMITS.pending);
+    // a full list still takes a scan whose value is in step, and a key twice in one batch counts once
+    expect(await ok({ a: "import-scan" })).toEqual({ added: 0, dropped: 0, inStep: 1 });
+    expect(await svc.handle({ t: "propose", items: [...batch(3, 1), ...batch(3, 1)] })).toEqual({ ok: true, data: { added: 2, dropped: 0, inStep: 0 } });
+    // one new key is past the cap
+    expect((await svc.handle({ t: "propose", items: batch(4, 1) })).ok).toBe(false);
+    expect((await info()).proposals).toHaveLength(LIMITS.pending);
+  });
 });
 
 describe("MCP allowances", () => {

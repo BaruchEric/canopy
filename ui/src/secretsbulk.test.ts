@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SecretProposalInfo } from "../../src/core/types";
-import { batches, bulkAct, looksSecret, pick, sinkIdOf } from "./secretsbulk";
+import { batches, bulkAct, looksSecret, nextScanOffset, pick, sinkIdOf } from "./secretsbulk";
 
 const P = (over: Partial<SecretProposalInfo> = {}): SecretProposalInfo => ({
   id: "p1",
@@ -125,6 +125,17 @@ describe("batches", () => {
     expect(batches([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
     expect(batches([1, 2], 2)).toEqual([[1, 2]]);
     expect(batches([], 2)).toEqual([]);
+  });
+});
+
+describe("nextScanOffset", () => {
+  test("a scan with values left after it moves the next one past what it returned; the last page starts over", () => {
+    const page = Array.from({ length: 500 }, (_, i) => i);
+    expect(nextScanOffset(0, { items: page, left: 26 })).toBe(500);
+    expect(nextScanOffset(500, { items: page.slice(0, 26), left: 0 })).toBe(0);
+    expect(nextScanOffset(500, { items: page, left: 3 })).toBe(1000);
+    // a backend from before 2026-11-10 says nothing of what is left
+    expect(nextScanOffset(0, { items: page.slice(0, 200) })).toBe(0);
   });
 });
 

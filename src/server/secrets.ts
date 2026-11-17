@@ -110,6 +110,17 @@ export interface SecretsHubDeps {
 
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
 
+/** What a reader's scan asks for (`SecretsReader.proposals`): the texts a
+ *  value's key or file must hold, none for every value, and how many of the
+ *  values kept to skip, so a scan can page past the store's cap. */
+export function scanAsk(body: Record<string, unknown> | null): { match: string[]; offset: number } | { error: string } {
+  const match = body?.["match"] ?? [];
+  if (!Array.isArray(match) || match.length > 32 || !match.every((t) => typeof t === "string" && t !== "" && t.length <= 256)) return { error: "match is a list of up to 32 texts" };
+  const offset = body?.["offset"] ?? 0;
+  if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) return { error: "offset is a whole number, 0 or more" };
+  return { match: match as string[], offset };
+}
+
 export class SecretsHub {
   private timer: ReturnType<typeof setInterval> | null = null;
   private sent = "";
@@ -226,7 +237,9 @@ export class SecretsHub {
         await this.announce();
         return json(r.info(this.d.backend));
       case "/api/secrets/scan": {
-        const p = await r.proposals();
+        const ask = scanAsk(body);
+        if ("error" in ask) return json(ask, 400);
+        const p = await r.proposals(ask);
         return "error" in p ? json(p, 409) : json(p);
       }
       case "/api/secrets/take": {

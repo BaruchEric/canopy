@@ -23,7 +23,7 @@ export const SECRETS_USAGE = `usage: canopy secrets [list] [--json]
        canopy secrets unlock [--keep]
        canopy secrets forget
        canopy secrets key [--replace]
-       canopy secrets propose (--match TEXT... | --all) [--to NAME] [--dry-run] [--json]
+       canopy secrets propose (--match TEXT... | --all) [--offset N] [--to NAME] [--dry-run] [--json]
        canopy secrets pin <signing key> [--remote URL]
        canopy secrets recover <checkout> --breakglass FILE --out DIR
   list, status, unlock and propose speak to the home backend ($CANOPY_API, else 127.0.0.1:7850);
@@ -35,7 +35,8 @@ export const SECRETS_USAGE = `usage: canopy secrets [list] [--json]
   propose scans this machine's import sources and sends the values whose key or file holds TEXT
   (any case, any of several --match) to the store's writer, each sealed to the mini's key; they wait
   there for an approval on its gate page. --all sends every value found, --dry-run sends none,
-  --to names the writer among the backends the home one lists. It prints names, never a value
+  --to names the writer among the backends the home one lists. One scan holds at most ${LIMITS.pending} values;
+  --offset N skips the first N of those it keeps, to send the rest. It prints names, never a value
   pin keeps the mini's public signing key (and Forgejo's URL) in this machine's canopy config
   recover opens every value with the break-glass identity, puts a new mini key and signing key in DIR,
   reseals and signs secrets.json in the checkout, and prints the new public halves; it commits nothing
@@ -247,6 +248,9 @@ export interface ProposeArgs {
   /** the writer's name in the home backend's list */
   to: string | null;
   dry: boolean;
+  /** how many of the values the scan keeps to skip: a scan returns at most
+   *  as many as the store lets wait (LIMITS.pending), so this reaches the rest */
+  offset: number;
 }
 
 /** `propose`'s flags, or what is wrong with them */
@@ -268,9 +272,13 @@ export function parsePropose(flags: readonly string[]): ProposeArgs | string {
   const hasTo = args.includes("--to");
   const to = take(args, "--to") ?? null;
   if (hasTo && (!to || to.startsWith("--"))) return "--to needs a backend's name";
+  const hasOffset = args.includes("--offset");
+  const offsetText = take(args, "--offset");
+  const offset = hasOffset ? (offsetText !== undefined && /^\d+$/.test(offsetText) ? Number(offsetText) : NaN) : 0;
+  if (!Number.isSafeInteger(offset)) return "--offset needs a whole number, 0 or more";
   if (args.length > 0) return `not understood: ${args.join(" ")}`;
   if (all === (match.length > 0)) return "name what to send: --match TEXT (as often as needed), or --all for every value found";
-  return { match, all, to, dry };
+  return { match, all, to, dry, offset };
 }
 
 /** the scanned values a propose keeps: all of them, or those whose key or file holds one of the texts */
@@ -305,13 +313,15 @@ export interface ProposeDeps {
 export async function propose(o: ProposeArgs, asJson: boolean, d: ProposeDeps): Promise<number> {
   const mine = await d.home<SecretsInfo>("GET", "/api/secrets");
   if (mine.role === "writer") return d.fail(`${mine.backend} is the store's writer: it scans its own sources from the gate page, ${mine.gate}`);
-  const scan = await d.home<ScanAnswer>("POST", "/api/secrets/scan", {});
+  // the backend matches before its cap, so a value past the 500th can still be picked;
+  // pickProposals below filters again for a backend that ignores the texts
+  const scan = await d.home<ScanAnswer>("POST", "/api/secrets/scan", { match: o.all ? [] : o.match, offset: o.offset });
   const picked = pickProposals(scan.items, o);
   const names = picked.map((p) => ({ from: p.from, source: p.source, key: p.key, partial: p.partial === true }));
   const notes = [
     ...(scan.skipped ?? []).map(skippedWords),
     ...(scan.missing.length > 0 ? [`not on this machine: ${scan.missing.join(", ")}`] : []),
-    ...((scan.left ?? 0) > 0 ? [`${scan.left} more values did not fit in one scan; approve or reject what waits, then scan again`] : []),
+    ...((scan.left ?? 0) > 0 ? [`${scan.left} more values come after these: once these are approved or rejected, run this again with --offset ${o.offset + scan.items.length}`] : []),
   ];
   const say = (sent: { writer: string; added: number; dropped: number; inStep: number } | null): void => {
     if (asJson) return d.print(JSON.stringify({ found: scan.items.length, picked: names, sent, notes }, null, 2));

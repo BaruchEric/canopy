@@ -72,6 +72,14 @@ export function batches<T>(items: readonly T[], size: number): T[][] {
   return out;
 }
 
+/** Where the next scan of this machine's sources starts. A scan returns at
+ *  most as many values as the store lets wait, so while values are left
+ *  after it the next one starts past what it returned; after the last page
+ *  it starts over. */
+export function nextScanOffset(offset: number, found: { items: readonly unknown[]; left?: number }): number {
+  return (found.left ?? 0) > 0 ? offset + found.items.length : 0;
+}
+
 export type PickKind = "secrets" | "settings" | "none";
 
 /** secrets: what looks secret and can be approved without typing; settings:

@@ -505,22 +505,32 @@ export class SecretsService {
     return false;
   }
 
-  /** One proposal into the waiting list. "dropped" when this key cannot
-   *  open its value or the secret it would update is gone, "instep" when a
-   *  sink already holds this value for this key of this file. `known`
-   *  grows by an added value, so a later one can name it as the same. */
-  private async admit(pid: string, p: SecretProposalIn, expires: number, known: [string, string][]): Promise<"added" | "dropped" | "instep"> {
-    let value: string | null = null;
-    if (p.sealed) {
-      try {
-        value = await openProposal(p.sealed, this.d.store.identity(), p);
-      } catch {
-        return "dropped";
-      }
+  /** a proposal's value opened with this key: null for a names-only one, undefined when it does not open */
+  private async open(p: SecretProposalIn): Promise<string | null | undefined> {
+    if (!p.sealed) return null;
+    try {
+      return await openProposal(p.sealed, this.d.store.identity(), p);
+    } catch {
+      return undefined;
     }
+  }
+
+  /** "dropped" when this key cannot open the value (`value` undefined) or
+   *  the secret it would update is gone, "instep" when a sink already holds
+   *  this value for this key of this file, else null: it would wait */
+  private refusal(p: SecretProposalIn, value: string | null | undefined, known: readonly [string, string][]): "dropped" | "instep" | null {
+    if (value === undefined) return "dropped";
     if (p.merges && !this.d.store.file.secrets[p.merges]) return "dropped";
-    if (this.inStep(p, value, known)) return "instep";
-    const v = value;
+    return this.inStep(p, value, known) ? "instep" : null;
+  }
+
+  /** One proposal into the waiting list, its value opened already
+   *  (`open`). `known` grows by an added value, so a later one can name it
+   *  as the same. */
+  private admit(pid: string, p: SecretProposalIn, value: string | null | undefined, expires: number, known: [string, string][]): "added" | "dropped" | "instep" {
+    const no = this.refusal(p, value, known);
+    if (no !== null) return no;
+    const v = value ?? null;
     const same = v === null ? null : (known.find(([, k]) => sameValue(k, v))?.[0] ?? null);
     this.proposals.set(pid, { id: pid, p, expires, suggested: suggestName(p.source, p.key), same });
     this.dirty = true;
@@ -530,12 +540,19 @@ export class SecretsService {
 
   private async propose(items: SecretProposalIn[]): Promise<SecretsReply> {
     this.expire();
-    if (this.proposals.size + items.length > LIMITS.pending) return fail(`at most ${LIMITS.pending} proposals wait at once; approve or reject some first`);
     const known = await this.known();
+    const values: (string | null | undefined)[] = [];
+    for (const p of items) values.push(await this.open(p));
+    // the cap counts only what would make the list longer: a key not waiting
+    // already, whose value opens and that no sink keeps in step
+    const ref = (p: SecretProposalIn): string => JSON.stringify([p.from, p.source, p.key]);
+    const waiting = new Set([...this.proposals.values()].map((q) => ref(q.p)));
+    const fresh = new Set(items.filter((p, i) => !waiting.has(ref(p)) && this.refusal(p, values[i], known) === null).map(ref));
+    if (this.proposals.size + fresh.size > LIMITS.pending) return fail(`at most ${LIMITS.pending} proposals wait at once; approve or reject some first`);
     const count = { added: 0, dropped: 0, instep: 0 };
-    for (const p of items) {
+    for (const [i, p] of items.entries()) {
       for (const [pid, q] of this.proposals) if (q.p.from === p.from && q.p.source === p.source && q.p.key === p.key) this.drop(pid);
-      count[await this.admit(randomBytes(9).toString("base64url"), p, this.now() + LIMITS.proposalTtlMs, known)] += 1;
+      count[this.admit(randomBytes(9).toString("base64url"), p, values[i], this.now() + LIMITS.proposalTtlMs, known)] += 1;
     }
     return { ok: true, data: { added: count.added, dropped: count.dropped, inStep: count.instep } };
   }
@@ -563,7 +580,7 @@ export class SecretsService {
       if (e.expires < t) expired += 1;
       else if (this.proposals.size >= LIMITS.pending || this.proposals.has(e.id)) lost += 1;
       else {
-        const took = await this.admit(e.id, e.p, until, known);
+        const took = this.admit(e.id, e.p, await this.open(e.p), until, known);
         if (took === "dropped") lost += 1;
         else if (took === "instep") settled += 1;
         else if (until !== e.expires) moved = true;

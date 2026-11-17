@@ -54,7 +54,8 @@ function parseLine(raw: string): EnvLine | null {
   const t = raw.trim();
   if (t === "" || t.startsWith("#")) return { kind: "other", raw };
   const m = PAIR.exec(raw);
-  const value = m ? parseValue((m[3] ?? "").replace(/\r$/, "")) : null;
+  // a CRLF line never matches: PAIR's `.` takes no \r, so it is no pair (SETS)
+  const value = m ? parseValue(m[3] ?? "") : null;
   return m && value !== null ? { kind: "pair", key: m[2] ?? "", value, exported: !!m[1], raw } : null;
 }
 

@@ -150,7 +150,10 @@ describe("a reader", () => {
       lockNow: () => void calls.push("lock"),
       createKey: async () => ({ recipient: "age1x" }),
       pull: async () => void calls.push("pull"),
-      proposals: async () => ({ items: [], missing: [] }),
+      proposals: async (o?: unknown) => {
+        calls.push(`scan ${JSON.stringify(o)}`);
+        return { items: [], missing: [] };
+      },
       take: async () => ({ error: "no" }),
       start: async () => {},
     } as unknown as SecretsReader;
@@ -212,6 +215,18 @@ describe("a reader", () => {
     hub.stop();
     expect(lines).toContain("secrets: the reader's start failed: prune broke");
     expect(lines).toContain("secrets: the reader's pull failed: pull broke");
+  });
+
+  test("a scan hands its match and offset to the reader, and a malformed one is refused before it", async () => {
+    const { hub, calls } = reader();
+    const scan = (body: unknown) => new Request("http://127.0.0.1:7850/api/secrets/scan", { method: "POST", body: JSON.stringify(body) });
+    expect((await call(hub, scan({}))).status).toBe(200);
+    expect((await call(hub, scan({ match: ["openai", "GROQ"], offset: 500 }))).status).toBe(200);
+    for (const bad of [{ match: "openai" }, { match: [""] }, { match: [3] }, { offset: -1 }, { offset: 1.5 }, { offset: "500" }]) {
+      const r = await call(hub, scan(bad));
+      expect(r.status).toBe(400);
+    }
+    expect(calls).toEqual(['scan {"match":[],"offset":0}', 'scan {"match":["openai","GROQ"],"offset":500}']);
   });
 
   test("the writer's routes point at the gate page", async () => {

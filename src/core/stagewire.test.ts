@@ -102,6 +102,21 @@ describe("stage wire", () => {
     expect(refusesLogin("Failed to authenticate. API Error: 401")).toBe(true);
     expect(refusesLogin("API Error: Connection error.")).toBe(false);
   });
+  test("the login's dates are local days, not UTC ones", () => {
+    const was = process.env["TZ"];
+    process.env["TZ"] = "America/Los_Angeles";
+    try {
+      // 03:00 UTC on the 14th is still the evening of the 13th in Los Angeles
+      const at = Date.UTC(2026, 10, 14, 3);
+      expect(probeWord({ said: "ok", at })).toBe("Anthropic took it on 2026-11-13");
+      expect(probeRefusal({ said: "refused", at })).toContain("checked it on 2026-11-13");
+      expect(loginWord({ how: "login", until: at })).toBe("logged in until 2026-11-13");
+      expect(loginRefusal({ how: "expired", until: at })).toContain("expired on 2026-11-13");
+    } finally {
+      if (was === undefined) delete process.env["TZ"];
+      else process.env["TZ"] = was;
+    }
+  });
   test("claude's words for a login it could not use get the fix, and no other error does", () => {
     const fix =
       "Anthropic refused the stages' claude login: save a fresh token from claude setup-token as ~/.config/canopy-stages/claude/oauth-token.txt on the host, or log in again in the stages container (docs/deploy.md, Stages, step 7), then retry";

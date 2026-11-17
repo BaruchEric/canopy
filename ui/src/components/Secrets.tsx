@@ -5,7 +5,7 @@ import type { SecretAuditEntry, SecretMeta, SecretProposalInfo, SecretRestartRes
 import { api } from "../api";
 import { KEY_TONE, OWN_RESTART, carriedMachineKey, errorText, filterSecrets, gateHere, hostOf, isGateClosed, keysText, machineKeyLink, markOf, parseKeysText, passedOver, reachRows, sinkRows, stateTone, tagsOf, usedByText, writerOf, type CarriedKey, type ReachRow, type SinkRow, type WriteMark } from "../secrets";
 import { reachRefusal } from "../../../src/core/secretfile";
-import { batches, bulkAct, pick, sinkIdOf } from "../secretsbulk";
+import { batches, bulkAct, nextScanOffset, pick, sinkIdOf } from "../secretsbulk";
 import { newKeyProblem } from "../secretsform";
 import { useStore } from "../store";
 import { ago } from "../util";
@@ -849,6 +849,8 @@ function ImportTab({ info, home, writer, here, open }: { info: SecretsInfo; home
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  /** where this machine's next scan starts: a scan holds at most LIMITS.pending values */
+  const [offset, setOffset] = useState(0);
   const scanMini = async () => {
     const r = await act.run({ a: "import-scan" });
     const d = r?.data as Partial<ProposeCount> | null | undefined;
@@ -862,7 +864,7 @@ function ImportTab({ info, home, writer, here, open }: { info: SecretsInfo; home
     setBusy(true);
     setNote(null);
     try {
-      const found = await api.secretsScan(home);
+      const found = await api.secretsScan(home, offset);
       // the store takes a batch at a time; one request for a long credentials file would be refused whole
       const r = { added: 0, dropped: 0, inStep: 0 };
       for (const batch of batches(found.items, LIMITS.proposals)) {
@@ -871,8 +873,10 @@ function ImportTab({ info, home, writer, here, open }: { info: SecretsInfo; home
         r.dropped += one.dropped;
         r.inStep += one.inStep ?? 0;
       }
+      // only once the store took them all: a refused page is sent again by the next press
+      setOffset(nextScanOffset(offset, found));
       const away = found.missing.length > 0 ? `; not on this machine: ${found.missing.join(", ")}` : "";
-      const left = (found.left ?? 0) > 0 ? `; ${found.left} more did not fit, so approve or reject these and scan again` : "";
+      const left = (found.left ?? 0) > 0 ? `; ${found.left} more come after these, so approve or reject these, then scan the next values` : "";
       const unread = (found.skipped ?? []).map((s) => `; ${skippedWords(s)}`).join("");
       setNote(`${found.items.length} found and sent to the mini: ${proposedWords(r)}${away}${left}${unread}.${r.added > 0 ? " Approve them under import on the gate page." : ""}`);
     } catch (e) {
@@ -890,7 +894,7 @@ function ImportTab({ info, home, writer, here, open }: { info: SecretsInfo; home
           </button>
         ) : (
           <button type="button" className="mini strong" disabled={busy} onClick={() => void scanHere()}>
-            scan this machine's sources
+            {offset > 0 ? "scan the next values" : "scan this machine's sources"}
           </button>
         )}
         <span className="secrets-note">Values go to the mini sealed to its key. Nothing is stored until it is approved.</span>

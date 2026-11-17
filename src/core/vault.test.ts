@@ -94,6 +94,33 @@ describe("put", () => {
     expect(r.path).toBe("a-aaaaaaaaaaaa.md");
     expect(notes.get("a-aaaaaaaaaaaa.md")?.text).toBe(noteOf(MINE, "two"));
   });
+  test("its own note from before marks, known by every legacy line, is written over in place", async () => {
+    const legacy = ["source: canopy incubator", "seed: _incubator/a", "created: 2026-11-02"];
+    const old = `---\ntype: project\nstatus: parked\ncreated: 2026-11-02\nsource: canopy incubator\nseed: _incubator/a\n---\n# old\n`;
+    notes.set("a.md", { text: old, rev: 5 });
+    const r = await vault().put("a.md", noteOf(MINE, "new"), "4", { ...mine, legacy });
+    expect(r).toEqual({ rev: String(notes.get("a.md")?.rev), path: "a.md" });
+    expect(notes.get("a.md")?.text).toBe(noteOf(MINE, "new"));
+    expect(notes.has("a-aaaaaaaaaaaa.md")).toBe(false);
+  });
+  test("an unmarked note that differs on one legacy line, or carries another's mark, is not the owner's", async () => {
+    const legacy = ["source: canopy incubator", "seed: _incubator/a", "created: 2026-11-02"];
+    const otherDay = `---\ntype: project\ncreated: 2026-11-03\nsource: canopy incubator\nseed: _incubator/a\n---\n# theirs\n`;
+    notes.set("a.md", { text: otherDay, rev: 5 });
+    expect((await vault().put("a.md", noteOf(MINE, "mine"), undefined, { ...mine, legacy })).path).toBe("a-aaaaaaaaaaaa.md");
+    expect(notes.get("a.md")?.text).toBe(otherDay);
+    notes.clear();
+    const marked = `---\ntype: project\ncreated: 2026-11-02\nsource: canopy incubator\nseed: _incubator/a\nsprout: ${THEIRS}\n---\n# theirs\n`;
+    notes.set("a.md", { text: marked, rev: 5 });
+    expect((await vault().put("a.md", noteOf(MINE, "mine"), undefined, { ...mine, legacy })).path).toBe("a-aaaaaaaaaaaa.md");
+    expect(notes.get("a.md")?.text).toBe(marked);
+    notes.clear();
+    // the legacy lines in a note's body, not its frontmatter, say nothing
+    const body = `# by hand\n${legacy.join("\n")}\n`;
+    notes.set("a.md", { text: body, rev: 5 });
+    expect((await vault().put("a.md", noteOf(MINE, "mine"), undefined, { ...mine, legacy })).path).toBe("a-aaaaaaaaaaaa.md");
+    expect(notes.get("a.md")?.text).toBe(body);
+  });
   test("a note with no mark at all is not taken for the owner's", async () => {
     notes.set("a.md", { text: "# a note someone wrote by hand\nsprout: sp_aaaaaaaaaaaa\n", rev: 5 });
     const r = await vault().put("a.md", noteOf(MINE, "mine"), undefined, mine);

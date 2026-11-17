@@ -72,7 +72,7 @@ import {
   type ParsedQuestions,
 } from "./sprout";
 import { PARK_LINE_MAX, parkDetail, plainRunError } from "./runerror";
-import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, noteElsewhere, noteMark, notePathOf, sproutNote, sproutNotePath, takeDaily, type NoteEvent } from "./sproutnote";
+import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, noteElsewhere, noteLegacy, noteMark, notePathOf, sproutNote, sproutNotePath, takeDaily, type NoteEvent } from "./sproutnote";
 import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type FlowStep, type InputEntry, type InputKind, type InputVia, type PendingRework, type Repo, type RunAnswerRecord, type RunQuestion, type Sprout, type SproutDetail, type SproutFlow, type SproutPick, type Workflow } from "./types";
 import { findWorkflow, loadWorkflows } from "./workflows";
 import type { NoteOwner } from "./vault";
@@ -274,6 +274,9 @@ export class Incubator {
   /** each sprout's slow work (prepare, more input), one after another, so two
    *  never transcribe the same memo or write the index over each other */
   private readonly workChain = new Map<string, Promise<void>>();
+  /** for each sprout whose slow work waits on a seed commit (`seedCommit`),
+   *  what lets the chain go on without it, which a dismiss calls */
+  private readonly letGo = new Map<string, () => void>();
   /** how many pieces of slow work each sprout has waiting, so the queue
    *  never starts a stage on inputs that are still being read */
   private readonly busy = new Map<string, number>();
@@ -332,6 +335,25 @@ export class Incubator {
       });
     this.workChain.set(s.id, next);
     this.track(next);
+  }
+
+  /** Waits, in the sprout's slow work, for a commit in its seed. Such a
+   *  commit can wait up to SEED_QUIET_MAX for the stages to go quiet, and a
+   *  dismiss must not wait that long behind it: a dismiss lets go of the
+   *  wait, and one that starts after the dismiss is not waited for at all.
+   *  The commit itself goes on and lands in the seed, which a dismiss keeps,
+   *  so a dismiss that fails loses nothing. */
+  private async seedCommit(s: Sprout, commit: Promise<unknown>): Promise<void> {
+    this.track(commit);
+    if (this.gone(s)) return;
+    await new Promise<void>((resolve) => {
+      this.letGo.set(s.id, resolve);
+      commit.then(
+        () => resolve(),
+        () => resolve(),
+      );
+    });
+    this.letGo.delete(s.id);
   }
 
   /** resolves once the background work started so far has settled; tests */
@@ -558,10 +580,11 @@ export class Incubator {
     s.status = "queued";
     const saved = this.changed(s);
     // busy from here, before anything awaits, so no pump starts the next
-    // stage; the commit goes after the save, so a park it brings is saved last
+    // stage; the commit goes after the save, so a park it brings is saved last.
+    // A dismiss does not wait for it (seedCommit).
     this.serial(s, async () => {
       await saved;
-      await this.commit(s, `answers: ${s.title}`, "answers");
+      await this.seedCommit(s, this.commit(s, `answers: ${s.title}`, "answers"));
     });
     await saved;
     return s;
@@ -718,12 +741,9 @@ export class Incubator {
     await this.deps.store.writeIndex(s.id, index);
     if (s.prepared) {
       await this.deps.seeds.write(s.seedPath, ".canopy/inputs.md", index);
-      try {
-        await this.commitFiles(s, SEED_FILES, `inputs: ${s.title}`);
-      } catch (err) {
-        // a stage may be running, so this parks nothing: the next stage's own commit says it
-        this.log(`${s.slug}: could not commit the inputs index: ${msg(err)}`);
-      }
+      // a stage may be running, so a refusal parks nothing: the next stage's own commit says it
+      const committing = this.commitFiles(s, SEED_FILES, `inputs: ${s.title}`).catch((err: unknown) => this.log(`${s.slug}: could not commit the inputs index: ${msg(err)}`));
+      await this.seedCommit(s, committing);
     }
     await this.changed(s);
   }
@@ -884,8 +904,10 @@ export class Incubator {
     const retroFlow = s.retro?.flowId ? this.deps.flows.get(s.retro.flowId) : undefined;
     if (retroFlow) this.stopFlow(retroFlow);
     // off the list first, so no write starts; then the writes under way finish
-    // before the record moves, so none of them puts it back
+    // before the record moves, so none of them puts it back. A seed commit
+    // in the slow work is let go of, not waited for (seedCommit).
     this.sprouts.delete(id);
+    this.letGo.get(id)?.();
     await Promise.all([this.noteChain.get(id), this.workChain.get(id)]);
     try {
       await this.deps.store.dismiss(id);
@@ -1795,7 +1817,7 @@ export class Incubator {
         const retro = snap.retro?.state === "done" ? await this.deps.seeds.read(snap.seedPath, ".canopy/retro.md").catch(() => null) : null;
         // another backend's note on the same slug is left alone: the note
         // moves to the sprout's own path, and stays there
-        const put = await notes.put(notePathOf(s), sproutNote(snap, intent, retro), s.noteRev, { mark: noteMark(s), elsewhere: noteElsewhere(s) });
+        const put = await notes.put(notePathOf(s), sproutNote(snap, intent, retro), s.noteRev, { mark: noteMark(s), elsewhere: noteElsewhere(s), legacy: noteLegacy(s) });
         if (put.path !== notePathOf(s)) {
           s.noteMoved = snap.noteMoved = true;
           // the revision was the old path's

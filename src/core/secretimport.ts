@@ -40,10 +40,13 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object
 
 /** Every pair with a value, and the lines that are not pairs. A file with
  *  such lines is read for what it does hold (a notes file somebody keeps by
- *  hand has keys worth storing), and each value from it is marked partial. */
+ *  hand has keys worth storing), and each value from it is marked partial.
+ *  CRLF endings are read as LF here only: a sink still cannot read a CRLF
+ *  line (`SETS` in sinks.ts), so the values of such a file are partial too. */
 export function readDotenv(source: string, text: string): { found: Found[]; skipped: number[] } {
-  const { pairs, skipped } = looseDotenv(text);
-  const mark = skipped.length > 0 ? { partial: true as const } : {};
+  const lf = text.replace(/\r\n/g, "\n");
+  const { pairs, skipped } = looseDotenv(lf);
+  const mark = skipped.length > 0 || lf !== text ? { partial: true as const } : {};
   // the last line of a key wins, as compose reads it
   const last = new Map<string, string>();
   for (const p of pairs) last.set(p.key, p.value);

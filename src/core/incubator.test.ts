@@ -191,7 +191,7 @@ class FakeFlows implements IncubatorFlows {
 }
 
 class FakeNotes implements NoteSink {
-  puts: { path: string; text: string; rev: string | undefined }[] = [];
+  puts: { path: string; text: string; rev: string | undefined; owner: NoteOwner }[] = [];
   lines: { path: string; line: string }[] = [];
   fail = false;
   /** paths another project's note holds: a put there goes to its owner's other path */
@@ -200,7 +200,7 @@ class FakeNotes implements NoteSink {
   async put(path: string, text: string, rev: string | undefined, owner: NoteOwner): Promise<{ rev: string | undefined; path: string }> {
     if (this.fail) throw new Error("gateway down");
     const at = this.others.has(path) ? owner.elsewhere : path;
-    this.puts.push({ path: at, text, rev });
+    this.puts.push({ path: at, text, rev, owner });
     this.rev += 1;
     return { rev: String(this.rev), path: at };
   }
@@ -893,6 +893,15 @@ describe("the vault", () => {
     expect(w.notes.puts.at(-1)?.path).toBe(moved);
     expect(w.notes.puts.at(-1)?.rev).toBe(String(w.notes.puts.length - 1));
   });
+  test("a put names the lines of the sprout's note from before marks, so a 409 on that note writes over it in place", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "coin counter" }));
+    await w.inc.idle();
+    const put = w.notes.puts.at(-1);
+    expect(put?.owner.mark).toBe(`sprout: ${s.id}`);
+    expect(put?.owner.legacy).toEqual(["source: canopy incubator", `seed: ${s.repoId}`, expect.stringMatching(/^created: \d{4}-\d{2}-\d{2}$/)]);
+    for (const l of put?.owner.legacy ?? []) expect(put?.text).toContain(`\n${l}\n`);
+  });
   test("no gateway, no notes", async () => {
     const w = world({ notes: null });
     const s = await w.inc.create(intake({ text: "x" }));
@@ -1167,6 +1176,62 @@ describe("answers", () => {
     await w.inc.idle();
     expect(w.seeds.commits.at(-1)?.message).toBe("answers: coin counter");
     expect(now(w, s.id).status).toBe("researching");
+  });
+
+  test("a dismiss does not wait behind an answers commit the busy seeds hold, and the commit still lands", async () => {
+    const w = world();
+    w.workflows.set("scout", SCOUT);
+    const s = await asking(w);
+    let release: () => void = () => {};
+    const quiet = new Promise<void>((r) => {
+      release = r;
+    });
+    const commit = w.seeds.commit.bind(w.seeds);
+    w.seeds.commit = async (path, rels, message) => {
+      await quiet;
+      return commit(path, rels, message);
+    };
+    await w.inc.answer(s.id, { "Who counts?": "staff" });
+    await w.inc.stop(s.id);
+    const dismissed = w.inc.dismiss(s.id).then(() => "dismissed");
+    const hung = new Promise<string>((r) => setTimeout(() => r("still waiting"), 50));
+    expect(await Promise.race([dismissed, hung])).toBe("dismissed");
+    expect(w.store.dismissed).toEqual([s.id]);
+    // the seed stays, and the commit lands in it once the seeds are quiet, with no record put back
+    release();
+    await w.inc.idle();
+    expect(w.seeds.commits.at(-1)?.message).toBe("answers: coin counter");
+    expect(w.store.records.has(s.id)).toBe(false);
+  });
+
+  test("a dismiss that fails leaves the answers commit going, so it lands for the project that stays", async () => {
+    const w = world();
+    w.workflows.set("scout", SCOUT);
+    const s = await asking(w);
+    let release: () => void = () => {};
+    const quiet = new Promise<void>((r) => {
+      release = r;
+    });
+    const commit = w.seeds.commit.bind(w.seeds);
+    w.seeds.commit = async (path, rels, message) => {
+      await quiet;
+      return commit(path, rels, message);
+    };
+    await w.inc.answer(s.id, { "Who counts?": "staff" });
+    await w.inc.stop(s.id);
+    w.store.dismiss = async () => {
+      throw new Error("disk full");
+    };
+    const failed = w.inc.dismiss(s.id).then(
+      () => "dismissed",
+      (e: unknown) => String(e),
+    );
+    const hung = new Promise<string>((r) => setTimeout(() => r("still waiting"), 50));
+    expect(await Promise.race([failed, hung])).toContain("disk full");
+    expect(w.inc.get(s.id)?.status).toBe("stopped");
+    release();
+    await w.inc.idle();
+    expect(w.seeds.commits.at(-1)?.message).toBe("answers: coin counter");
   });
 
   test("going on assumptions says so and goes on", async () => {
@@ -1495,6 +1560,30 @@ describe("stop, resume and dismiss", () => {
     expect(w.store.dismissed).toEqual([s.id]);
     expect(w.gone).toEqual([s.id]);
     expect(w.forgot).toEqual([s.id]);
+  });
+
+  test("a dismiss does not wait behind an inputs commit the busy seeds hold either", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    let release: () => void = () => {};
+    const quiet = new Promise<void>((r) => {
+      release = r;
+    });
+    const commit = w.seeds.commit.bind(w.seeds);
+    w.seeds.commit = async (path, rels, message) => {
+      await quiet;
+      return commit(path, rels, message);
+    };
+    await w.inc.addInputs(s.id, intake({ text: "more" }));
+    await w.inc.stop(s.id);
+    const dismissed = w.inc.dismiss(s.id).then(() => "dismissed");
+    const hung = new Promise<string>((r) => setTimeout(() => r("still waiting"), 50));
+    expect(await Promise.race([dismissed, hung])).toBe("dismissed");
+    release();
+    await w.inc.idle();
+    expect(w.seeds.commits.at(-1)?.message).toBe("inputs: x");
+    expect(w.store.records.has(s.id)).toBe(false);
   });
 
   test("a vault write still under way never puts a dismissed record back", async () => {
