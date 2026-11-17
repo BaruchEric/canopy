@@ -178,9 +178,10 @@ export class KitHub {
     const mine = this.mine(kit);
     for (const name of this.views.keys()) if (!mine.some((m) => m.name === name)) this.views.delete(name);
     // a backend that is no machine and reaches none has no scan to publish,
-    // yet a run here can take a loadout, so the loadouts go out on their own
+    // yet a run here can take a loadout, so the loadouts go out on their own.
+    // A fresh value, so an error or machines from an earlier scan do not stay.
     if (mine.length === 0) {
-      this.last = { ...this.last, loadouts: this.loadoutsInfo };
+      this.last = { ok: true, error: null, machines: [], cells: [], loadouts: this.loadoutsInfo };
       this.deps.broadcast({ type: "kit", kit: this.last });
     }
     await Promise.all(mine.map((m) => this.scanOne(kit, m)));

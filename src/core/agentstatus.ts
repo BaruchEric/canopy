@@ -30,7 +30,7 @@ export const LIVE_STATUSES: readonly AgentStatus[] = ["waiting", "stalled", "wor
 export const STALL_MS = 10 * 60_000;
 /** how long one tool call may run before it reads as stalled. A shell
  *  command times out by ten minutes, so one open for this long never got its
- *  result; a subagent (`SUBAGENT_TOOLS`) may take longer and is never stalled. */
+ *  result; a subagent or a wait (`LONG_TOOLS`) may take longer and is never stalled. */
 export const TOOL_STALL_MS = 30 * 60_000;
 /** how long a tool call runs before the pulse names it */
 export const TOOL_SHOWN = 60_000;
@@ -38,8 +38,11 @@ export const TOOL_SHOWN = 60_000;
  *  still be this run's: the card's start is the broker's clock or the hook's */
 const START_SLACK = 2 * 60_000;
 
-/** the tools whose call is a subagent at work, which may run for long */
-const SUBAGENT_TOOLS = new Set(["Agent", "Task"]);
+/** the tools whose call may run for long by design: a subagent at work
+ *  (Claude Code's Agent and Task), or a wait (Codex's `clock.sleep`, up to
+ *  12 hours, and its `collaboration.wait_agent`; a rollout names them
+ *  without the namespace) */
+const LONG_TOOLS = new Set(["Agent", "Task", "sleep", "wait_agent"]);
 
 type CardState = Pick<AgentCard, "state" | "waiting">;
 
@@ -119,7 +122,7 @@ export function pulseOf(card: Pick<AgentCard, "id" | "state" | "startedAt">, a: 
   let stalledSince: number | null = null;
   if (card.state === "working") {
     if (!a.tool && now - a.writtenAt >= STALL_MS) stalledSince = a.writtenAt;
-    else if (call && !SUBAGENT_TOOLS.has(call.name) && now - call.at >= TOOL_STALL_MS) stalledSince = call.at;
+    else if (call && !LONG_TOOLS.has(call.name) && now - call.at >= TOOL_STALL_MS) stalledSince = call.at;
   }
   return {
     id: card.id,

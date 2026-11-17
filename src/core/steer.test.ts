@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { choiceOnScreen, codexAgentListOnScreen, STEER_MAX, steerWords } from "./steer";
-import { pasteArgs, sayBuffer, sayInto, sessionName, setBufferArgs } from "./tmux";
+import { loadBufferArgs, pasteArgs, sayBuffer, sayInto, sayTo, sessionName, typedAsEmpty } from "./tmux";
 
 const ID = "0123456789abcdef0123456789abcdef";
 
@@ -104,10 +104,25 @@ describe("the words a person sends", () => {
 describe("typing into a pane", () => {
   const base = ["tmux", "-S", "/s"];
 
-  test("the words go to a buffer of the shell's own, then one bracketed paste that drops it", () => {
-    expect(sayBuffer(ID)).toBe(`canopy-say-${ID}`);
-    expect(setBufferArgs(base, "b", "-n looks like a flag")).toEqual(["tmux", "-S", "/s", "set-buffer", "-b", "b", "--", "-n looks like a flag"]);
+  test("the words go to a buffer of the steer's own, read from stdin, then one bracketed paste that drops it", () => {
+    expect(sayBuffer(ID, "t1")).toBe(`canopy-say-${ID}-t1`);
+    expect(loadBufferArgs(base, "b")).toEqual(["tmux", "-S", "/s", "load-buffer", "-b", "b", "-"]);
     expect(pasteArgs(base, ID, "b")).toEqual(["tmux", "-S", "/s", "paste-buffer", "-p", "-d", "-b", "b", "-t", sessionName(ID)]);
+  });
+
+  test("once the words are typed, the box line that shows them reads as an empty box", () => {
+    const sent = ["❯ 1. read the config", "", "⏺ Done."];
+    const box = (l: string) => [...sent, "────", l, "────", "  ? for shortcuts"].join("\n");
+    // words that start "1. " in the box, and a sent prompt above it, are no choice
+    expect(choiceOnScreen(box("❯ 1. run the tests"))).toBe(true);
+    expect(choiceOnScreen(typedAsEmpty(box("❯ 1. run the tests"), "1. run the tests\n2. push"))).toBe(false);
+    expect(choiceOnScreen(typedAsEmpty(box("❯ [Pasted text #1 +40 lines]"), "1. a long one"))).toBe(false);
+    expect(choiceOnScreen(typedAsEmpty(["› [Pasted Content 9000 chars]", "  gpt-6.1 · ~/dev"].join("\n"), "1. x"))).toBe(false);
+    // a dialog in the box's place still counts
+    const dialog = [...sent, " Do you want to proceed?", " ❯ 1. Yes", "   2. No"].join("\n");
+    expect(choiceOnScreen(typedAsEmpty(dialog, "go on"))).toBe(true);
+    // a screen without the words is read as it is
+    expect(typedAsEmpty(dialog, "something else")).toBe(dialog);
   });
 
   const tmux = Bun.which("tmux");
@@ -120,7 +135,8 @@ describe("typing into a pane", () => {
     const dir = await mkdtemp(join(tmpdir(), "cs-"));
     dirs.push(dir);
     const real = [tmux ?? "tmux", "-S", join(dir, "s"), "-f", "/dev/null"];
-    const words = `it's "quoted" $HOME; -flag`;
+    // as argv, tmux took a trailing ';' for its separator and a '\;' lost its backslash
+    const words = `it's "quoted" $HOME \\; -flag;`;
     try {
       expect(Bun.spawnSync([...real, "new-session", "-d", "-s", sessionName(ID), "-x", "120", "-y", "20", "cat"]).exitCode).toBe(0);
       expect(await sayInto(real, ID, words)).toBe(true);
@@ -132,7 +148,90 @@ describe("typing into a pane", () => {
       // the terminal's echo of the line, then cat's copy of it once Enter sent it
       expect(screen.split("\n").filter((l) => l === words).length).toBe(2);
       // the paste took its buffer with it
-      expect(Bun.spawnSync([...real, "show-buffer", "-b", sayBuffer(ID)]).exitCode).not.toBe(0);
+      expect(Bun.spawnSync([...real, "list-buffers", "-F", "#{buffer_name}"]).stdout.toString()).not.toContain("canopy-say-");
+    } finally {
+      Bun.spawnSync([...real, "kill-server"]);
+    }
+  });
+
+  const screenOf = (real: string[]): string => Bun.spawnSync([...real, "capture-pane", "-p", "-t", sessionName(ID)]).stdout.toString();
+  async function waitScreen(real: string[], until: (s: string) => boolean): Promise<string> {
+    let screen = screenOf(real);
+    for (let i = 0; i < 75 && !until(screen); i++) {
+      await Bun.sleep(40);
+      screen = screenOf(real);
+    }
+    return screen;
+  }
+
+  /** a pane whose program reads raw bytes into a file once `pre` (sh) has run,
+   *  ready when it has said so */
+  async function rawPane(pre = "") {
+    const dir = await mkdtemp(join(tmpdir(), "cs-"));
+    dirs.push(dir);
+    const real = [tmux ?? "tmux", "-S", join(dir, "s"), "-f", "/dev/null"];
+    const out = join(dir, "out");
+    const prog = `stty raw -echo; printf ready; ${pre} exec cat > '${out}'`;
+    expect(Bun.spawnSync([...real, "new-session", "-d", "-s", sessionName(ID), "-x", "120", "-y", "20", "sh", "-c", prog]).exitCode).toBe(0);
+    await waitScreen(real, (s) => s.includes("ready"));
+    const read = async (until: (s: string) => boolean): Promise<string> => {
+      let got = "";
+      for (let i = 0; i < 75 && !until(got); i++) {
+        await Bun.sleep(40);
+        got = await Bun.file(out).text().catch(() => "");
+      }
+      return got;
+    };
+    return { real, read };
+  }
+
+  test.skipIf(!tmux)("words over tmux's 16 KB command limit go whole", async () => {
+    const { real, read } = await rawPane();
+    // 6,000 characters of three bytes each: 18 KB, under STEER_MAX
+    const words = "界".repeat(6_000);
+    try {
+      expect(await sayInto(real, ID, words)).toBe(true);
+      expect(await read((s) => s.endsWith("\r"))).toBe(`${words}\r`);
+    } finally {
+      Bun.spawnSync([...real, "kill-server"]);
+    }
+  });
+
+  test.skipIf(!tmux)("two steers at once into one shell go one after the other, each whole", async () => {
+    const { real, read } = await rawPane();
+    try {
+      const [a, b] = await Promise.all([sayInto(real, ID, "first words"), sayInto(real, ID, "second words")]);
+      expect([a, b]).toEqual([true, true]);
+      expect(await read((s) => s.split("\r").length > 2)).toBe("first words\rsecond words\r");
+    } finally {
+      Bun.spawnSync([...real, "kill-server"]);
+    }
+  });
+
+  test.skipIf(!tmux)("a choice that comes up while the words go in gets no Enter", async () => {
+    // the program draws a permission as soon as the paste's first byte reaches it
+    const { real, read } = await rawPane(`dd bs=1 count=1 >/dev/null 2>&1; printf '\\r\\n Do you want to proceed?\\r\\n > 1. Yes\\r\\n   2. No\\r\\n';`);
+    try {
+      expect(await sayTo(real, ID, "go on")).toBe("choice");
+      await Bun.sleep(200);
+      // the rest of the paste reached it, and no Enter after it
+      expect(await read((s) => s === "o on")).toBe("o on");
+    } finally {
+      Bun.spawnSync([...real, "kill-server"]);
+    }
+  });
+
+  test.skipIf(!tmux)("words that start like an option, typed after a prompt, still go", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cs-"));
+    dirs.push(dir);
+    const real = [tmux ?? "tmux", "-S", join(dir, "s"), "-f", "/dev/null"];
+    const words = "1. run the tests";
+    try {
+      expect(Bun.spawnSync([...real, "new-session", "-d", "-s", sessionName(ID), "-x", "120", "-y", "20", "sh", "-c", "printf '> '; exec cat"]).exitCode).toBe(0);
+      await waitScreen(real, (s) => s.startsWith(">"));
+      expect(await sayTo(real, ID, words)).toBe("sent");
+      const screen = await waitScreen(real, (s) => s.includes(`\n${words}`));
+      expect(screen.split("\n").slice(0, 2)).toEqual([`> ${words}`, words]);
     } finally {
       Bun.spawnSync([...real, "kill-server"]);
     }

@@ -541,6 +541,14 @@ function feedCodex(t: Tally, rec: Record<string, unknown>): void {
       case "task_complete":
         stamp(t, at);
         return;
+      // an interrupted turn writes no output for the calls it cut off (a
+      // forked subagent's thread opens with its parent's open spawn_agent
+      // and this abort), so they would read as running for good. Codex
+      // runs one turn at a time, so every open call was this turn's.
+      case "turn_aborted":
+        stamp(t, at);
+        t.calls.clear();
+        return;
       default:
         return;
     }

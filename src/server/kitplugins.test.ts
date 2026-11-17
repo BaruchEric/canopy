@@ -244,6 +244,23 @@ describe("the kit's plugins", () => {
     expect(readFileSync(file, "utf8")).toBe(CODEX_CONFIG);
   });
 
+  test("codex's switch changes only the value: the line's indent and its comment stay", async () => {
+    const { h, hub } = await setup();
+    const file = join(h, ".codex/config.toml");
+    const line = '[plugins."pdf@openai-bundled"]\nenabled = true';
+    const kept = CODEX_CONFIG.replace(line, '[plugins."pdf@openai-bundled"]\n  enabled =  true   # codex wrote this');
+    writeFileSync(file, kept);
+    expect((await hub.pluginOp({ machine: "mac", agent: "codex", op: "disable", id: "pdf@openai-bundled" })).outcome).toBe("ok");
+    expect(readFileSync(file, "utf8")).toBe(kept.replace("=  true   #", "=  false   #"));
+    expect((await hub.pluginOp({ machine: "mac", agent: "codex", op: "enable", id: "pdf@openai-bundled" })).outcome).toBe("ok");
+    expect(readFileSync(file, "utf8")).toBe(kept);
+    // no space before the comment
+    const tight = CODEX_CONFIG.replace(line, '[plugins."pdf@openai-bundled"]\n\tenabled=true#codex');
+    writeFileSync(file, tight);
+    expect((await hub.pluginOp({ machine: "mac", agent: "codex", op: "disable", id: "pdf@openai-bundled" })).outcome).toBe("ok");
+    expect(readFileSync(file, "utf8")).toBe(tight.replace("enabled=true#", "enabled=false#"));
+  });
+
   test("codex's switch is refused for the account's plugins and one not installed, and put back when codex does not follow it", async () => {
     const { h, hub } = await setup();
     const file = join(h, ".codex/config.toml");

@@ -149,6 +149,18 @@ describe("KitHub loadouts", () => {
     const sent = events.at(-1);
     expect(sent?.type === "kit" ? sent.kit.loadouts?.loadouts.map((l) => l.name) : null).toEqual(["docs"]);
   });
+  test("a backend that is no kit machine reads ok, with no error left from before it", async () => {
+    const { h, hub, events } = await setup("{ not json", { self: "elsewhere" });
+    expect((await hub.scan()).ok).toBe(false);
+    writeFileSync(join(h, ".claude/kit.json"), JSON.stringify(WITH_LOADOUTS));
+    const info = await hub.scan();
+    expect(info).toMatchObject({ ok: true, error: null, machines: [], cells: [] });
+    expect(info.loadouts?.loadouts.map((l) => l.name)).toEqual(["docs"]);
+    expect(events.at(-1)).toEqual({ type: "kit", kit: info });
+    // a first scan has no "not scanned yet" left in it either
+    const fresh = await setup(WITH_LOADOUTS, { self: "elsewhere" });
+    expect(await fresh.hub.scan()).toMatchObject({ ok: true, error: null });
+  });
   test("a kit.json that does not parse leaves no loadouts and says why", async () => {
     const { hub } = await setup("{ not json");
     await hub.scan();

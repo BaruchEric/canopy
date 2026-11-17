@@ -14,10 +14,12 @@
  * The argv builders, the list parser and `primeText` are pure and tested;
  * the rest is Bun-only.
  */
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { exec } from "./exec";
 import { parseLocator, shellQuote } from "./host";
+import { choiceOnScreen } from "./steer";
 import { configDir } from "./store";
 import { isTermId, shellArgs, spawnOnPty, termPlace, type TermHooks, type TermSession, type TermSize } from "./term";
 import type { ShellPlace } from "./types";
@@ -700,11 +702,17 @@ export async function sendKeys(base: string[], id: string, keys: string[], liter
 
 /* ---------- a person's words into a pane (core/steer.ts) ---------- */
 
-/** the buffer a steer passes through, one per shell so two never mix */
-export const sayBuffer = (id: string): string => `canopy-say-${id}`;
+/** the buffer one steer passes through: its own, so two steers never share
+ *  one, not even from two servers on one tmux (a redeploy's overlap) */
+export const sayBuffer = (id: string, tag: string): string => `canopy-say-${id}-${tag}`;
 
-/** the words into a named buffer; `--` so words that start with a dash are words */
-export const setBufferArgs = (base: string[], name: string, text: string): string[] => [...base, "set-buffer", "-b", name, "--", text];
+/** the words into a named buffer, read from stdin (`-`). As argv, tmux took
+ *  a trailing `;` for its command separator, dropped the backslash of a
+ *  `\;`, and refused a command over 16 KB. */
+export const loadBufferArgs = (base: string[], name: string): string[] => [...base, "load-buffer", "-b", name, "-"];
+
+/** a buffer a failed paste left behind */
+const deleteBufferArgs = (base: string[], name: string): string[] => [...base, "delete-buffer", "-b", name];
 
 /** the buffer into the pane as one paste, then gone (`-d`). `-p` brackets it
  *  when the program asked for bracketed paste, as Claude Code and Codex do,
@@ -715,14 +723,80 @@ export const pasteArgs = (base: string[], id: string, name: string): string[] =>
  *  has read the paste whole before the key comes */
 export const SAY_GAP_MS = 150;
 
+/** how much of the words' start is looked for in the input box: a narrow
+ *  pane wraps the rest onto the next line */
+const TYPED_START = 12;
+
+/**
+ * The screen as `choiceOnScreen` should read it once the words are typed:
+ * the line that shows them in the input box reads as an empty box. With
+ * text in it the box no longer anchors that check, so a sent prompt above
+ * it that starts "1. ", or words of the person's own that do, would read
+ * as a choice. A dialog drawn below the box, or in its place, still
+ * counts. Claude Code and Codex show a long paste as `[Pasted text #1 +3
+ * lines]` or `[Pasted Content 9000 chars]`. `screen` has no escapes.
+ */
+export function typedAsEmpty(screen: string, words: string): string {
+  const start = (words.split("\n").find((l) => l.trim()) ?? "").replace(/\s+/g, " ").trim().slice(0, TYPED_START);
+  const lines = screen.split("\n");
+  const at = lines.findLastIndex((l) => {
+    const rest = /^[\s│┃|]*[❯›>]\s+(\S.*)$/.exec(l)?.[1]?.replace(/\s+/g, " ");
+    return rest !== undefined && ((start !== "" && rest.startsWith(start)) || rest.startsWith("[Pasted "));
+  });
+  if (at < 0) return screen;
+  lines[at] = "❯";
+  return lines.join("\n");
+}
+
+/** what a steer into a pane came to: sent; failed, because tmux would not
+ *  take it (the shell is gone); or held back by a choice on the screen */
+export type SayResult = "sent" | "failed" | "choice";
+
+/** per shell, the last steer in line: one runs at a time, so two never
+ *  mix their pastes and Enters */
+const sayLines = new Map<string, Promise<unknown>>();
+
+/** whether the pane's screen shows a choice, read as `typedAsEmpty` says
+ *  once `words` are typed in; a screen tmux will not give shows none */
+async function choiceNow(base: string[], id: string, words: string | null): Promise<boolean> {
+  const r = await exec(textArgs(base, id, true), { timeoutMs: 10_000 });
+  if (r.code !== 0) return false;
+  return choiceOnScreen(words === null ? r.stdout : typedAsEmpty(r.stdout, words));
+}
+
+async function sayOnce(base: string[], id: string, text: string): Promise<SayResult> {
+  // a steer that waited behind another looks at the screen as it is now
+  if (await choiceNow(base, id, null)) return "choice";
+  const name = sayBuffer(id, randomUUID());
+  if ((await exec(loadBufferArgs(base, name), { input: text, timeoutMs: 10_000 })).code !== 0) return "failed";
+  if ((await exec(pasteArgs(base, id, name), { timeoutMs: 10_000 })).code !== 0) {
+    await exec(deleteBufferArgs(base, name), { timeoutMs: 10_000 });
+    return "failed";
+  }
+  await Bun.sleep(SAY_GAP_MS);
+  // a dialog that came up while the paste went in would take the Enter as
+  // its answer; the words stay typed in the box, unsent
+  if (await choiceNow(base, id, text)) return "choice";
+  return (await exec(keysArgs(base, id, ["Enter"]), { timeoutMs: 10_000 })).code === 0 ? "sent" : "failed";
+}
+
 /** Types a person's words into a pane and sends them: one paste, then
  *  Enter, as a person at the terminal would. An agent at work queues them
  *  and takes them at its next step (probe, Claude Code 2.1.323, 2026-11-12).
- *  False when tmux would not take them. */
+ *  Steers into one shell run one at a time, and each looks for a choice on
+ *  the screen before its paste and again before its Enter. */
+export function sayTo(base: string[], id: string, text: string): Promise<SayResult> {
+  const key = `${base.join("\0")}\0${id}`;
+  const run = (sayLines.get(key) ?? Promise.resolve()).then(() => sayOnce(base, id, text));
+  const tail = run.catch(() => {});
+  sayLines.set(key, tail);
+  void tail.then(() => {
+    if (sayLines.get(key) === tail) sayLines.delete(key);
+  });
+  return run;
+}
+
+/** `sayTo`, true only when the words were sent */
 export async function sayInto(base: string[], id: string, text: string): Promise<boolean> {
-  const name = sayBuffer(id);
-  if ((await exec(setBufferArgs(base, name, text), { timeoutMs: 10_000 })).code !== 0) return false;
-  if ((await exec(pasteArgs(base, id, name), { timeoutMs: 10_000 })).code !== 0) return false;
-  await Bun.sleep(SAY_GAP_MS);
-  return (await exec(keysArgs(base, id, ["Enter"]), { timeoutMs: 10_000 })).code === 0;
+  return (await sayTo(base, id, text)) === "sent";
 }

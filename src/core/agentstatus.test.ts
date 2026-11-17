@@ -110,6 +110,9 @@ describe("a pulse from a transcript's reading", () => {
     expect(pulseOf(working, read({ writtenAt: long, tool: { name: "Bash", at: long } }), now).stalledSince).toBe(long);
     // a subagent may take as long as it takes
     expect(pulseOf(working, read({ writtenAt: long, tool: { name: "Agent", at: long } }), now).stalledSince).toBeNull();
+    // so may Codex's waits: its clock's sleep and its wait on a subagent
+    expect(pulseOf(working, read({ writtenAt: long, tool: { name: "sleep", at: long } }), now).stalledSince).toBeNull();
+    expect(pulseOf(working, read({ writtenAt: long, tool: { name: "wait_agent", at: long } }), now).stalledSince).toBeNull();
     // an idle card never stalls
     expect(pulseOf(card, read({ writtenAt: long }), now).stalledSince).toBeNull();
   });

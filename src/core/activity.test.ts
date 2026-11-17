@@ -310,6 +310,17 @@ describe("a Codex rollout", () => {
     expect(activityOf(t, S2, 0, 0).background).toEqual([]);
   });
 
+  test("an aborted turn closes the calls it left open; a call after it stays open", () => {
+    // a forked subagent's thread opens with its parent's history: a spawn_agent with no output, then the abort
+    const aborted = [
+      item(1, { type: "function_call", name: "spawn_agent", namespace: "collaboration", arguments: "{}", call_id: "c1" }),
+      ev(2, { type: "turn_aborted", reason: "interrupted" }),
+    ];
+    expect(codex(aborted).tool).toBeNull();
+    const after = codex([...aborted, item(3, { type: "custom_tool_call", name: "exec", input: "x", call_id: "c2" })]);
+    expect(after.tool).toEqual({ name: "exec", at: ms(3) });
+  });
+
   test("its running token total stands, cached input apart", () => {
     const a = codex([
       ev(1, { type: "token_count", info: { total_token_usage: { input_tokens: 100, cached_input_tokens: 60, output_tokens: 5 } } }),

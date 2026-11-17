@@ -136,7 +136,8 @@ export const plain = (s: string): string => s.replace(/\u001b\[[0-9;?]*[A-Za-z]/
  *  config.toml does, as `enabled` in the plugin's own `[plugins."id"]`
  *  table, which codex writes when it installs a local plugin. Args: mode,
  *  then for set the id and true|false, for undo the checksum set printed.
- *  set rewrites that one line into a copy that keeps the file's mode,
+ *  set rewrites that one line's value, its indent and comment kept, into a
+ *  copy that keeps the file's mode,
  *  keeps the file as it was in config.toml.canopy-before, and swaps the
  *  copy in only when nothing else wrote the file meanwhile, then prints
  *  `S <cksum>`. keep drops the copy of before; undo puts it back, unless
@@ -168,7 +169,9 @@ BEGIN { hdr = "[plugins.\"" id "\"]"; inside = 0; found = 0; done = 0; was = "" 
   if (substr(s, 1, 1) == "[") { inside = (s == hdr); if (inside) found++ }
   else if (inside && !done && s ~ /^enabled[ \t]*=/) {
     was = s; sub(/^enabled[ \t]*=[ \t]*/, "", was); sub(/[ \t]*#.*$/, "", was)
-    print "enabled = " v; done = 1; next
+    match($0, /^[ \t]*enabled[ \t]*=[ \t]*/); pre = substr($0, 1, RLENGTH); rest = substr($0, RLENGTH + 1)
+    sub(/^[^ \t#]*/, "", rest)
+    print pre v rest; done = 1; next
   }
   print
 }
