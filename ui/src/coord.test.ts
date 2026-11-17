@@ -126,6 +126,9 @@ describe("a card's status", () => {
     // a card that settled ready whose PR closed unmerged
     expect(cardStatus(card({ state: "failed", outcome: "PR closed" }), undefined, none, [])).toEqual({ word: "PR closed", tone: "rust", line: "" });
   });
+  test("every outcome word the server gives is a chip, as the cards line says it", () => {
+    expect(cardStatus(card({ state: "failed", outcome: "waiting for capacity" }), undefined, none, [])).toEqual({ word: "waiting for capacity", tone: "rust", line: "" });
+  });
 });
 
 describe("the coordinator's run", () => {

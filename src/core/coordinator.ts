@@ -303,7 +303,8 @@ export function validatePlan(input: unknown, ctx: PlanContext): { tasks: Planned
  *  other state changes nothing. No edit turns a card into a project card or
  *  back, since the two carry different fields. `b` holds the fields to
  *  change (`null` clears `equip`, `workflow` and `after`), and `ctx.cards`
- *  every card of the coordinator, the edited one included. Errors name the
+ *  every card of the coordinator, the edited one included. A move to another
+ *  repo checks the card's workflow there, as a new card's is. Errors name the
  *  card by its id. */
 export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanContext): { task: CoordTask } | { error: string } {
   if (t.state !== "proposed" && t.state !== "queued") return { error: `${t.id} is ${t.state}; only a proposed or queued card changes` };
@@ -317,7 +318,8 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
   // so a loadout, workflow or repo gone since the card was made does not stop an edit of `after`
   const has = (k: string): boolean => b[k] !== undefined;
   const equipSet = has("equip");
-  const flowSet = has("workflow") || has("workflowRepo");
+  // a card that moves to another repo has its workflow checked there, as a new card's is
+  const flowSet = has("workflow") || has("workflowRepo") || (has("repo") && b["repo"] !== t.repo && t.workflow !== undefined);
   const afterSet = has("after");
   const filesSet = has("files");
   const treeSet = has("tree");
@@ -356,9 +358,10 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
   };
   const got = checkCard(merged, t.id, t.id, ids, check);
   if ("error" in got) return got;
-  // a new action or workflow is checked against the loadout the card keeps
-  if (!equipSet && (has("action") || flowSet)) {
-    const refused = harnessRefusal(t.id, t.equip?.loadout, got.action, flowSet ? got.workflow : t.workflow, ctx);
+  // the loadout, action and workflow the card ends up with, when the edit
+  // changes any of them: `merged` leaves out a stored workflow and loadout
+  if (equipSet || has("action") || flowSet) {
+    const refused = harnessRefusal(t.id, equipSet ? got.equip?.loadout : t.equip?.loadout, got.action, flowSet ? got.workflow : t.workflow, ctx);
     if (refused) return { error: refused };
   }
   const after = afterSet ? got.after : t.after;
@@ -414,7 +417,8 @@ export const groupNeedsEric = (c: Pick<CoordTask, "group" | "state" | "outcome">
  *  done in its kept tree). `blocked` says a card it waits for will not get
  *  there by itself: it failed, ended done without landing (no change), was
  *  dropped or was removed. A group card that needs Eric is not blocked,
- *  since he may still pick its winner and land it. `reopens` names that
+ *  since he may still pick its winner and land it, and is said only when
+ *  no other card it waits for blocks. `reopens` names that
  *  card when a new run may still reopen it (`mayReopen`): on its branch,
  *  or, for a tree card, in its tree, which `reopensTree` then names. */
 export function afterWait(task: CoordTask, cards: readonly CoordTask[]): { words: string; blocked: boolean; reopens?: string; reopensTree?: string } | null {
@@ -423,25 +427,31 @@ export function afterWait(task: CoordTask, cards: readonly CoordTask[]): { words
     return !c || !afterMet(c);
   });
   if (open.length === 0) return null;
+  // a group that needs Eric is said only when no other card blocks
+  let ericPicks: string | undefined;
   for (const id of open) {
     const c = cards.find((x) => x.id === id);
     if (!c) return { words: `waits for ${id}, which was removed`, blocked: true };
     const reopens = mayReopen(c) ? { reopens: id, ...(c.tree !== undefined ? { reopensTree: c.tree } : {}) } : {};
     // Eric picks a winner, or lands one, and the card is read again
-    if (c.state === "failed" && groupNeedsEric(c)) return { words: `waits for ${id}, whose group needs Eric`, blocked: false };
+    if (c.state === "failed" && groupNeedsEric(c)) {
+      ericPicks ??= id;
+      continue;
+    }
     if (c.state === "failed") return { words: `waits for ${id}, which failed`, blocked: true, ...reopens };
     if (c.state === "dropped") return { words: `waits for ${id}, which was dropped`, blocked: true };
     if (c.state === "done" && !(MAY_LAND_LATER as readonly string[]).includes(c.outcome ?? "")) {
       return { words: `waits for ${id}, which ended with ${c.outcome ?? "no change"}`, blocked: true, ...reopens };
     }
   }
+  if (ericPicks !== undefined) return { words: `waits for ${ericPicks}, whose group needs Eric`, blocked: false };
   return { words: `waits for ${andList(open)}`, blocked: false };
 }
 
 /** The queued cards to start now, in order, without passing 3 working. A
  *  card with `times` counts as that many children and needs that many branch
  *  slots. A project card takes no place among the 3 and no branch slot, so
- *  `repoFull` is never read for it and it may start while 3 work: the
+ *  `repoFull` is never read for it and it may start while 3 or more work: the
  *  incubator holds it to its own limit. A card that does not fit, whether its
  *  repo is short of slots or the 3 are short of room, waits for this pass,
  *  and a later card may go ahead of it. A card that waits for another card
@@ -466,7 +476,8 @@ export function nextToStart(
   for (const t of ordered) {
     // a project card works in the incubator, which holds it to its own limit
     const need = isProjectCard(t) ? 0 : (t.times ?? 1);
-    if (t.state !== "queued" || afterWait(t, ctx.cards) || going + need > COORD_AT_ONCE) continue;
+    // `going` may pass three (an adopted run counts), which holds no project card
+    if (t.state !== "queued" || afterWait(t, ctx.cards) || (need > 0 && going + need > COORD_AT_ONCE)) continue;
     if (!isProjectCard(t) && t.tree === undefined && ctx.repoFull(t.repo, need)) continue;
     out.push(t);
     going += need;
@@ -887,11 +898,15 @@ const OUTCOME_WORDS: Record<ChildOutcomeWord, true> = {
 };
 const OUTCOME_WORD_SET: ReadonlySet<string> = new Set(Object.keys(OUTCOME_WORDS));
 
+/** Whether a card's outcome is one of `childOutcome`'s words. Anything else
+ *  in `outcome` is a sentence: why it waits, or why it failed to start. */
+export const isOutcomeWord = (outcome: string | undefined): outcome is ChildOutcomeWord => outcome !== undefined && OUTCOME_WORD_SET.has(outcome);
+
 /** A card's state in a word for `cardsLine`: a settled card's outcome when
  *  it is one of `childOutcome`'s words, else its state. */
 function cardWord(t: CoordTask): string {
   if (t.state !== "done" && t.state !== "failed") return t.state;
-  return t.outcome !== undefined && OUTCOME_WORD_SET.has(t.outcome) ? t.outcome : t.state;
+  return isOutcomeWord(t.outcome) ? t.outcome : t.state;
 }
 
 /** Every card's state on one line, "cards now: t1 proposed, t2 ready", or

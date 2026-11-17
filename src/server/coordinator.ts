@@ -358,7 +358,8 @@ export class CoordinatorHub {
       return { ok: true, removed: first.t.id };
     }
     const files = await this.goalFiles(first.coord.id);
-    const workflows = await this.flowsFor([{ ...b, repo: b["repo"] ?? first.t.repo }], true);
+    // the stored workflow is read too, since a move to another repo checks it there
+    const workflows = await this.flowsFor([{ workflow: first.t.workflow, ...b, repo: b["repo"] ?? first.t.repo }], true);
     // the card may have moved while the workflows were read
     const { coord, tasks, t } = find();
     const got = editCard(t, b, { known: this.deps.known, cards: tasks, next: this.last(coord) + 1, loadouts: this.deps.loadouts(), workflows, by: this.by(caller), files, treeCard: this.deps.treeCard ?? (() => false), projects: this.deps.projects ?? (() => null) });
@@ -1058,8 +1059,10 @@ export class CoordinatorHub {
    *  rest. One the pass does not start (it waits on its `after`, its repo
    *  is full, the goal is held or has no room, or its start found no slot)
    *  answers 409 with the words it waits with, and is not let go later. A
-   *  limited tree card whose resume still finds its tree busy started
-   *  nothing, so it answers 409 with the tree's words. */
+   *  limited card whose resume started nothing (its tree busy, another
+   *  writer on its branch, a landing entry or an open PR, full slots)
+   *  answers 409 with those words, and one whose resume failed answers 409
+   *  with why. */
   async release(coordId: string, taskId: string): Promise<void> {
     const coord = this.deps.run(coordId);
     const task = coord?.tasks?.find((t) => t.id === taskId);
@@ -1083,8 +1086,12 @@ export class CoordinatorHub {
   /** The child that hit the limit carries on on its branch: a new run, the
    *  card following it, its count kept so a second limit fails the card.
    *  Null once the card carries on (resumed, or held again by the
-   *  governor); `busy` with the tree's words when a tree card's tree is
-   *  still busy, so nothing started; else why it does not. A limited child
+   *  governor); `busy` with the words when nothing started for any other
+   *  reason (a tree card's tree is busy, another writer is on the branch, a
+   *  landing entry or an open PR holds it, the slots are full); else why it
+   *  does not, a resume that threw and failed the card included. Only the
+   *  governor's and the tree's words go on the card, since `settle` keeps
+   *  only those; the limit's words stay for any other. A limited child
    *  the runner no longer has (the run memory went with a restart) fails
    *  the card with that why, since nothing would ever resume it and the
    *  chip would list it for good. */
@@ -1123,6 +1130,7 @@ export class CoordinatorHub {
       try {
         out = await this.deps.resumeChild(coordId, task, child, priority);
       } catch (err) {
+        answer.why = errText(err);
         this.update(coordId, taskId, (x) => withOutcome({ ...x, state: "failed" }, errText(err)));
         this.queueNote(coordId, startNote(task, errText(err)));
         return;
@@ -1131,8 +1139,12 @@ export class CoordinatorHub {
       }
       if ("busy" in out) {
         const busy = out.busy;
-        this.update(coordId, taskId, (x) => withOutcome(x, busy));
-        if (task.tree !== undefined && isTreeWait(busy)) answer.busy = busy;
+        const treeWait = task.tree !== undefined && isTreeWait(busy);
+        // only the words `settle` keeps go on the card: any others (another
+        // writer, a landing entry, an open PR, full slots) would be taken back
+        // by the next recheck, which says the limit again each time
+        if (isCapacityWords(busy) || treeWait) this.update(coordId, taskId, (x) => withOutcome(x, busy));
+        if (!isCapacityWords(busy)) answer.busy = busy;
         return;
       }
       const next = out.run;

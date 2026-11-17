@@ -478,6 +478,23 @@ describe("editCard", () => {
     const gone = held("t1", { state: "proposed", equip: { loadout: "gone" } });
     expect("task" in editCard(gone, { action: "propose" }, ctx(gone))).toBe(true);
   });
+  test("a codex loadout on a card that keeps its workflow is refused, proposed or queued", () => {
+    const flows = () => [{ name: "review", fromRepo: false }];
+    for (const state of ["proposed", "queued"] as const) {
+      const t = held("t1", { state, workflow: "review" });
+      expect(editCard(t, { equip: { loadout: "cx" } }, dest({ cards: cards(t), next: 3, workflows: flows }))).toEqual({ error: "t1.equip.loadout: cx runs codex; a card's flow needs Claude Code" });
+    }
+  });
+  test("moving a card with a workflow to another repo checks the workflow there, as adding it does", () => {
+    const flows = (repo: string) => (repo === "web" ? [{ name: "review", fromRepo: false }, { name: "ship", fromRepo: true }] : [{ name: "review", fromRepo: false }]);
+    const c = (t: CoordTask) => dest({ cards: cards(t), next: 3, workflows: flows });
+    const own = held("t1", { state: "proposed", workflow: "ship", workflowRepo: true });
+    expect(editCard(own, { repo: "api" }, c(own))).toEqual({ error: "t1.workflow: no workflow ship for api" });
+    const bundled = held("t1", { state: "proposed", workflow: "review" });
+    expect(editCard(bundled, { repo: "api" }, c(bundled))).toEqual({ task: { ...bundled, repo: "api" } });
+    // the repo it keeps is not checked again, so a workflow gone since does not stop a title edit
+    expect(editCard(own, { title: "new" }, dest({ cards: cards(own), next: 3 }))).toEqual({ task: { ...own, title: "new" } });
+  });
   test("errors name the card, and a loop through the card is refused", () => {
     const t = held("t1", { state: "proposed" });
     expect(editCard(t, { after: ["t1"] }, ctx(t))).toEqual({ error: "t1.after: a card cannot wait for itself" });
@@ -526,6 +543,11 @@ describe("afterWait", () => {
     // a run's card has no group to pick from
     expect(groupNeedsEric(held("t1", { state: "failed", outcome: "needs you" }))).toBe(false);
     expect(afterWait(t, [held("t1", { state: "failed", outcome: "needs you" })])).toEqual({ words: "waits for t1, which failed", blocked: true });
+  });
+  test("a later card that failed blocks even when an earlier group needs Eric", () => {
+    const t = held("t3", { after: ["t1", "t2"] });
+    const cards = [held("t1", { state: "failed", outcome: "needs you", group: "g-1" }), held("t2", { state: "failed" })];
+    expect(afterWait(t, cards)).toEqual({ words: "waits for t2, which failed", blocked: true });
   });
   test("may land later is the three words Eric can still land", () => {
     expect(MAY_LAND_LATER).toEqual(["ready", "PR opened", "winner picked"]);
@@ -1068,6 +1090,11 @@ describe("a project card", () => {
     expect(nextToStart(queued, { working: 0, repoFull, cards: queued, first: ["t3"] }).map((t) => t.id)).toEqual(["t3", "t1", "t2"]);
     expect(nextToStart(queued, { working: 2, repoFull, cards: queued, first: ["t3"] }).map((t) => t.id)).toEqual(["t3", "t1"]);
     expect(nextToStart(queued, { working: 2, repoFull, cards: queued, first: ["t2"] }).map((t) => t.id)).toEqual(["t2", "t3"]);
+  });
+
+  test("a queued project card starts while more than three work, as an adopted run can make it", () => {
+    const tasks = [card("t1", "web"), proj("t2")];
+    expect(nextToStart(tasks, { working: 4, repoFull: () => false, cards: tasks }).map((t) => t.id)).toEqual(["t2"]);
   });
 
   test("afterMet and afterWait", () => {

@@ -796,8 +796,8 @@ describe("capacity (FR-036 plan 2)", () => {
     expect((await hearAll(h)).filter((x) => x.includes("stays queued"))).toEqual([]);
   });
 
-  /** a child that hit the limit, then the runner forgot (a restart) */
-  async function limitedThenGone(h: CoordinatorHub): Promise<string> {
+  /** one card started, and its child hit the limit */
+  async function limitedCard(h: CoordinatorHub): Promise<Run> {
     await post(h, "plan", { run: "co1", tasks: [task()] });
     await post(h, "start", { run: "co1" });
     await settled(h);
@@ -809,6 +809,12 @@ describe("capacity (FR-036 plan 2)", () => {
     h.onRun(first);
     await settled(h);
     expect(h.heldStarts().map((x) => x.id)).toEqual(["card:co1:t1"]);
+    return first;
+  }
+
+  /** a child that hit the limit, then the runner forgot (a restart) */
+  async function limitedThenGone(h: CoordinatorHub): Promise<string> {
+    const first = await limitedCard(h);
     runs.delete(first.id);
     return first.id;
   }
@@ -831,6 +837,48 @@ describe("capacity (FR-036 plan 2)", () => {
     const id = await limitedThenGone(h);
     await expect(h.release("co1", "t1")).rejects.toThrow(`its run ${id} is gone`);
     expect(card("t1")?.state).toBe("failed");
+  });
+
+  test("a resume that throws fails the card, and start anyway answers with why, not OK", async () => {
+    clock = Date.UTC(2026, 9, 26, 12);
+    const GONE = "its branch is gone, so the card cannot carry on";
+    const h = hub({ resumeChild: async () => { throw new Error(GONE); } });
+    await limitedCard(h);
+    const refused = await h.release("co1", "t1").then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(refused instanceof CoordError ? [refused.status, refused.message] : refused).toEqual([409, `card t1 cannot resume: ${GONE}`]);
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: GONE });
+  });
+
+  test("a resume that finds another writer on the branch keeps the limit's words and says the limit once; start anyway answers 409 with why", async () => {
+    clock = Date.UTC(2026, 9, 26, 12);
+    coordinator({ status: "idle" });
+    const BUSY = "a run is working on this branch; say to it instead";
+    const tried: string[] = [];
+    const h = hub({
+      resumeChild: async (_c, _t, _old, priority) => {
+        tried.push(priority);
+        return { busy: BUSY };
+      },
+    });
+    await limitedCard(h);
+    h.wake(() => true);
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "running", limited: 0, outcome: "waiting for capacity (resets 15:00)" });
+    h.recheck();
+    await settled(h);
+    expect(card("t1")?.outcome).toBe("waiting for capacity (resets 15:00)");
+    expect((await hearAll(h)).filter((x) => x.includes("stopped at the plan's usage limit"))).toHaveLength(1);
+    expect(h.heldStarts().map((x) => x.id)).toEqual(["card:co1:t1"]);
+    const refused = await h.release("co1", "t1").then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(refused instanceof CoordError ? [refused.status, refused.message] : refused).toEqual([409, BUSY]);
+    expect(tried).toEqual(["normal", "interactive"]);
+    expect(card("t1")).toMatchObject({ state: "running", limited: 0, outcome: "waiting for capacity (resets 15:00)" });
   });
 });
 
@@ -1099,6 +1147,16 @@ describe("card fields on the plan and tasks routes", () => {
     expect(await post(h, "tasks", { run: "co1", id: "t1", after: ["t2"] })).toEqual({ status: 400, body: { error: "t1.after: t1 and t2 wait for each other" } });
     expect((await post(h, "tasks", { run: "co1", id: "t2", equip: null, workflow: null, after: null })).status).toBe(200);
     expect(card("t2")).toEqual({ id: "t2", title: "two", repo: "web", note: "the login form drops the email", action: "propose", state: "proposed" });
+  });
+
+  test("moving a card with a workflow to another repo reads that repo's workflows and checks the workflow there", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" }), task({ title: "two", workflow: "local", workflowRepo: true })] });
+    expect((await post(h, "tasks", { run: "co1", id: "t1", repo: "api" })).status).toBe(200);
+    expect(card("t1")).toMatchObject({ repo: "api", workflow: "review" });
+    expect(asked.at(-1)).toEqual({ repo: "api", withRepo: true });
+    expect(await post(h, "tasks", { run: "co1", id: "t2", repo: "api" })).toEqual({ status: 400, body: { error: "t2.workflow: no workflow local for api" } });
+    expect(card("t2")).toMatchObject({ repo: "web", workflow: "local", workflowRepo: true });
   });
 
   test("a queued card takes a new loadout and after, and nothing else, and may be removed", async () => {

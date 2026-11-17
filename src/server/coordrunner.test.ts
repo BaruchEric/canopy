@@ -1127,6 +1127,15 @@ describe("a card whose child hit the plan's usage limit", () => {
   const commit = (cwd: string, msg: string) => Bun.$`git -C ${cwd} add -A && git -C ${cwd} -c user.name=t -c user.email=t@t commit -q -m ${msg}`.quiet();
   /** "start anyway" on the card, which resumes its child as interactive */
   const release = (coord: string, task: CoordTask): Promise<Response> => postAs(s, "/api/capacity/release", { id: `card:${coord}:${task.id}` }, s.page);
+  /** "start anyway" whose resume started nothing: a 409 with why, and the
+   *  card still waits with the limit's words */
+  const refusedWaits = async (coord: string, task: CoordTask, id: string, why: string): Promise<void> => {
+    const res = await release(coord, task);
+    expect([res.status, ((await res.json()) as { error?: string }).error]).toEqual([409, why]);
+    const card = await cardOf(coord);
+    expect(card).toMatchObject({ state: "running", run: id, limited: 0 });
+    expect(card?.outcome).toStartWith("waiting for capacity");
+  };
   /** gh as opening a PR calls it: logged in, and a create answers PR 7 */
   const fakeGh = async (args: string[]): Promise<ExecResult> => {
     const [a, b] = args;
@@ -1201,7 +1210,7 @@ describe("a card whose child hit the plan's usage limit", () => {
     expect((await runs()).filter((r) => r.branch?.origin === origin && r.status === "working").map((r) => r.id)).toEqual([card.run ?? ""]);
   }, 30_000);
 
-  test("its resume never goes on a branch the landing queue sent back: the card waits, saying why", async () => {
+  test("its resume never goes on a branch the landing queue sent back: the card waits, and start anyway says why", async () => {
     const repo = join(scratch, "root", "app");
     // a red gate, so the queue sends the card's branch back
     await mkdir(join(repo, ".canopy"), { recursive: true });
@@ -1215,16 +1224,15 @@ describe("a card whose child hit the plan's usage limit", () => {
         return info.entries.some((e) => e.id === origin && e.state === "red");
       }, "the red gate");
       const drivers = s.made.length;
-      expect((await release(coord, task)).status).toBe(200);
+      await refusedWaits(coord, task, id, "it was sent back (red); fix it from the landing queue instead");
       expect(s.made.length).toBe(drivers);
-      expect(await cardOf(coord)).toMatchObject({ state: "running", run: id, limited: 0, outcome: "it was sent back (red); fix it from the landing queue instead" });
     } finally {
       await rm(join(repo, ".canopy", "gates.json"), { force: true });
       await commit(repo, "no gate");
     }
   }, 30_000);
 
-  test("its resume never goes beside the PR watch on its branch's open PR: the card waits, saying why", async () => {
+  test("its resume never goes beside the PR watch on its branch's open PR: the card waits, and start anyway says why", async () => {
     const repo = join(scratch, "root", "app");
     const bare = join(scratch, "limited-origin.git");
     await Bun.$`git init -q --bare ${bare} && git -C ${repo} remote add origin ${bare} && git -C ${repo} push -q origin main`.quiet();
@@ -1232,15 +1240,14 @@ describe("a card whose child hit the plan's usage limit", () => {
       const { coord, task, id, origin } = await limitedCard("pr.txt");
       expect((await postAs(s, "/api/prs/open", { run: origin }, s.page)).status).toBe(201);
       const drivers = s.made.length;
-      expect((await release(coord, task)).status).toBe(200);
+      await refusedWaits(coord, task, id, PR_HELD);
       expect(s.made.length).toBe(drivers);
-      expect(await cardOf(coord)).toMatchObject({ state: "running", run: id, limited: 0, outcome: PR_HELD });
     } finally {
       await Bun.$`git -C ${repo} remote remove origin`.quiet();
     }
   }, 30_000);
 
-  test("its resume waits while the repo's branch slots are full, rather than failing the card", async () => {
+  test("its resume waits while the repo's branch slots are full, rather than failing the card, and start anyway says why", async () => {
     const { coord, task, id } = await limitedCard("slots.txt");
     // three branch runs of Eric's own take every slot the repo has
     for (const note of ["one", "two", "three"]) {
@@ -1249,9 +1256,8 @@ describe("a card whose child hit the plan's usage limit", () => {
       live.push(((await res.json()) as Run).id);
     }
     const drivers = s.made.length;
-    expect((await release(coord, task)).status).toBe(200);
+    await refusedWaits(coord, task, id, "app has 3 branch runs going; wait for one to end");
     expect(s.made.length).toBe(drivers);
-    expect(await cardOf(coord)).toMatchObject({ state: "running", run: id, limited: 0, outcome: "app has 3 branch runs going; wait for one to end" });
   }, 30_000);
 });
 

@@ -4,7 +4,7 @@
 
 import type { RunGroup } from "../../src/core/group";
 import { isFlowActive, isRunActive, type CardEquip, type CoordTask, type Flow, type LandingInfo, type PrWatch, type Run, type RunStep } from "../../src/core/types";
-import { cardCarries, cardCounts, isProjectCard, isProjectWait } from "../../src/core/coordinator";
+import { cardCarries, cardCounts, isOutcomeWord, isProjectCard, isProjectWait } from "../../src/core/coordinator";
 import { flowWord } from "./flows";
 import { groupWord } from "./groups";
 import { SEP } from "../../src/core/backendid";
@@ -37,24 +37,6 @@ export function chainWords(run: Pick<Run, "parent">, parent?: Pick<Run, "parent"
   if (!parent?.parent) return first;
   return parent.depth ? `${first}, which run ${shortId(parent.parent)} started` : `${first}, which the coordinator started`;
 }
-
-/** The words a settled card's outcome uses (`childOutcome` on the server).
- *  Anything else in `outcome` is a sentence: why it waits or failed to start. */
-export const OUTCOME_WORDS: readonly string[] = Object.freeze([
-  "landed",
-  "ready",
-  "PR opened",
-  "PR closed",
-  "sent back",
-  "failed",
-  "stopped",
-  "uncommitted",
-  "plan turned down",
-  "no change",
-  "winner picked",
-  "needs you",
-  "dropped",
-]);
 
 export type CardTone = "moss" | "sky" | "rust" | "lichen" | "faint";
 
@@ -126,7 +108,8 @@ export function cardStatus(
   const line = child ? childLine(child) : "";
   const pr = child ? prOfRun(child, prs) : undefined;
   const withPr = pr ? { pr } : {};
-  const sentence = task.outcome !== undefined && !OUTCOME_WORDS.includes(task.outcome) ? task.outcome : undefined;
+  // an outcome that is not one of the server's words is a sentence
+  const sentence = task.outcome !== undefined && !isOutcomeWord(task.outcome) ? task.outcome : undefined;
   switch (task.state) {
     case "proposed":
       return { word: "proposed", tone: "lichen", line: "" };
