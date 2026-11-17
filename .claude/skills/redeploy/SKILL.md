@@ -11,6 +11,8 @@ One command, the same everywhere, run in the canopy checkout:
 bun run redeploy            # deploy (from the Mac: to the mini)
 bun run redeploy desoto     # from the Mac: deploy to the De Soto backend
 bun run redeploy all        # from the Mac: each backend in turn, the mini first
+bun run redeploy mac        # the Mac's own :7850 server: pull origin, build, restart if its code changed
+bun run redeploy mac status # what the Mac's checkout and server run
 bun run redeploy --restart  # deploy, and recreate canopy even if nothing changed
 bun run redeploy --force    # deploy even though canopy has runs, flows or landings going
 bun run redeploy status     # checkout, deployed commit, containers, port
@@ -23,6 +25,7 @@ Where it runs decides what it deploys:
 - **After a deploy from the Mac** it asks each backend it left alone what it runs (`GET /api/about`) and prints a line for one on another commit, such as `redeploy: desoto runs d1db8db, not e0ea870; bun run redeploy desoto`. Deploy it too unless the user said to leave it.
 - **In a canopy shell on a backend** (the `shells` container, which has no docker) it deploys the checkout that shell sees, which is the host's own `~/dev/dev-tools/canopy`. The script ssh's to the host with `~/.ssh/canopy_deploy`. That key's `authorized_keys` line runs `scripts/redeploy.sh --gate` and nothing else. Add `--pull` to take the Mac's `main` first: through the `mac` remote on the mini, from origin on De Soto.
 - **On the backend's host** it deploys directly.
+- **`mac`** updates the Mac's own launchd server, not a compose backend. From the mini (a canopy shell or the host) it dials the Mac with `~/.ssh/canopy_mac_update`, whose line on the Mac runs only `scripts/mac-update`; on the Mac it runs that script directly. The Mac pulls GitHub, so push first: it refuses unless origin's `main` is this checkout's HEAD. It restarts only when server code changed, and a restart locks the secrets key until Eric runs `canopy secrets unlock` on the Mac, so name that under Blocked by me. No key yet: `scripts/mac-update-setup.sh` on the mini's host prints the line to add on the Mac (docs/deploy.md, "The Mac's update key").
 
 The compose run is detached on the host and logged under `~/.cache/canopy-deploy/`. A dropped ssh or a closed tab does not stop it halfway, and a second deploy is refused while one runs.
 

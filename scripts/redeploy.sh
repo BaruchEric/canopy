@@ -11,6 +11,13 @@
 #   on the host       deploy directly
 #
 # Usage: redeploy.sh [mini | desoto | all] [--pull] [--shells] [--restart] [--force] [--expect SHA] | status | log
+#        redeploy.sh mac [status]
+#   mac       the Mac's own server, not a compose backend: from the mini (a
+#             canopy shell or the host) through the key scripts/mac-update-
+#             setup.sh made, on the Mac directly. It fast-forwards the Mac's
+#             checkout to origin's main, refused unless that is this HEAD,
+#             builds, and restarts the server only when its code changed
+#             (a restart locks the secrets key until it is unlocked there)
 #   mini, desoto, all  on the Mac only: which backend. After a deploy the
 #             Mac asks each backend it left alone what it runs, and names
 #             the ones on another commit
@@ -73,6 +80,33 @@ if [ "${1:-}" = "--gate" ]; then
     i=$((i + 1))
   done
   CANOPY_DEPLOY_HOST_SIDE=1 exec "$0" "${args[@]}"
+fi
+
+# ---------- the Mac's own server: update it with the key that only runs
+# scripts/mac-update there (scripts/mac-update-setup.sh on the mini). The Mac
+# pulls origin, so it gets this checkout's HEAD only once that is pushed.
+if [ "${1:-}" = mac ]; then
+  shift
+  case "${1:-}" in
+    status) req=status ;;
+    "") req="update $(git -C "$HERE" rev-parse HEAD)" ;;
+    *) die "mac takes status or nothing: $*" ;;
+  esac
+  [ $# -le 1 ] || die "mac takes status or nothing: $*"
+  if [ "$(uname)" = "Darwin" ]; then
+    # shellcheck disable=SC2086 # two plain words
+    exec sh "$HERE/scripts/mac-update" $req
+  fi
+  key="$HOME/.ssh/canopy_mac_update"
+  [ -f "$key" ] || die "no Mac update key at $key; run scripts/mac-update-setup.sh on the mini's host once"
+  # the file's lines: user@address, then the name the Mac's host key is
+  # known under (an address alone may not be in known_hosts)
+  at=$(sed -n 1p "${key}_host" 2>/dev/null || true)
+  alias=$(sed -n 2p "${key}_host" 2>/dev/null || true)
+  [ -n "$at" ] || die "no address in ${key}_host; run scripts/mac-update-setup.sh on the mini's host again"
+  exec ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 \
+    -o HostKeyAlias="${alias:-${at#*@}}" -o CheckHostIP=no -o StrictHostKeyChecking=yes \
+    "$at" "$req"
 fi
 
 # ---------- the Mac: hand over to a backend

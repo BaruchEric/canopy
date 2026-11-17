@@ -248,6 +248,18 @@ restrict,command="<checkout>/scripts/canopy-restart",from="192.168.48.0/20" ssh-
 
 Run the setup script before the first `docker compose up` that carries the mount, or `mkdir -m 700 ~/.config/canopy-restart` as eric first: a missing bind source is made by Docker as root, and the script, running as eric, then cannot write the key into it. The forced command answers two requests and nothing else: `list` and `restart <project>`, for projects whose config files all sit under `/opt/stacks`. It needs `jq` on the host. The compose file mounts the folder read-only at `/restart`, and `redeploy.sh` keeps it 0700. Without the key the service still runs; the page shows why it cannot list projects and offers the copy line only. To take the key away, delete its `authorized_keys` line and the folder. The same subnet caveat as `mini-host` applies to its `from=` and to the pinned `192.168.48.1`.
 
+### The Mac's update key
+
+The Mac's own server (the launchd agent `ca.beric.canopy-server` on :7850) runs from the Mac's checkout, so a deploy to the mini leaves it behind until someone on the Mac pulls, builds and restarts it. A third narrow key lets the mini do that. `scripts/mac-update-setup.sh`, run once on the mini's host (`ssh mini-host`, since canopy's containers mount `~/.ssh` read-only), makes `~/.ssh/canopy_mac_update` and `~/.ssh/canopy_mac_update_host` (the Mac's `user@address` and the name its host key is known under, both read from the `mac-peer` alias) and prints the one line to add on the Mac:
+
+```
+restrict,from="<the mini's tailnet IPv4>",command="<the Mac's checkout>/scripts/mac-update" ssh-ed25519 … canopy-mac-update@macmini-2018
+```
+
+Then `bun run redeploy mac` from a canopy shell or the mini's host asks the Mac to update to this checkout's HEAD, and `bun run redeploy mac status` asks what it runs. On the Mac itself `bun run redeploy mac` runs the same script with no ssh. `scripts/mac-update` answers `status` and `update [SHA]` and nothing else. An update fetches origin and fast-forwards the Mac's `main` to origin's, refusing when that is not the commit asked for (push first), when the checkout is on another branch, has uncommitted changes to tracked files, or holds commits origin lacks. It runs `bun install` when `package.json` or `bun.lock` moved and `bun run build` when the commit moved. It restarts the agent only when the code the server loads (`src/`, `bin/`, `lib/`, `spec/`, the package files, `scripts/mac-server.sh`; tests aside) differs between the commit the server runs and the new one, or when nothing answers on :7850, and then waits for `/api/about` to name the new commit. A page-only change is served without a restart, because the server reads `dist/web` on each request; its `/api/about` keeps naming the commit it started on. A restart locks the secrets key until `canopy secrets unlock` on the Mac, and the update's last line says so.
+
+What the key grants: anyone who can push to `main` on GitHub and use this key can have the Mac build and run that commit. A canopy shell on the mini can already do the same to the mini. `from=` limits the key to the mini's tailnet address. To take the key away, delete its `authorized_keys` line on the Mac; `authorized_keys.bak-canopy-mac-update` is the file from before.
+
 ## Previews (the in-app browser)
 
 A repo panel's **preview** section frames the repo's dev server. The dev

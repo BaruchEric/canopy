@@ -1,0 +1,140 @@
+#!/bin/sh
+# The forced command of the Mac's update key (scripts/mac-update-setup.sh on
+# the mini, docs/deploy.md "The Mac's update key"): the mini brings the Mac's
+# own canopy server up to origin's main with no shell on the Mac. The
+# request comes in SSH_ORIGINAL_COMMAND, or as arguments when run by hand,
+# and is never run as shell words:
+#
+#   status         the checkout's commit and the one the server on :7850 runs
+#   update [SHA]   fetch origin, fast-forward main to origin/main (refused
+#                  unless origin/main is SHA, when one is given), install when
+#                  the lockfile moved, build the page, and restart the launchd
+#                  server when the code it loads differs from the code it runs
+#
+# It never merges, never moves main backwards, and leaves alone a checkout
+# on another branch or with uncommitted changes to tracked files. A page-only
+# change is built and served without a restart. A restart locks the secrets
+# key until `canopy secrets unlock` on the Mac, and the output says so.
+set -eu
+set -f
+
+ROOT=${CANOPY_MAC_ROOT:-$(cd "$(dirname "$0")/.." && pwd -P)}
+PORT=${CANOPY_MAC_PORT:-7850}
+LABEL=${CANOPY_MAC_LABEL:-ca.beric.canopy-server}
+WAIT=${CANOPY_MAC_WAIT:-60}
+CACHE="$HOME/.cache"
+# a forced command starts with sshd's bare PATH, where bun is not
+PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH
+
+die() {
+  printf 'mac-update: %s\n' "$*" >&2
+  exit 2
+}
+
+if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+  # split on blanks with globbing off: the words are data, never shell
+  # shellcheck disable=SC2086
+  set -- $SSH_ORIGINAL_COMMAND
+fi
+[ $# -le 2 ] || die "refused: $*"
+cmd=${1:-}
+want=${2:-}
+
+short() { printf '%s' "$1" | cut -c1-7; }
+
+# the commit the server on the port says it runs, or nothing
+running() {
+  curl -fsS -m 4 "http://127.0.0.1:$PORT/api/about" 2>/dev/null |
+    sed -n 's/.*"commit":"\([0-9a-f]\{7,40\}\)".*/\1/p' || true
+}
+
+# the files a server process loads at start: its code, its dependencies and
+# the script launchd runs. The page (ui/) is read from dist/web per request.
+SERVER='^(src|bin|lib|spec)/|^(package\.json|bun\.lock|tsconfig\.json|scripts/mac-server\.sh)$'
+serverchanges() {
+  git diff --name-only "$1" "$2" -- 2>/dev/null | grep -E "$SERVER" | grep -vE '\.test\.ts$' || true
+}
+
+cd "$ROOT"
+
+case $cmd in
+status)
+  [ -z "$want" ] || die "refused: status $want"
+  printf 'checkout  %s\n' "$(git log -1 --format='%h %s' HEAD)"
+  runs=$(running)
+  if [ -n "$runs" ]; then printf 'running   %s\n' "$(short "$runs")"; else printf 'running   nothing answers on :%s\n' "$PORT"; fi
+  ;;
+
+update)
+  case $want in
+  *[!0-9a-f]*) die "update wants a commit hash, not $want" ;;
+  esac
+  if [ -n "$want" ] && { [ ${#want} -lt 7 ] || [ ${#want} -gt 40 ]; }; then die "update wants a commit hash of 7 to 40 characters"; fi
+
+  mkdir -p "$CACHE"
+  lock="$CACHE/canopy-mac-update.lock"
+  mkdir "$lock" 2>/dev/null || die "another update is running; if none is, remove $lock"
+  trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+
+  branch=$(git branch --show-current)
+  [ "$branch" = main ] || die "the checkout is on ${branch:-a detached HEAD}, not main"
+  git diff --quiet HEAD -- || die "the checkout has uncommitted changes to tracked files"
+  git fetch -q origin main || die "could not fetch main from origin"
+  new=$(git rev-parse origin/main)
+  case $new in
+  "$want"*) ;;
+  *) die "origin's main is $(short "$new"), not $want: push first" ;;
+  esac
+
+  old=$(git rev-parse HEAD)
+  if [ "$old" != "$new" ]; then
+    git merge-base --is-ancestor "$old" "$new" || die "main here has commits origin's main lacks; push them first"
+    git merge -q --ff-only "$new" || die "could not fast-forward main"
+    printf 'pulled    %s..%s\n' "$(short "$old")" "$(short "$new")"
+  else
+    printf 'checkout  already at %s\n' "$(short "$new")"
+  fi
+
+  if git diff --name-only "$old" "$new" -- | grep -qxE 'bun\.lock|package\.json'; then
+    bun install --frozen-lockfile >"$CACHE/canopy-mac-update.log" 2>&1 || {
+      tail -20 "$CACHE/canopy-mac-update.log" >&2
+      die "bun install failed"
+    }
+    echo "installed dependencies"
+  fi
+  if [ "$old" != "$new" ] || [ ! -f dist/web/index.html ]; then
+    bun run build >"$CACHE/canopy-mac-update.log" 2>&1 || {
+      tail -20 "$CACHE/canopy-mac-update.log" >&2
+      die "the build failed; the server still runs what it ran"
+    }
+    echo "built     the page"
+  fi
+
+  runs=$(running)
+  why=""
+  if [ -z "$runs" ]; then
+    why="nothing answered on :$PORT"
+  elif ! git cat-file -e "$runs^{commit}" 2>/dev/null; then
+    why="it ran $(short "$runs"), a commit this checkout lacks"
+  elif [ -n "$(serverchanges "$runs" "$new")" ]; then
+    why="its code changed since $(short "$runs")"
+  fi
+  if [ -z "$why" ]; then
+    printf 'server    no restart: it runs %s and nothing it loads changed since\n' "$(short "$runs")"
+    exit 0
+  fi
+
+  launchctl kickstart -k "gui/$(id -u)/$LABEL" || die "launchctl could not restart $LABEL"
+  i=0
+  while [ "$(running)" != "$new" ]; do
+    i=$((i + 1))
+    [ $i -le "$WAIT" ] || die "restarted ($why), but :$PORT did not answer with $(short "$new") within ${WAIT}s"
+    sleep 1
+  done
+  printf 'server    restarted on %s (%s)\n' "$(short "$new")" "$why"
+  echo "secrets   locked until canopy secrets unlock on the Mac"
+  ;;
+
+*) die "refused: ${cmd:-an empty request}; this key runs status or update [SHA]" ;;
+esac

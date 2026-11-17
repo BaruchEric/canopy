@@ -497,3 +497,65 @@ test("--pull stops when the host's main and the one it pulls from have both move
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// ---------- mac: the Mac's own server, through the key that only runs scripts/mac-update
+
+async function macTarget(args: string[], opts: { darwin?: boolean; key?: boolean } = {}) {
+  const dir = await mkdtemp(join(tmpdir(), "canopy-redeploy-mac-"));
+  try {
+    const calls = join(dir, "calls");
+    if (opts.key !== false) {
+      await Bun.write(join(dir, ".ssh", "canopy_mac_update"), "a key\n");
+      await Bun.write(join(dir, ".ssh", "canopy_mac_update_host"), "someone@100.64.0.9\nthe-macs-name\n");
+    }
+    const bin = await fakeBin(dir, {
+      uname: `echo ${opts.darwin ? "Darwin" : "Linux"}`,
+      git: `case "$*" in *"rev-parse HEAD"*) echo ${head} ;; esac`,
+      ssh: `printf 'ssh %s\\n' "$*" >>"$FAKE_CALLS"`,
+      sh: `printf 'sh %s\\n' "$*" >>"$FAKE_CALLS"`,
+    });
+    const child = Bun.spawn([macBash, script, ...args], {
+      stdout: "pipe", stderr: "pipe",
+      env: { PATH: `${bin}:${process.env["PATH"] ?? ""}`, HOME: dir, FAKE_CALLS: calls },
+    });
+    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    const lines = (await readFile(calls, "utf8").catch(() => "")).split("\n").filter(Boolean);
+    return { code, stderr, calls: lines.map((l) => l.replaceAll(dir, "~")) };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test("mac from the mini dials the Mac with its own key and asks for this HEAD", async () => {
+  const r = await macTarget(["mac"]);
+  expect(r.stderr).toBe("");
+  expect(r.code).toBe(0);
+  expect(r.calls).toEqual([
+    `ssh -i ~/.ssh/canopy_mac_update -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -o HostKeyAlias=the-macs-name -o CheckHostIP=no -o StrictHostKeyChecking=yes someone@100.64.0.9 update ${head}`,
+  ]);
+});
+
+test("mac status asks the Mac what it runs and pulls nothing", async () => {
+  const r = await macTarget(["mac", "status"]);
+  expect(r.code).toBe(0);
+  expect(r.calls).toHaveLength(1);
+  expect(r.calls[0]).toEndWith("someone@100.64.0.9 status");
+});
+
+test("mac takes no other words, and with no key it names the setup script", async () => {
+  for (const args of [["mac", "--force"], ["mac", "status", "now"]]) {
+    const r = await macTarget(args);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("mac takes status or nothing");
+    expect(r.calls).toEqual([]);
+  }
+  const r = await macTarget(["mac"], { key: false });
+  expect(r.code).toBe(1);
+  expect(r.stderr).toContain("scripts/mac-update-setup.sh");
+});
+
+test("mac on the Mac runs scripts/mac-update there, with no ssh", async () => {
+  const r = await macTarget(["mac"], { darwin: true, key: false });
+  expect(r.code).toBe(0);
+  expect(r.calls).toEqual([`sh ${join(import.meta.dir, "../../scripts/mac-update")} update ${head}`]);
+});
