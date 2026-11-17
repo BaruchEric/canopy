@@ -310,7 +310,8 @@ PR fix carries it. An adopted run is not held to `COORD_AT_ONCE`.
   - A running Claude worker gets the words as a steer through FR-066's
     `POST /api/runs/say`: a person's token reaches a job at work, and the
     run takes the words at its next step. There is no `runs/nudge`. A
-    running Codex worker is offered no box (Calls #8).
+    running Codex worker is offered no box (Calls #8). (2026-11-16: it
+    is now, through Codex's `turn/steer`, which FR-066 added.)
   - A settled worker gets a follow-up run on its branch with Eric's words,
     through `POST /api/landing/followup` (`startBranchFix`), which reopens
     the card.
@@ -604,6 +605,8 @@ words. Plan 2's four:
 7. Equip changes only before a card starts.
 8. Codex loadouts take model and effort only, and a running Codex worker
    cannot be told anything.
+   (2026-11-16: the second half no longer holds; a running Codex worker
+   takes a person's words through `turn/steer`, as FR-066 decided.)
 9. `times` above 1 works with a loadout and is refused with a workflow.
 10. "Pause all" in the mockup becomes "hold": no new card starts; running
     children go on.

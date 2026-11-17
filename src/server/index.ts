@@ -60,7 +60,7 @@ import { applyModes, FLOW_MODES_FILE } from "../core/flowmodes";
 import { workflowGraph, type ModesRead } from "../core/flowgraph";
 import { unattendedRefusal } from "../core/workflow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
-import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sayInto, sendKeys, sendLine, LINE_END, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
+import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sayTo, sendKeys, sendLine, LINE_END, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
 import { choiceOnScreen, codexAgentListOnScreen, steerWords } from "../core/steer";
 import { allows, isPerson } from "../core/callers";
 import { cardAsks } from "../core/agentstatus";
@@ -646,6 +646,8 @@ const NO_DESKTOP = "this canopy backend has no desktop; openers run on your own 
 /** what the open routes answer when the browser named no attached helper and
  *  is not on a Mac that runs canopy */
 const NO_HELPER = "no canopy helper is attached for this browser; run `canopy helper` on your machine and pick it in settings";
+/** a shell's screen shows a choice, which typed words and an Enter would answer */
+const CHOICE_WAITING = "its screen shows a choice waiting: answer that in its shell or the inbox, where an answer is a deliberate act";
 
 /** What the backend knows about a browser at `key`: its address, whether
  *  it is on this machine (`here`, see `onThisMachine`) with a desktop of its
@@ -5342,13 +5344,15 @@ async function handleApi(
     const waits = shellWaits(state, term);
     if (waits) return json({ error: waits }, 409);
     const screen = await paneScreen(tmux, term);
-    if (screen !== null && choiceOnScreen(screen)) {
-      return json({ error: "its screen shows a choice waiting: answer that in its shell or the inbox, where an answer is a deliberate act" }, 409);
-    }
+    if (screen !== null && choiceOnScreen(screen)) return json({ error: CHOICE_WAITING }, 409);
     if (screen !== null && codexAgentListOnScreen(screen)) {
       return json({ error: "Codex shows its agent list, where letters act on the selected task and Enter opens one: esc takes it back to its prompt" }, 409);
     }
-    if (!(await sayInto(tmux, term, said.words))) return json({ error: "tmux would not take the words" }, 502);
+    // sayTo looks again just before its Enter: a dialog that came up while
+    // the words went in gets no Enter, and says so as the check above does
+    const sent = await sayTo(tmux, term, said.words);
+    if (sent === "choice") return json({ error: CHOICE_WAITING }, 409);
+    if (sent !== "sent") return json({ error: "tmux would not take the words" }, 502);
     return json({ ok: true });
   }
   // Escape into a shell, which stops the turn an agent there is on

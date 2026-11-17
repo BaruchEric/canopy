@@ -1,6 +1,7 @@
 /** The words for a kept worktree (FR-051), shared by the CLI and the page:
  *  pure, so the browser may import it (core/branchtrees.ts needs Bun). */
 
+import { SEP } from "./backendid";
 import { isRunActive, type BranchTreeState, type Run } from "./types";
 
 /** Why a tree should not go without `force`: what it holds that would be
@@ -45,8 +46,11 @@ export function treeWords(t: { ahead: number; behind: number; files: number; por
  *  tasks, preview, shells. */
 export const TREES_SOURCE = "trees";
 
-/** a card that is a kept worktree, not a checkout of its own */
-export const isTreeCard = (r: { source?: string }): boolean => r.source === TREES_SOURCE;
+/** a card that is a kept worktree, not a checkout of its own. The page
+ *  holds a source under its backend's name (`mini|trees`), so either form
+ *  counts, as `isLaunchSource` reads the launch root. */
+export const isTreeCard = (r: { source?: string }): boolean =>
+  r.source === TREES_SOURCE || (r.source?.endsWith(`${SEP}${TREES_SOURCE}`) ?? false);
 
 /** git's own rules for a branch name (check-ref-format --branch), the ones
  *  worth refusing before git does: no spaces or control characters, none of

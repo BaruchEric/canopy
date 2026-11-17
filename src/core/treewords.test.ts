@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runsInTrees } from "./treewords";
+import { isTreeCard, runsInTrees } from "./treewords";
 import type { Run } from "./types";
 
 const run = (over: Partial<Run>): Run => ({
@@ -38,5 +38,16 @@ describe("runsInTrees", () => {
     expect(runsInTrees(dirs, [run({ id: "k1", action: "coordinate", verb: "coordinate" })], pathOf)).toEqual(new Map());
     // a run in place beside it still holds the tree
     expect(runsInTrees(dirs, [run({ id: "k1", action: "coordinate", verb: "coordinate" }), run({ id: "c1" })], pathOf)).toEqual(new Map([["/c/trees/web/feat-x", "run c1 (ask)"]]));
+  });
+});
+
+describe("isTreeCard", () => {
+  test("a tree's card reads as one under its backend's name too, as the page holds it", () => {
+    expect(isTreeCard({ source: "trees" })).toBe(true);
+    expect(isTreeCard({ source: "mini|trees" })).toBe(true);
+    expect(isTreeCard({ source: "home" })).toBe(false);
+    expect(isTreeCard({ source: "mini|home" })).toBe(false);
+    expect(isTreeCard({ source: "mytrees" })).toBe(false);
+    expect(isTreeCard({})).toBe(false);
   });
 });
