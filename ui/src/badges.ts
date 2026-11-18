@@ -68,26 +68,21 @@ export function healthBadge(health: Readonly<Record<string, readonly Pick<Health
 /** a sprout still on its way, approving included */
 const MOVING = new Set<SproutStatus>(["queued", "clarifying", "researching", "building", "testing", "accepting", "deploying", "approving"]);
 
-/** the incubator tab: sprouts still moving, rust while one waits for a yes */
-export function incubatorBadge(sprouts: readonly Pick<Sprout, "status">[]): Badge | null {
+/** the manager tab, which holds the goals and the incubator's projects:
+ *  what waits on you across the live coordinators' goals (each its
+ *  `managerRows` goal) and the projects waiting for your yes, rust as the
+ *  work tab's needs; with nothing waiting, the goals going and the
+ *  projects on their way, sky */
+export function managerBadge(goals: readonly { waiting: number }[], sprouts: readonly Pick<Sprout, "status">[] = []): Badge | null {
   const moving = sprouts.filter((s) => MOVING.has(s.status));
-  if (moving.length === 0) return null;
-  const approving = moving.filter((s) => s.status === "approving").length;
-  return {
-    text: String(moving.length),
-    tone: approving > 0 ? "rust" : "sky",
-    title: `${plural(moving.length, "sprout")} on the way${approving > 0 ? `, ${approving} waiting for your yes` : ""}`,
-  };
-}
-
-/** the manager tab: what waits on you across the live coordinators' goals
- *  (each its `managerRows` goal), rust as the work tab's needs; with
- *  nothing waiting, the goals going, sky */
-export function managerBadge(goals: readonly { waiting: number }[]): Badge | null {
-  if (goals.length === 0) return null;
-  const waiting = goals.reduce((n, g) => n + g.waiting, 0);
-  if (waiting === 0) return { text: String(goals.length), tone: "sky", title: `${plural(goals.length, "goal")} going; nothing waits on you` };
-  return { text: String(waiting), tone: "rust", title: `${plural(waiting, "thing")} ${waiting === 1 ? "waits" : "wait"} on you across ${plural(goals.length, "goal")}` };
+  if (goals.length === 0 && moving.length === 0) return null;
+  const across = [goals.length > 0 ? plural(goals.length, "goal") : "", moving.length > 0 ? plural(moving.length, "project") : ""].filter(Boolean).join(" and ");
+  const waiting = goals.reduce((n, g) => n + g.waiting, 0) + moving.filter((s) => s.status === "approving").length;
+  if (waiting === 0) {
+    const going = [goals.length > 0 ? `${plural(goals.length, "goal")} going` : "", moving.length > 0 ? `${plural(moving.length, "project")} on the way` : ""].filter(Boolean).join(" and ");
+    return { text: String(goals.length + moving.length), tone: "sky", title: `${going}; nothing waits on you` };
+  }
+  return { text: String(waiting), tone: "rust", title: `${plural(waiting, "thing")} ${waiting === 1 ? "waits" : "wait"} on you across ${across}` };
 }
 
 /** What a group of repos holds, in sum. */

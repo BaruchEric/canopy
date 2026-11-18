@@ -120,7 +120,8 @@ export interface VoiceTool {
   parameters: { type: "object"; properties: Record<string, unknown>; required?: string[] };
 }
 
-/** the views a spoken "open" may land on, as App.tsx names them */
+/** the views a spoken "open" may land on, as App.tsx names them; the
+ *  incubator is a word for the manager's overview, which holds its projects */
 export const VOICE_VIEWS = ["git", "agents", "manager", "incubator", "library", "ports", "triggers", "kit", "plugins", "health", "costs", "secrets"] as const;
 export type VoiceView = (typeof VOICE_VIEWS)[number];
 

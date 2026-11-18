@@ -22,9 +22,9 @@ if (!base || !shots) {
 }
 mkdirSync(shots, { recursive: true });
 
-const VIEWS = ["library", "ports", "sessions", "agents", "manager", "incubator", "health", "costs", "triggers", "clock", "work", "kit", "secrets"];
+const VIEWS = ["library", "ports", "sessions", "agents", "manager", "health", "costs", "triggers", "clock", "work", "kit", "secrets"];
 /** the chunks the page loads on demand, by the name vite gives each */
-const LAZY = ["Sessions", "Secrets", "Kit", "Costs", "Triggers", "Clock", "Library", "AgentsView", "ManagerView", "Incubator", "Work", "xterm"];
+const LAZY = ["Sessions", "Secrets", "Kit", "Costs", "Triggers", "Clock", "Library", "AgentsView", "ManagerView", "Work", "xterm"];
 
 const browser = await launch();
 const failures: string[] = [];
@@ -440,11 +440,27 @@ try {
       await page.waitForTimeout(1200);
     };
 
-    // with no goal named and one going, the view opens it and names it in the address
+    // with no goal named, one going and t5's project in the incubator, the
+    // overview stays and lists both; the goal's row opens the goal and names
+    // it in the address
     let at = "";
     {
       const page = await goalPage(1440);
       await page.goto(`${base}/?view=manager`, { waitUntil: "load" });
+      await page.waitForSelector(".mgr-pick .mgr-projects .sprout-card", { timeout: 20_000 }).catch(() => {});
+      await page.waitForTimeout(1200);
+      const overview = await page.evaluate(() => ({
+        search: location.search,
+        heading: document.querySelector(".mgr-pick h1")?.textContent?.trim() ?? "",
+        goals: document.querySelectorAll(".mgr-pick .mgr-goal-row").length,
+        projects: [...document.querySelectorAll(".mgr-projects .sprout-title")].map((t) => t.textContent?.trim() ?? ""),
+      }));
+      check(
+        !overview.search.includes("run=") && overview.heading === "Goals and projects" && overview.goals === 1 && (overview.projects[0] ?? "").startsWith("A shop for the copy"),
+        `at 1440px one goal going and a project keep the overview (${overview.search}): "${overview.heading}", ${overview.goals} goal row, projects: ${overview.projects.join(", ") || "none"}`,
+      );
+      await page.screenshot({ path: `${shots}/manager-1440-overview.png` });
+      await page.locator(".mgr-goal-row").first().click();
       await settle(page);
       at = await page.evaluate(() => location.search);
       const rows = await page.evaluate(() => ({
@@ -471,7 +487,7 @@ try {
         const buttons = [...(lane?.querySelectorAll("button") ?? [])].map((b) => b.textContent?.trim() ?? "");
         return { facts: lane?.querySelector(".mgr-lane-facts .mono")?.textContent?.trim() ?? "", word: lane?.querySelector(".mgr-word")?.textContent?.trim() ?? "", buttons };
       });
-      check(project.facts === "new project" && project.word === "needs you" && project.buttons.includes("open in incubator"), `at 1440px t5's lane reads "${project.facts}", shows "${project.word}" and has ${project.buttons.includes("open in incubator") ? "" : "no "}open in incubator`);
+      check(project.facts === "new project" && project.word === "needs you" && project.buttons.includes("open project"), `at 1440px t5's lane reads "${project.facts}", shows "${project.word}" and has ${project.buttons.includes("open project") ? "" : "no "}open project`);
       // the eight stages and a workflow's three steps share one row, none cut
       for (const [who, want] of [["t5", 8], ["t1", 3]] as const) {
         const strip = await stripOf(page, `#mgr-lane-${who}`);
@@ -487,14 +503,14 @@ try {
       // open tree left the view, so come back to it for the project card
       await page.goto(`${base}/${at}`, { waitUntil: "load" });
       await settle(page);
-      await page.locator("#mgr-lane-t5").getByRole("button", { name: "open in incubator" }).click();
+      await page.locator("#mgr-lane-t5").getByRole("button", { name: "open project" }).click();
       // the sprout's sheet says it is open; the check below names what it found if it never does
       await page
         .locator(".sheet-title", { hasText: "A shop for the copy" })
         .waitFor({ timeout: 10_000 })
         .catch(() => {});
       const opened = await page.evaluate(() => ({ search: location.search, sheet: document.querySelector(".sheet-title")?.textContent?.trim() ?? "", eyebrow: document.querySelector(".sheet-head .eyebrow")?.textContent?.trim() ?? "" }));
-      check(opened.search.includes("view=incubator") && opened.sheet.startsWith("A shop for the copy") && opened.eyebrow.startsWith("incubator"), `at 1440px open in incubator lands on ${opened.search} with the sprout's sheet open ("${opened.eyebrow}", "${opened.sheet}")`);
+      check(opened.search === at && opened.sheet.startsWith("A shop for the copy") && opened.eyebrow.startsWith("incubator"), `at 1440px open project opens the sprout's sheet over the goal (${opened.search}; "${opened.eyebrow}", "${opened.sheet}")`);
       await page.screenshot({ path: `${shots}/manager-1440-project-sheet.png` });
       await page.close();
     }
@@ -578,12 +594,12 @@ try {
         return {
           live: lane?.querySelector(".mgr-live")?.textContent?.trim() ?? "",
           word: lane?.querySelector(".mgr-lane-head .mgr-word")?.textContent?.trim() ?? "",
-          open: [...(lane?.querySelectorAll("button") ?? [])].some((b) => b.textContent?.trim() === "open in incubator" && b.getClientRects().length > 0),
+          open: [...(lane?.querySelectorAll("button") ?? [])].some((b) => b.textContent?.trim() === "open project" && b.getClientRects().length > 0),
         };
       });
       check(
         waits.live === "the project waits on your answers in the incubator" && waits.word === "needs you" && waits.open,
-        `at 390px t5's lane says "${waits.live}", reads "${waits.word}" and ${waits.open ? "shows" : "has no"} open in incubator`,
+        `at 390px t5's lane says "${waits.live}", reads "${waits.word}" and ${waits.open ? "shows" : "has no"} open project`,
       );
       await page.locator("#mgr-lane-t5").screenshot({ path: `${shots}/manager-390-project.png` });
       // the view's root is .mgr-view; there is no .mgr, so a selector on that would see no button at all
@@ -628,12 +644,16 @@ try {
       await page.close();
     }
 
-    // The new goal's box (FR-067). `?view=manager&new=1` shows it focused over
-    // the goals going, and the one goal going, which the plain address opens,
-    // stays shut. A scratch server runs no coordinator, so its about is
-    // answered here as one that does, which gives the box its backend, model
-    // and effort. Typing `@de` offers the repo demo, a pick writes it, and a
-    // small PNG attached shows as a chip. Start goal is never pressed.
+    // The new box (FR-067, and the incubator's intake since 2026-11-18).
+    // `?view=manager&new=1` shows it focused over the goals and projects
+    // going, on a goal in a browser that has started nothing yet. A scratch
+    // server runs no coordinator, so its about is answered here as one that
+    // does, which gives the box its backend, model and effort; its stages
+    // are answered as a runner's. Typing `@de` offers the repo demo, a pick
+    // writes it, and a small PNG attached shows as a chip. Start goal is
+    // never pressed. Then the project side: the words and the chip stay,
+    // links, a repo and a recorder show, and start project sends the form
+    // (answered here) and opens the new project's sheet.
     const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
     const composerPage = async (width: number): Promise<Page> => {
       const page = await goalPage(width);
@@ -644,12 +664,16 @@ try {
           await r.fulfill({ response: res, json: { ...(await res.json()), coordinator: true } });
         },
       );
+      await page.route(
+        (u) => u.pathname === "/api/incubator/stages",
+        (r) => r.fulfill({ json: { isolated: true, mode: "runner", waiting: null } }),
+      );
       return page;
     };
     for (const width of [1440, 390]) {
       const page = await composerPage(width);
       await page.goto(`${base}/?view=manager&new=1`, { waitUntil: "load" });
-      const box = page.locator(".mgr-new textarea");
+      const box = page.locator(".mgr-new .mgr-new-text");
       await box.waitFor({ timeout: 20_000 });
       await page.waitForTimeout(1200);
       const state = await page.evaluate(() => ({
@@ -661,7 +685,7 @@ try {
       }));
       check(
         state.focused && !state.search.includes("run=") && state.goals === 1 && state.on.startsWith("runs on ") && state.line.endsWith("coordinate route)"),
-        `at ${width}px ?view=manager&new=1 shows the new goal's box ${state.focused ? "focused" : "not focused"} over ${state.goals} goal going and stays there (${state.search}); "${state.on}", "${state.line}"`,
+        `at ${width}px ?view=manager&new=1 shows the new box ${state.focused ? "focused" : "not focused"} on a goal over ${state.goals} goal going and stays there (${state.search}); "${state.on}", "${state.line}"`,
       );
       await box.pressSequentially("Tidy the READMEs in @de");
       const rows = page.locator(".mgr-new .mention-menu .mention-name");
@@ -683,36 +707,116 @@ try {
         const view = document.querySelector<HTMLElement>(".mgr-view");
         return { page: document.documentElement.scrollWidth - document.documentElement.clientWidth, view: view ? view.scrollWidth - view.clientWidth : -1 };
       });
-      check(fit.page <= 0 && fit.view <= 0, `at ${width}px the page with the new goal's box has no side scroll${fit.page > 0 || fit.view > 0 ? ` (${Math.max(fit.page, fit.view)}px past the edge)` : ""}`);
+      check(fit.page <= 0 && fit.view <= 0, `at ${width}px the page with the new box on a goal has no side scroll${fit.page > 0 || fit.view > 0 ? ` (${Math.max(fit.page, fit.view)}px past the edge)` : ""}`);
       if (width <= 390) {
-        // the chip's remove, attach and start goal
+        // goal and project, the chip's remove, attach and start goal
         const buttons = await shortButtons(page, ".mgr-new");
-        check(buttons.seen >= 3 && buttons.short.length === 0, `at 390px every button in the new goal's box is a finger tall (${buttons.seen} of them)${buttons.short.length ? `: ${buttons.short.join(", ")}` : ""}`);
+        check(buttons.seen >= 5 && buttons.short.length === 0, `at 390px every button in the new box is a finger tall (${buttons.seen} of them)${buttons.short.length ? `: ${buttons.short.join(", ")}` : ""}`);
         const fields = await page.evaluate(() =>
           [...document.querySelectorAll<HTMLElement>(".mgr-new textarea, .mgr-new select")]
             .filter((el) => el.getClientRects().length > 0)
             .map((el) => ({ what: `${el.tagName.toLowerCase()} '${el.getAttribute("aria-label") ?? ""}'`, h: el.getBoundingClientRect().height })),
         );
         const low = fields.filter((f) => f.h < 43.5).map((f) => `${f.what} ${Math.round(f.h)}px`);
-        check(fields.length >= 3 && low.length === 0, `at 390px every field in the new goal's box is a finger tall (${fields.length} of them)${low.length ? `: ${low.join(", ")}` : ""}`);
+        check(fields.length >= 3 && low.length === 0, `at 390px every field in the new box on a goal is a finger tall (${fields.length} of them)${low.length ? `: ${low.join(", ")}` : ""}`);
         const small = await smallFields(page);
-        check(small.length === 0, `at 390px no field with the new goal's box is under 16px, where iOS zooms the page${small.length ? `: ${[...new Set(small)].join(", ")}` : ""}`);
+        check(small.length === 0, `at 390px no field with the new box is under 16px, where iOS zooms the page${small.length ? `: ${[...new Set(small)].join(", ")}` : ""}`);
       }
       await page.screenshot({ path: `${shots}/manager-new-${width}.png` });
+
+      // the project side keeps the words and the chip, and adds its own fields
+      await page.locator(".mgr-new-kind").getByRole("radio", { name: "project" }).click();
+      await page.waitForTimeout(400);
+      const side = await page.evaluate(() => ({
+        kept: document.querySelector<HTMLTextAreaElement>(".mgr-new .mgr-new-text")?.value ?? "",
+        holder: document.querySelector<HTMLTextAreaElement>(".mgr-new .mgr-new-text")?.placeholder ?? "",
+        chip: document.querySelector(".mgr-new-file")?.textContent ?? "",
+        links: document.querySelector('.mgr-new textarea[aria-label="Links"]') !== null,
+        repo: document.querySelector('.mgr-new input[aria-label="A git repo to start from"]') !== null,
+        record: [...document.querySelectorAll(".mgr-new-files button")].some((b) => /record|voice memo/.test(b.textContent ?? "")),
+        on: document.querySelector(".mgr-new-on")?.textContent?.trim() ?? "",
+        model: document.querySelector('.mgr-new select[aria-label="The coordinator\'s model"]') !== null,
+      }));
+      const startProject = page.locator(".mgr-new").getByRole("button", { name: "start project" });
+      const canStart = await startProject.isEnabled();
+      check(
+        side.kept === "Tidy the READMEs in @demo " && side.holder.startsWith("the idea") && side.chip.includes("shot.png") && side.links && side.repo && side.record && !side.model && side.on.includes("stages isolated") && canStart,
+        `at ${width}px the project side keeps the words ("${side.kept}") and the chip (${side.chip.includes("shot.png") ? "kept" : "lost"}), shows links ${side.links}, repo ${side.repo}, a recorder ${side.record}, no model ${!side.model}, "${side.on}", and start project ${canStart ? "on" : "off"}`,
+      );
+      const sideFit = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      check(sideFit <= 0, `at ${width}px the new box on a project has no side scroll${sideFit > 0 ? ` (${sideFit}px past the edge)` : ""}`);
+      if (width <= 390) {
+        const buttons = await shortButtons(page, ".mgr-new");
+        check(buttons.short.length === 0, `at 390px every button on the project side is a finger tall (${buttons.seen} of them)${buttons.short.length ? `: ${buttons.short.join(", ")}` : ""}`);
+        const fields = await page.evaluate(() =>
+          [...document.querySelectorAll<HTMLElement>(".mgr-new textarea, .mgr-new input:not([type=file]), .mgr-new select")]
+            .filter((el) => el.getClientRects().length > 0)
+            .map((el) => ({ what: `${el.tagName.toLowerCase()} '${el.getAttribute("aria-label") ?? ""}'`, h: el.getBoundingClientRect().height })),
+        );
+        const low = fields.filter((f) => f.h < 43.5).map((f) => `${f.what} ${Math.round(f.h)}px`);
+        check(fields.length >= 3 && low.length === 0, `at 390px every field on the project side is a finger tall (${fields.length} of them)${low.length ? `: ${low.join(", ")}` : ""}`);
+      }
+      await page.screenshot({ path: `${shots}/manager-new-${width}-project.png` });
+      if (width === 1440) {
+        // start project sends the incubator's form; answered here as a new sprout, whose sheet opens
+        let sent = "";
+        await page.route(
+          (u) => u.pathname === "/api/incubator",
+          async (r) => {
+            if (r.request().method() !== "POST") return r.continue();
+            sent = r.request().postData() ?? "";
+            await r.fulfill({ json: { ...sprout, id: "sp_0000000c0de1", title: "Tidy the READMEs", slug: "tidy-the-readmes", status: "queued", questions: undefined, updatedAt: Date.now() } });
+          },
+        );
+        await startProject.click();
+        const sheet = await page.locator(".sheet-title", { hasText: "Tidy the READMEs" }).waitFor({ timeout: 10_000 }).then(() => true, () => false);
+        const after = await page.evaluate(() => ({ text: document.querySelector<HTMLTextAreaElement>(".mgr-new .mgr-new-text")?.value ?? "", chips: document.querySelectorAll(".mgr-new-file").length }));
+        check(
+          sheet && sent.includes('name="text"') && sent.includes("Tidy the READMEs in @demo") && sent.includes('filename="shot.png"') && after.text === "" && after.chips === 0,
+          `at 1440px start project sends the words and the PNG (${sent.includes('filename="shot.png"') ? "with" : "without"} the file), opens the project's sheet (${sheet ? "open" : "not open"}) and empties the box ("${after.text}", ${after.chips} chips)`,
+        );
+        await page.screenshot({ path: `${shots}/manager-new-1440-started.png` });
+      }
       await page.close();
     }
     {
-      // the top bar's entry: from the board, its "new goal" opens the box focused
+      // the command line's new lands its words on the project side of the box
       const page = await composerPage(1440);
       await page.goto(`${base}/`, { waitUntil: "load" });
-      await page.locator(".topbar button.new-goal").click({ timeout: 20_000 });
-      const shown = await page.locator(".mgr-new textarea").waitFor({ timeout: 15_000 }).then(() => true, () => false);
+      await page.waitForSelector(".app", { timeout: 20_000 });
+      await page.waitForTimeout(800);
+      await page.keyboard.press(":");
+      const line = page.locator(".cli-field input").first();
+      const typed = await line.waitFor({ timeout: 10_000 }).then(() => true, () => false);
+      if (typed) {
+        await line.fill("new a coin counter --url https://coins.example");
+        await line.press("Enter");
+      }
+      const drafted = await page.locator(".mgr-new .mgr-new-text").waitFor({ timeout: 15_000 }).then(() => true, () => false);
+      await page.waitForTimeout(600);
+      const draft = await page.evaluate(() => ({
+        search: location.search,
+        text: document.querySelector<HTMLTextAreaElement>(".mgr-new .mgr-new-text")?.value ?? "",
+        links: document.querySelector<HTMLTextAreaElement>('.mgr-new textarea[aria-label="Links"]')?.value ?? "",
+      }));
+      check(
+        typed && drafted && draft.text === "a coin counter" && draft.links === "https://coins.example" && draft.search.includes("kind=project"),
+        `the command line's new opens the box on a project with its words ("${draft.text}", "${draft.links}", ${draft.search || "no query"})${typed ? "" : "; the command line never showed"}`,
+      );
+      await page.close();
+    }
+    {
+      // the top bar's entry: from the board, its "+ new" opens the box focused
+      const page = await composerPage(1440);
+      await page.goto(`${base}/`, { waitUntil: "load" });
+      await page.locator(".topbar button.new-btn").click({ timeout: 20_000 });
+      const shown = await page.locator(".mgr-new .mgr-new-text").waitFor({ timeout: 15_000 }).then(() => true, () => false);
       await page.waitForTimeout(800);
       const state = await page.evaluate(() => ({
         search: location.search,
         focused: document.activeElement instanceof HTMLTextAreaElement && document.activeElement.closest(".mgr-new") !== null,
       }));
-      check(shown && state.focused && state.search === "?view=manager&new=1", `the top bar's new goal opens the box ${state.focused ? "focused" : "not focused"} (${state.search})`);
+      check(shown && state.focused && state.search === "?view=manager&new=1", `the top bar's + new opens the box ${state.focused ? "focused" : "not focused"} (${state.search})`);
       await page.close();
     }
   }

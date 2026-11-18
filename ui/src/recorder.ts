@@ -3,7 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 /** why this page cannot record, or null when it can: the microphone needs a
  *  secure page and a browser with MediaRecorder */
 export const recorderBlocked = (): string | null => {
-  if (!window.isSecureContext) return "The microphone needs https or localhost";
+  // a render with no window (a test's) has no microphone either
+  if (typeof window === "undefined" || !window.isSecureContext) return "The microphone needs https or localhost";
   if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) return "This browser cannot record the microphone";
   return null;
 };

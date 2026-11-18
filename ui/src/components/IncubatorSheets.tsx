@@ -1,8 +1,8 @@
 /**
- * The incubator's + project button and its sheets: the + project sheet
- * that takes an idea in words, links, files, a voice memo or a repo, and
- * one project's sheet (intent, inputs, the chain of flows, what it spent,
- * and add input, stop, resume, dismiss). The cards are `Incubator.tsx`.
+ * One incubator project's sheet: intent, inputs, the chain of flows, what
+ * it spent, and add input, stop, resume, dismiss. A project starts from the
+ * manager's new box (`NewComposer.tsx`), which borrows the recorder here;
+ * the cards are `Incubator.tsx`.
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -12,11 +12,10 @@ import type { SproutDetail, SproutRetro } from "../../../src/core/types";
 import { api } from "../api";
 import { backendOf, plainOf } from "../registry";
 import { gateButtons } from "../flows";
-import { branchHref, cannotStart, END_PROJECT, INPUT_GLYPH, intakeLoss, parkDetailOf, parkWords, queuedWhy, sproutBackend, sproutWord, STAGES, stagesChoice, stageStrip, stagesUnread, workLine, type StageMark } from "../sprouts";
-import { isOnline, multi, useStore } from "../store";
+import { branchHref, END_PROJECT, INPUT_GLYPH, intakeLoss, parkDetailOf, parkWords, queuedWhy, sproutWord, STAGES, stageStrip, workLine, type StageMark } from "../sprouts";
+import { multi, useStore } from "../store";
 import { recorderBlocked, useRecorder } from "../recorder";
 import { Questions } from "./Prompts";
-import type { SproutDraft } from "../cli";
 import { PopGear } from "./PopGrip";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
@@ -25,17 +24,6 @@ const statusOf = (err: unknown): number | undefined =>
   typeof err === "object" && err !== null && "status" in err && typeof err.status === "number" ? err.status : undefined;
 
 const MARK_WORD: Record<StageMark, string> = { done: "done", now: "in progress", stuck: "stopped here", todo: "not yet" };
-
-export function NewProjectButton() {
-  const ready = useStore((s) => s.sproutsReady);
-  const open = useStore((s) => s.openNewSprout);
-  if (!ready) return null;
-  return (
-    <button type="button" className="mini new-project" title="A new project from an idea, a link, a file, a voice memo or a repo (n)" onClick={open}>
-      + project
-    </button>
-  );
-}
 
 export function StageStrip({ id }: { id: string }) {
   const marks = useStore(useShallow((s) => {
@@ -58,7 +46,7 @@ export function StageStrip({ id }: { id: string }) {
  *  page), else offers a file picker for audio, which on a phone opens its
  *  own recorder. `onRecording` says when a recording starts and ends, so the
  *  form can hold its submit until the memo is a file. */
-function Recorder({ onFiles, onRecording }: { onFiles: (files: File[]) => void; onRecording: (on: boolean) => void }) {
+export function Recorder({ onFiles, onRecording }: { onFiles: (files: File[]) => void; onRecording: (on: boolean) => void }) {
   const can = recorderBlocked() === null;
   const pick = useRef<HTMLInputElement>(null);
   const { recording, pending, err, start, stop } = useRecorder((file) => onFiles([file]), onRecording);
@@ -103,38 +91,26 @@ function Recorder({ onFiles, onRecording }: { onFiles: (files: File[]) => void; 
   );
 }
 
-/** The inputs a project starts from or takes later, as one form, with the
- *  sheet's body and footer. */
+/** The inputs a project takes once it has started, as one form, with the
+ *  sheet's body and footer. A project starts from the manager's new box. */
 function IntakeForm({
   lead,
-  tail,
-  allowRepo,
-  initial,
   busy,
   error,
-  blocked = null,
   submitLabel,
   onSubmit,
   onCancel,
 }: {
   lead?: ReactNode;
-  /** under the inputs, above any error */
-  tail?: ReactNode;
-  allowRepo: boolean;
-  /** what the form starts filled with */
-  initial?: SproutDraft;
   busy: boolean;
   error: string | null;
-  /** why this cannot be sent as it stands, shown and held to; null to go */
-  blocked?: string | null;
   submitLabel: string;
   /** `signal` is the send's: cancel, or the form going, calls it off */
   onSubmit: (form: FormData, signal: AbortSignal) => void;
   onCancel: () => void;
 }) {
-  const [text, setText] = useState(initial?.text ?? "");
-  const [links, setLinks] = useState(initial?.urls.join(" ") ?? "");
-  const [repo, setRepo] = useState(initial?.repo ?? "");
+  const [text, setText] = useState("");
+  const [links, setLinks] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [refused, setRefused] = useState<string | null>(null);
   const [over, setOver] = useState(false);
@@ -145,7 +121,7 @@ function IntakeForm({
   useEffect(() => () => sending.current?.abort(), []);
   // Escape or a click beside the sheet asks before it loses what is here
   const holdSheet = useStore((s) => s.holdSheet);
-  const loss = intakeLoss({ text, links, repo: allowRepo ? repo : "", files: files.length, recording, sending: busy });
+  const loss = intakeLoss({ text, links, repo: "", files: files.length, recording, sending: busy });
   useEffect(() => {
     if (loss === null) return;
     holdSheet(loss);
@@ -163,13 +139,12 @@ function IntakeForm({
     setRefused(bad.length ? bad.join("; ") : null);
   };
   const urls = links.split(/\s+/).filter(Boolean);
-  const ready = !busy && !recording && blocked === null && (text.trim().length > 0 || urls.length > 0 || files.length > 0 || (allowRepo && repo.trim().length > 0));
+  const ready = !busy && !recording && (text.trim().length > 0 || urls.length > 0 || files.length > 0);
   const submit = () => {
     if (!ready) return;
     const form = new FormData();
     if (text.trim()) form.append("text", text);
     for (const u of urls) form.append("url", u);
-    if (allowRepo && repo.trim()) form.append("repo", repo.trim());
     for (const f of files) form.append("file", f, f.name);
     form.append("via", "sheet");
     sending.current?.abort();
@@ -240,18 +215,6 @@ function IntakeForm({
         )}
         {refused && <p className="note err">{refused}</p>}
         <textarea className="plan-note intake-links" rows={2} placeholder="Links, one per line" value={links} onChange={(e) => setLinks(e.target.value)} aria-label="Links" />
-        {allowRepo && (
-          <input
-            className="intake-line"
-            type="url"
-            placeholder="A git repo to start from (optional)"
-            value={repo}
-            onChange={(e) => setRepo(e.target.value)}
-            aria-label="A git repo to start from"
-          />
-        )}
-        {tail}
-        {blocked && <p className="note err">{blocked}</p>}
         {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">
@@ -327,90 +290,6 @@ function SheetHead({ eyebrow, title, sub }: { eyebrow: string; title: string; su
         ✕
       </button>
     </header>
-  );
-}
-
-/** Which backend a new project starts on, when the page shows several: one
- *  word per online backend, each with where it runs stages. */
-function BackendPick({ value, onPick }: { value: string; onPick: (b: string) => void }) {
-  const online = useStore(useShallow((s) => s.backendOrder.filter((b) => isOnline(s, b))));
-  const stages = useStore((s) => s.stages);
-  const errs = useStore((s) => s.stagesErr);
-  const choices = online.map((b) => ({ b, ...stagesChoice(b, Object.hasOwn(stages, b) ? stages[b] : undefined, Object.hasOwn(errs, b) ? errs[b] : undefined) }));
-  return (
-    <div className="machines sprout-backends" role="radiogroup" aria-label="Runs on">
-      <span className="dim">runs on</span>
-      {choices.map(({ b, word, warn, title }) => (
-        <button
-          key={b}
-          type="button"
-          role="radio"
-          aria-checked={b === value}
-          className={`machine${b === value ? " on" : ""}`}
-          title={title ?? word}
-          onClick={() => onPick(b)}
-        >
-          <span className="machine-name">{b}</span>
-          <span className={warn ? "stages-word not" : "dim"}>{word}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-export function NewSproutSheet({ draft }: { draft?: SproutDraft }) {
-  const close = useStore((s) => s.closeSheet);
-  const create = useStore((s) => s.createSprout);
-  const show = useStore((s) => s.showSprout);
-  const many = useStore(multi);
-  // the default follows the backends' stages as they answer, until picked
-  const fallback = useStore((s) => sproutBackend(s.backendOrder, s.home, s.stages, (b) => isOnline(s, b)));
-  const [picked, setPicked] = useState<string | null>(null);
-  const backend = picked ?? fallback;
-  // a backend with stages off would hold the project queued for good
-  const blocked = useStore((s) => cannotStart(backend, Object.hasOwn(s.stages, backend) ? s.stages[backend] : undefined));
-  // a read of its stages that failed, said, while nothing else has said (FR-062)
-  const unread = useStore((s) =>
-    stagesUnread(backend, Object.hasOwn(s.stages, backend) ? s.stages[backend] : undefined, Object.hasOwn(s.stagesErr, backend) ? s.stagesErr[backend] : undefined),
-  );
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const submit = (form: FormData, signal: AbortSignal) => {
-    setBusy(true);
-    setError(null);
-    create(form, backend, signal).then(
-      // a cancel that came as the answer did keeps the page where the user left it
-      (s) => {
-        if (!signal.aborted) show(s.id);
-      },
-      (e: unknown) => {
-        if (signal.aborted) return;
-        setError(errText(e));
-        setBusy(false);
-      },
-    );
-  };
-  return (
-    <>
-      <SheetHead eyebrow="incubator" title="a new project" />
-      <IntakeForm
-        lead={<p className="blurb">Clarify reads everything given here and asks at most four questions; research then looks for something to renovate or extend before anything new is built.</p>}
-        tail={
-          <>
-            {many && <BackendPick value={backend} onPick={setPicked} />}
-            {unread && <p className="note">{unread}</p>}
-          </>
-        }
-        allowRepo
-        initial={draft}
-        busy={busy}
-        error={error}
-        blocked={blocked}
-        submitLabel="start"
-        onSubmit={submit}
-        onCancel={close}
-      />
-    </>
   );
 }
 
@@ -493,7 +372,6 @@ export function SproutSheet({ id }: { id: string }) {
         <SheetHead eyebrow="add to" title={sprout.title} />
         <IntakeForm
           lead={<p className="blurb">After clarify has looked, more input sends the project back to clarify before research.</p>}
-          allowRepo={false}
           busy={busy}
           error={error}
           submitLabel="add"

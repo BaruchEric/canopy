@@ -151,7 +151,7 @@ export type Command =
   | { kind: "help"; verb: string | null }
   | { kind: "clear" }
   /** `sprout` is `new`'s words, for the new project form to start from */
-  | { kind: "view"; view: "library" | "incubator" | "health" | "kit" | "plugins" | "secrets"; sprout: SproutDraft | null }
+  | { kind: "view"; view: "library" | "manager" | "health" | "kit" | "plugins" | "secrets"; sprout: SproutDraft | null }
   /** the sweep sheet: what went idle, to pick from and close */
   | { kind: "sweep" }
   /** keep awake on the home backend: where it stands, or a new mode */
@@ -341,8 +341,9 @@ export function parseCommand(input: string[]): Parsed {
       return { kind: "help", verb: args[0] ?? null };
     case "library":
       return { kind: "view", view: "library", sprout: null };
+    // the incubator's projects are in the manager's overview, beside the goals
     case "incubator":
-      return { kind: "view", view: "incubator", sprout: null };
+      return { kind: "view", view: "manager", sprout: null };
     case "health":
       return { kind: "view", view: "health", sprout: null };
     case "kit":
@@ -370,12 +371,12 @@ export function parseCommand(input: string[]): Parsed {
         }
         const v = args[++i];
         if (v === undefined) return { kind: "error", text: `${a} needs a value`, usage: usageOf("new") };
-        if (a === "--file") return { kind: "error", text: "a page cannot read a file by its path: drop the file on the new project form", usage: usageOf("new") };
-        if (a === "--backend") return { kind: "error", text: "pick the backend on the new project form", usage: usageOf("new") };
+        if (a === "--file") return { kind: "error", text: "a page cannot read a file by its path: drop the file on the new box", usage: usageOf("new") };
+        if (a === "--backend") return { kind: "error", text: "pick the backend on the new box", usage: usageOf("new") };
         if (a === "--url") urls.push(v);
         else repo = v;
       }
-      return { kind: "view", view: "incubator", sprout: { text: words.join(" ").trim(), urls, repo } };
+      return { kind: "view", view: "manager", sprout: { text: words.join(" ").trim(), urls, repo } };
     }
     case "ui":
       return { kind: "terminal", why: "this page is canopy ui already" };

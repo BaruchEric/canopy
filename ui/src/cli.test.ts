@@ -93,21 +93,22 @@ describe("parseCommand", () => {
     expect(parse("library doctor")).toEqual({ kind: "view", view: "library", sprout: null });
     expect(parse("health")).toEqual({ kind: "view", view: "health", sprout: null });
     expect(parse("kit")).toEqual({ kind: "view", view: "kit", sprout: null });
+    expect(parse("incubator")).toEqual({ kind: "view", view: "manager", sprout: null });
     expect(parse("plugins")).toEqual({ kind: "view", view: "plugins", sprout: null });
     expect(parse("secrets")).toEqual({ kind: "view", view: "secrets", sprout: null });
     expect(parse("sweep")).toEqual({ kind: "sweep" });
     expect(parse("sweep --yes --kind shell")).toEqual({ kind: "sweep" });
     expect(parse(`new "an idea" for laundry --url https://a.example --repo https://git.example/x`)).toEqual({
       kind: "view",
-      view: "incubator",
+      view: "manager",
       sprout: { text: "an idea for laundry", urls: ["https://a.example"], repo: "https://git.example/x" },
     });
-    expect(parse("new")).toEqual({ kind: "view", view: "incubator", sprout: { text: "", urls: [], repo: "" } });
+    expect(parse("new")).toEqual({ kind: "view", view: "manager", sprout: { text: "", urls: [], repo: "" } });
     expect(parse("new idea --file notes.md")).toMatchObject({ kind: "error", text: expect.stringContaining("drop the file") });
     expect(parse("new idea --url")).toMatchObject({ kind: "error", text: "--url needs a value" });
     // a mistyped flag is an error, as in the terminal, not words of the idea; -- ends the flags
     expect(parse("new idea --rep https://git.example/x")).toMatchObject({ kind: "error", text: expect.stringContaining("--rep") });
-    expect(parse("new -- an idea --with dashes")).toEqual({ kind: "view", view: "incubator", sprout: { text: "an idea --with dashes", urls: [], repo: "" } });
+    expect(parse("new -- an idea --with dashes")).toEqual({ kind: "view", view: "manager", sprout: { text: "an idea --with dashes", urls: [], repo: "" } });
     expect(parse("help spec")).toEqual({ kind: "help", verb: "spec" });
     expect(parse("--bogus")).toMatchObject({ kind: "error" });
   });

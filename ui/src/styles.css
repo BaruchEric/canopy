@@ -7377,13 +7377,14 @@ button.dl-gut.has {
   color: var(--ink-faint);
 }
 
-/* the new goal's box over the goals going (FR-067, GoalComposer.tsx): its
-   head names the backend the coordinator runs on; the box takes the words,
-   an @ menu of that backend's repos under it, and dropped or pasted files;
-   then the files' chips with attach, the model and effort with where their
-   defaults come from, and start goal at the right. A phone gives every
-   field and button a finger (the .mgr-view.phone rules above) and start
-   goal the full width. */
+/* the new box over the goals and projects going (NewComposer.tsx): its
+   head picks goal or project and names the backend that takes it; a line
+   says what that kind does; the box takes the words, a goal's @ menu of
+   that backend's repos under it, and dropped or pasted files; then the
+   files' chips with attach (and record, for a project), a project's links
+   and repo, a goal's model and effort with where their defaults come from,
+   and start at the right. A phone gives every field and button a finger
+   (the .mgr-view.phone rules above) and start the full width. */
 .mgr-new {
   display: flex;
   flex-direction: column;
@@ -7481,6 +7482,60 @@ button.dl-gut.has {
 }
 .mgr-view.phone .mgr-new .mention-row {
   padding-block: 12px;
+}
+.mgr-new-head > .mgr-new-kind {
+  margin-right: auto;
+}
+.mgr-new-kind button {
+  padding: 3px 12px;
+}
+.mgr-view.phone .mgr-new-kind button {
+  min-height: 44px;
+  padding-inline: 18px;
+}
+.mgr-new .mgr-new-blurb {
+  margin: 0;
+  font-size: var(--t-sm);
+}
+.mgr-new-project {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mgr-view.phone .mgr-new-repo {
+  min-height: 44px;
+}
+.mgr-new-foot {
+  gap: 8px;
+}
+
+/* the overview's two lists under the new box: the goals going, then the
+   incubator's projects, a card each, with where each backend runs stages
+   beside the heading */
+.mgr-pick > .mgr-h {
+  margin-top: 26px;
+}
+.mgr-pick .mgr-goals {
+  margin-top: 0;
+}
+.mgr-projects-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 26px 0 8px;
+}
+.mgr-projects-head > .mgr-h {
+  margin: 0;
+}
+.mgr-projects-head > .gear {
+  margin-left: auto;
+}
+.mgr-projects .stages-waiting {
+  padding: 0 0 6px;
+}
+.mgr-projects .sprout-grid {
+  padding: 0;
 }
 
 /* a repo's landing queue: the card's word, its panel section */
@@ -14064,13 +14119,6 @@ span.effective-flag:not(:first-child) {
 }
 
 /* ---------- incubator ---------- */
-.incubator-view {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: auto;
-}
 .stages-word {
   color: var(--ink-dim);
   font-size: var(--t-md);
@@ -14078,18 +14126,6 @@ span.effective-flag:not(:first-child) {
 }
 .stages-word.not {
   color: var(--rust);
-}
-/* + project's choice of backend, one word each with where it runs stages */
-.sprout-backends {
-  align-items: center;
-  margin: 8px 0;
-}
-.sprout-backends .stages-word {
-  font-size: var(--t-xs);
-}
-.sprout-backends .machine.on {
-  background: var(--wash);
-  box-shadow: inset 0 0 0 1px var(--hair);
 }
 .incubator-body {
   flex: none;
@@ -14099,15 +14135,6 @@ span.effective-flag:not(:first-child) {
   padding: 6px 16px 0;
   color: var(--rust);
   font-size: var(--t-md);
-}
-.incubator-empty {
-  margin: 48px auto;
-  max-width: 34rem;
-  padding: 0 16px;
-  color: var(--ink-dim);
-  display: grid;
-  gap: 12px;
-  justify-items: start;
 }
 .sprout-grid {
   display: grid;

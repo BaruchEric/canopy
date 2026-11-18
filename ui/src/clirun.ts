@@ -7,6 +7,7 @@
  */
 
 import { api } from "./api";
+import { openManager } from "./routes";
 import { backendOf, isHome } from "./registry";
 import { helperFor, takeWords, useStore } from "./store";
 import { CLI_PANEL, ENTRIES, findRepo, parseCommand, quoteWord, tokenize, underDir, type CliEntry, type Command } from "./cli";
@@ -305,9 +306,14 @@ async function runInner(cmd: Command): Promise<Outcome> {
       return ok([{ text: "canopy ", tone: "bold" }, { text: versionLine(about) }, { text: `  on ${about.hostname}`, tone: "dim" }]);
     }
     case "view": {
-      env.navigate(cmd.view);
-      if (cmd.sprout) st.draftSprout(cmd.sprout);
-      return went(cmd.sprout ? "the new project form is open" : `the ${cmd.view} is open`);
+      if (!cmd.sprout) {
+        env.navigate(cmd.view);
+        return went(`the ${cmd.view} is open`);
+      }
+      // the new box takes the words as it comes up on its project side
+      st.draftSprout(cmd.sprout);
+      openManager(null, { new: true, kind: "project" });
+      return went("the new box is open on a project");
     }
     case "sweep": {
       st.openSweep();

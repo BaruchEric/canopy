@@ -802,7 +802,7 @@ describe("a project card", () => {
     expect(lane?.sprout).toBe(SP);
     expect(lane?.runId).toBeNull();
     expect(lane?.repo).toBe("new project");
-    expect(lane?.say).toEqual({ kind: "none", why: "its project is in the incubator; answer it there" });
+    expect(lane?.say).toEqual({ kind: "none", why: "its project is in the incubator; open project answers it" });
     expect(lane?.canStop).toBe(false);
   });
 
@@ -913,6 +913,7 @@ describe("end goal's second press", () => {
 describe("the address on a change of view", () => {
   test("the top view's goal and new goal box go with it, and so does project", () => {
     expect(viewAddress("https://c.test/?view=manager&new=1", "git", false)).toBe("https://c.test/");
+    expect(viewAddress("https://c.test/?view=manager&new=1&kind=project&sprout=sp_0123456789ab", "agents", false)).toBe("https://c.test/?view=agents");
     expect(viewAddress("https://c.test/?view=manager&run=k", "agents", false)).toBe("https://c.test/?view=agents");
     expect(viewAddress("https://c.test/?view=library&project=x", "manager", false)).toBe("https://c.test/?view=manager");
   });

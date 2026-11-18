@@ -24,7 +24,7 @@ import { SearchSheet } from "./Search";
 import { KeysSheet } from "./Keys";
 import { WorkSheet } from "./WorkSheet";
 import { WorkBlock } from "./WorkBlock";
-import { NewSproutSheet, SproutSheet } from "./IncubatorSheets";
+import { SproutSheet } from "./IncubatorSheets";
 import { RunPromptForm } from "./Prompts";
 import { DictateButton } from "./Dictate";
 import { useMentions } from "./Mentions";
@@ -192,7 +192,6 @@ function Body({ sheet }: { sheet: Sheet }) {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <FlowPlan key={`${repo.id}\n${sheet.workflow}`} repo={repo} workflow={sheet.workflow} />;
   }
-  if (sheet.kind === "new-sprout") return <NewSproutSheet draft={sheet.draft} />;
   if (sheet.kind === "sprout") return <SproutSheet key={sheet.id} id={sheet.id} />;
   if (sheet.kind === "flow") return <FlowConsole flowId={sheet.flowId} />;
   if (sheet.kind === "fleet-plan") return <FleetPlan key={sheet.workflow} workflow={sheet.workflow} />;

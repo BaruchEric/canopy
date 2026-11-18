@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { RunGroup } from "../../../src/core/group";
-import type { CoordTask, Flow, LandEntry, LandingRun, Run, RunBranch, RunReview } from "../../../src/core/types";
+import type { CoordTask, Flow, LandEntry, LandingRun, Run, RunBranch, RunReview, Sprout } from "../../../src/core/types";
 import { NO_ROUTES } from "../agents";
 import type { BackendState } from "../backends";
 import { registry, setRegistry } from "../registry";
@@ -39,7 +39,7 @@ afterEach(() => {
   if (hadMatchMedia) globalThis.matchMedia = realMatchMedia;
   else Reflect.deleteProperty(globalThis, "matchMedia");
   Reflect.deleteProperty(globalThis, "location");
-  useStore.setState({ runs: pristine.runs, flows: pristine.flows, landing: pristine.landing, prs: pristine.prs, repos: pristine.repos, kit: pristine.kit });
+  useStore.setState({ runs: pristine.runs, flows: pristine.flows, landing: pristine.landing, prs: pristine.prs, repos: pristine.repos, kit: pristine.kit, sprouts: pristine.sprouts, sproutsReady: pristine.sproutsReady, stages: pristine.stages });
   setRegistry(pristineRegistry.home, [...pristineRegistry.names]);
   useStore.setState({ home: pristine.home, backendOrder: pristine.backendOrder, loaded: pristine.loaded, conns: pristine.conns, agents: pristine.agents, authByBackend: pristine.authByBackend });
 });
@@ -285,7 +285,7 @@ describe("which goal", () => {
     expect(html).toContain('aria-label="needs you"');
     useStore.setState({ runs: { k: coord([], { status: "done" }) } });
     const none = renderCurrent(<ManagerView />);
-    expect(none).toContain("Pick a goal");
+    expect(none).toContain("Goals and projects");
     expect(none).toContain("No coordinator is running.");
   });
 
@@ -346,7 +346,7 @@ describe("which goal", () => {
     backends({ state: "offline", loaded: true });
     useStore.setState({ runs: { k: coord([]), "mini|k2": { ...coord([]), id: "mini|k2" } } });
     const dropped = renderCurrent(<ManagerView />);
-    expect(dropped).toContain("Pick a goal");
+    expect(dropped).toContain("Goals and projects");
     expect(dropped).toContain('href="/?view=manager&amp;run=mini%7Ck2"');
     expect(dropped).not.toContain("not listed");
   });
@@ -375,6 +375,85 @@ describe("which goal", () => {
     expect(head).not.toContain("hold");
     expect(head).not.toContain("add a task");
     expect(head).not.toContain("end goal");
+  });
+});
+
+const sprout = (over: Partial<Sprout> = {}): Sprout => ({
+  id: "sp_000000000001",
+  slug: "coins",
+  title: "Coin counter",
+  status: "building",
+  repoId: "_incubator/coins",
+  seedPath: "/root/_incubator/coins",
+  prepared: true,
+  inputs: [],
+  clarified: true,
+  reclarify: false,
+  flows: [],
+  spent: { runs: 0, workMs: 0 },
+  createdAt: 1,
+  updatedAt: 1,
+  ...over,
+});
+
+describe("the overview: one new box, the goals and the projects", () => {
+  test("one goal going and a project in the incubator keeps the overview, with the goal's row and the project's card", () => {
+    screen(false);
+    at("?view=manager");
+    backends(null);
+    useStore.setState({ runs: { k: coord([]) }, sprouts: { sp_000000000001: sprout() }, sproutsReady: true });
+    const html = renderCurrent(<ManagerView />);
+    expect(html).toContain(">Goals and projects</h1>");
+    expect(html).not.toContain(`>${GOAL}</h1>`);
+    expect(html).toContain('href="/?view=manager&amp;run=k"');
+    const projects = section(html, "projects");
+    expect(projects).toContain("Coin counter");
+    expect(projects).toContain('class="sprout-card');
+  });
+
+  test("a project's link keeps the overview even with one goal and no project loaded yet", () => {
+    screen(false);
+    at("?view=manager&sprout=sp_000000000001");
+    backends(null);
+    useStore.setState({ runs: { k: coord([]) } });
+    expect(renderCurrent(<ManagerView />)).toContain(">Goals and projects</h1>");
+  });
+
+  test("the box starts on a goal: the @ words, start goal, and no links or repo", () => {
+    screen(false);
+    at("?view=manager&new=1&kind=goal");
+    backends(null);
+    useStore.setState({ runs: {} });
+    const box = section(renderCurrent(<ManagerView />), "new goal or project");
+    expect(box).toContain('role="radio" aria-checked="true" title="Work across repos you have');
+    expect(box).toContain('placeholder="what should get done? @ names a repo"');
+    expect(box).toContain("start goal");
+    expect(box).not.toContain('aria-label="Links"');
+    expect(box).not.toContain("start project");
+  });
+
+  test("the box on a project: the idea, a recorder, links and a repo, and start project held until there is something to send", () => {
+    screen(false);
+    at("?view=manager&new=1&kind=project");
+    backends(null);
+    useStore.setState({ runs: {}, stages: { mac: { isolated: true, mode: "runner", waiting: null } } });
+    const box = section(renderCurrent(<ManagerView />), "new goal or project");
+    expect(box).toContain('role="radio" aria-checked="true" title="Something new');
+    expect(box).toContain('placeholder="the idea, in as many words as you like"');
+    expect(box).toContain('aria-label="Links"');
+    expect(box).toContain('aria-label="A git repo to start from"');
+    expect(box).toContain("runs on mac");
+    expect(box).not.toContain("coordinate route");
+    expect(box).toMatch(/<button type="button" class="mini strong" disabled="" title="⌘↩">start project<\/button>/);
+  });
+
+  test("a backend with stages off says why a project started there would never start", () => {
+    screen(false);
+    at("?view=manager&new=1&kind=project");
+    backends(null);
+    useStore.setState({ runs: {}, stages: { mac: { isolated: false, mode: "off", waiting: null } } });
+    const box = section(renderCurrent(<ManagerView />), "new goal or project");
+    expect(box).toContain("mac has nowhere to run a stage");
   });
 });
 
@@ -429,7 +508,7 @@ describe("rings and lanes", () => {
     const t2Lane = workers.slice(workers.indexOf('id="mgr-lane-t2"'));
     expect(t1Lane).not.toMatch(/class="mgr-chip[ "]/);
     expect(t1Lane).not.toContain("default model");
-    expect(t1Lane).toContain("open in incubator");
+    expect(t1Lane).toContain("open project");
     expect(t2Lane).toContain('<span class="mgr-chip">0 skills</span>');
   });
 });

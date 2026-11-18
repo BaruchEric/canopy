@@ -46,7 +46,7 @@ export interface Ring { id: string; title: string; repo: string | null; word: st
   project: boolean }
 export type NeedKind = "prompt" | "gate" | "landing" | "cards" | "project" | "group";
 export interface Need { key: string; kind: NeedKind; card: string | null; who: string; what: string; detail: string; since: number; runId?: string; prompt?: RunPrompt; flowId?: string; landingId?: string; canLand?: boolean;
-  /** a project card's sprout, the lane to open in the incubator */
+  /** a project card's sprout, whose sheet the lane opens */
   sprout?: string;
   /** a best-of card's group, whose sheet holds the pick and the land */
   groupId?: string }
@@ -599,7 +599,7 @@ function laneOf(w: Work, coord: Run, at: ManagerInputs, look: Look): Lane {
     const line = sr ? childLine(sr) : "";
     return s && line ? `${s.name}: ${line}` : look.line;
   })();
-  const say = isProjectCard(task) ? { kind: "none" as const, why: "its project is in the incubator; answer it there" } : task.tree ? treeSayTarget(task, worker, coord) : sayTarget(task, worker, flow, at.landing, at.prs);
+  const say = isProjectCard(task) ? { kind: "none" as const, why: "its project is in the incubator; open project answers it" } : task.tree ? treeSayTarget(task, worker, coord) : sayTarget(task, worker, flow, at.landing, at.prs);
   const fresh = notStarted(task);
   const c = look.carried;
   return {
@@ -748,15 +748,15 @@ export function confirmPress(armedAt: number | null, now: number): { armedAt: nu
 /* ---------- the address on a change of view ---------- */
 
 /** The address a change of view goes to from `href`: `view` set (none for
- *  the git view), and `project`, the top view's goal (`run`) and its new
- *  goal box (`new`) dropped, since they belong to the view being left. A
- *  window opened on one run (`keepRun`) keeps its `run`. */
+ *  the git view), and `project`, the top view's goal (`run`), its new box
+ *  (`new`, `kind`) and a project's sheet (`sprout`) dropped, since they
+ *  belong to the view being left. A window opened on one run (`keepRun`)
+ *  keeps its `run`. */
 export function viewAddress(href: string, next: string, keepRun: boolean): string {
   const url = new URL(href);
   if (next === "git") url.searchParams.delete("view");
   else url.searchParams.set("view", next);
-  url.searchParams.delete("project");
-  url.searchParams.delete("new");
+  for (const key of ["project", "new", "kind", "sprout"]) url.searchParams.delete(key);
   if (!keepRun) url.searchParams.delete("run");
   return url.toString();
 }

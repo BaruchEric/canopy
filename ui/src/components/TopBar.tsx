@@ -30,7 +30,6 @@ import { ChanChip } from "./Chan";
 import { InboxChip } from "./Inbox";
 import { NotesChip } from "./Notes";
 import { ClipsChip } from "./Clipboard";
-import { NewProjectButton } from "./IncubatorSheets";
 import { KeptShells } from "./KeptShells";
 import { ShellsChip } from "./Shells";
 import { RangerChip } from "./Ranger";
@@ -677,12 +676,19 @@ function CliButton() {
   );
 }
 
-/** The manager view's new goal box, focused (FR-067): a goal, its files
- *  and the repos it names, which a coordinator plans into cards. */
-function NewGoalButton() {
+/** The manager's new box, focused, over the goals and projects going: a
+ *  goal across the repos it names (FR-067), or a new project through the
+ *  incubator, from one place. `n` does the same. */
+function NewButton() {
   return (
-    <button type="button" className="mini new-goal" title="New goal: plan cards across repos from a goal, files and the repos you name" onClick={() => openManager(null, { new: true })}>
-      new goal
+    <button
+      type="button"
+      className="mini new-btn"
+      aria-keyshortcuts="n"
+      title="Something new (n): a goal across repos you have, or a project from an idea, a link, a file, a voice memo or a repo"
+      onClick={() => openManager(null, { new: true })}
+    >
+      + new
     </button>
   );
 }
@@ -880,8 +886,7 @@ function PhoneBar({ nav }: { nav?: ReactNode }) {
           </div>
           <div ref={scroller} className="tb-line tb-tools tb-scroll">
             <Cluster label="Make">
-              <NewProjectButton />
-              <NewGoalButton />
+              <NewButton />
               <SelectPill />
             </Cluster>
             <Cluster label="Show">
@@ -958,8 +963,7 @@ function WideBar({ nav }: { nav?: ReactNode }) {
             <VoiceButton />
           </Cluster>
           <Cluster label="Make">
-            <NewProjectButton />
-            <NewGoalButton />
+            <NewButton />
             <SelectPill />
           </Cluster>
         </span>

@@ -1472,9 +1472,13 @@ export interface CanopyState {
   handOffSprout: (id: string, approve: boolean, head: string) => Promise<void>;
   dismissSprout: (id: string) => Promise<void>;
   showSprout: (id: string) => void;
-  openNewSprout: () => void;
-  /** the new project form, filled in from the command line's `new` */
-  draftSprout: (draft: SproutDraft) => void;
+  /** reads the incubator's stages from each online backend that has not
+   *  answered them yet, for the new box's project side */
+  loadMissingStages: () => void;
+  /** what the command line's `new` typed, for the new box's project side to
+   *  start from; the box takes it and sets it back to null */
+  newDraft: SproutDraft | null;
+  draftSprout: (draft: SproutDraft | null) => void;
   /** pins away, or clears it and is here */
   setAway: (away: boolean) => Promise<void>;
   /** someone is at this page: the human is here, at most once a minute,
@@ -1705,7 +1709,6 @@ export type Sheet =
   | { kind: "group"; groupId: string }
   | { kind: "agent"; repoId: string }
   /** `draft` fills the form, from the command line's `new` */
-  | { kind: "new-sprout"; draft?: SproutDraft }
   | { kind: "sprout"; id: string }
   | { kind: "launch"; repoId: string }
   | { kind: "task"; repoId: string; name: string | null }
@@ -2555,6 +2558,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   runs: {},
   sheet: null,
   sheetHold: null,
+  newDraft: null,
   kbFocus: null,
   kbRing: false,
   searchQuery: "",
@@ -4688,13 +4692,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     get().applyEvent({ type: "incubator-gone", id }, ownerOf(id));
   },
   showSprout: (id) => set({ sheet: { kind: "sprout", id } }),
-  openNewSprout: () => {
-    set({ sheet: { kind: "new-sprout" } });
-    stagesAgain(get);
-  },
+  loadMissingStages: () => stagesAgain(get),
   draftSprout: (draft) => {
-    set({ sheet: { kind: "new-sprout", draft } });
-    stagesAgain(get);
+    set({ newDraft: draft });
+    if (draft) stagesAgain(get);
   },
   answerAdvice: async (key, accept) => {
     // the backend that keeps the lesson answers it

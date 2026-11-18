@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { isProjectCard } from "../../../src/core/coordinator";
 import { goalRepoChoices } from "../goals";
 import { isRunActive, type CoordTask, type Run } from "../../../src/core/types";
-import { openView } from "../clirun";
 import { canStartCards, cardCarries, cardCounts, cardDraft, cardEdit, cardStatus, parentCard, type CardDraft, type CoordView, chainWords } from "../coord";
 import { groupReviews } from "../groups";
 import { loadoutLabel, loadoutsFor } from "../loadouts";
@@ -181,23 +180,15 @@ export function FlowButton({ task }: { task: CoordTask }) {
   );
 }
 
-/** A project card's way to its sprout: the incubator view with its sheet
- *  open, by the card's `sprout`, which `qRun` qualified. Hook-free like
- *  FlowButton. */
+/** A project card's way to its sprout: the project's sheet, in place of
+ *  the one it is on, by the card's `sprout`, which `qRun` qualified.
+ *  Hook-free like FlowButton. */
 export function ProjectButton({ task }: { task: CoordTask }) {
   const id = task.sprout;
   if (!id) return null;
   return (
-    <button
-      type="button"
-      className="mini"
-      title="Open the project in the incubator"
-      onClick={() => {
-        openView("incubator");
-        useStore.getState().showSprout(id);
-      }}
-    >
-      open in incubator
+    <button type="button" className="mini" title="Open the project's sheet: its questions, stages and inputs" onClick={() => useStore.getState().showSprout(id)}>
+      open project
     </button>
   );
 }

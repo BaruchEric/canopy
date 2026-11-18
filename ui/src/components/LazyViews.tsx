@@ -19,7 +19,6 @@ const LOADS = {
   library: () => import("./Library"),
   agents: () => import("./AgentsView"),
   manager: () => import("./ManagerView"),
-  incubator: () => import("./Incubator"),
   work: () => import("./Work"),
 };
 
@@ -59,7 +58,6 @@ export const Library = view(LOADS.library, (m) => m.Library);
 // its props parameter is optional, which leaves them to be named here
 export const AgentsView = view(LOADS.agents, (m): ((props: { onGit?: () => void }) => ReactNode) => m.AgentsView);
 export const ManagerView = view(LOADS.manager, (m) => m.ManagerView);
-export const IncubatorView = view(LOADS.incubator, (m) => m.IncubatorView);
 export const WorkView = view(LOADS.work, (m) => m.WorkView);
 
 /** fetches every lazy chunk once the page has nothing else to do; returns the cancel */

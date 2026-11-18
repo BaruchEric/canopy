@@ -1,5 +1,5 @@
 import { HealthView } from "./components/Health";
-import { AgentsView, ClockView, CostsView, IncubatorView, KitView, Library, ManagerView, PluginsView, SecretsView, SessionsView, TriggersView, WorkView, warmChunks } from "./components/LazyViews";
+import { AgentsView, ClockView, CostsView, KitView, Library, ManagerView, PluginsView, SecretsView, SessionsView, TriggersView, WorkView, warmChunks } from "./components/LazyViews";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Wordmark } from "./components/TopBar";
@@ -31,11 +31,11 @@ import { KbWatch, kbCopy, kbEnter, kbHide, kbMove, kbPeek, kbZone } from "./comp
 import { Said } from "./components/Said";
 import { noteCopied, onCopied, pageCopyText } from "./clipsink";
 import { runPanel } from "./itempanel";
-import { dropAskHere, openManager, parseRoute } from "./routes";
+import { dropAskHere, openManager, parseRoute, viewOf } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, attentionCount, dockless, landingAll, prsAll, statusOf, useStore, type CanopyState } from "./store";
 import { useShallow } from "zustand/react/shallow";
-import { agentsBadge, gitBadge, healthBadge, incubatorBadge, managerBadge, type Badge, type BadgeTone } from "./badges";
+import { agentsBadge, gitBadge, healthBadge, managerBadge, type Badge, type BadgeTone } from "./badges";
 import { liveCoordinators, managerRows, viewAddress, type Goal } from "./manager";
 import { PickMenu, type PickGroup } from "./components/PickMenu";
 import { WAITING_PANEL } from "./waiting";
@@ -70,8 +70,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
     views: [
       { key: "sessions", label: "sessions", what: "Every shell and agent on every machine, in one screen" },
       { key: "agents", label: "agents", what: "Which harness starts for what, per repo and role" },
-      { key: "manager", label: "manager", what: "One coordinator's goal from the top: a ring per card, what waits on you, a lane per worker and the manager's chat" },
-      { key: "incubator", label: "incubator", what: "New projects from an idea, clarified and researched before anything is built" },
+      { key: "manager", label: "manager", what: "Goals and new projects from one box: a goal's cards across repos from the top, and the incubator's projects, clarified and researched before anything is built" },
       { key: "triggers", label: "triggers", what: "Sentry issues and labeled Linear issues that start work on a branch with nobody typing, and what became of each" },
       { key: "clock", label: "clock", what: "Everything that runs by the clock, on one axis: the rangers' wakes, schedule rules, issue polls, the sweep and reminders" },
       { key: "work", label: "work", what: "Every piece of branch work: where it stands, what served it, and the lines the hubs and agents left for the next hand" },
@@ -92,7 +91,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
 const VIEWS: ViewDef[] = VIEW_GROUPS.flatMap((g) => g.views);
 
 /** the views that are not the git cockpit: their own bar, no board keys */
-const OTHER_VIEWS = ["library", "ports", "sessions", "agents", "manager", "incubator", "health", "costs", "triggers", "clock", "work", "kit", "plugins", "secrets"];
+const OTHER_VIEWS = ["library", "ports", "sessions", "agents", "manager", "health", "costs", "triggers", "clock", "work", "kit", "plugins", "secrets"];
 
 let goalsIn: readonly unknown[] = [];
 let goalsOut: Goal[] = [];
@@ -118,8 +117,6 @@ function badgeOf(s: CanopyState, key: string): Badge | null {
       return s.registryReady ? agentsBadge(Object.values(s.registry), statusOf(s)) : null;
     case "health":
       return healthBadge(s.health);
-    case "incubator":
-      return incubatorBadge(Object.values(s.sprouts));
     case "triggers":
       return triggersBadge(s.triggers);
     case "clock":
@@ -127,7 +124,7 @@ function badgeOf(s: CanopyState, key: string): Badge | null {
     case "work":
       return workBadge(workRows(s.work, s.backendOrder, { landing: s.landing, triggers: s.triggers, qual }));
     case "manager":
-      return managerBadge(liveGoals(s));
+      return managerBadge(liveGoals(s), Object.values(s.sprouts));
     default:
       return null;
   }
@@ -288,10 +285,11 @@ function paintThemeColor(theme: Theme) {
 }
 
 export function App() {
-  const [view, setView] = useState(() => new URLSearchParams(location.search).get("view") || "git");
+  const [view, setView] = useState(() => viewOf(new URLSearchParams(location.search).get("view") || "git"));
   const [project, setProject] = useState(() => new URLSearchParams(location.search).get("project"));
-  const navigate = useCallback((next: string) => {
-    // the top view's goal and new goal box belong to the top view; a chat's window keeps its own run
+  const navigate = useCallback((to: string) => {
+    const next = viewOf(to);
+    // the top view's goal and new box belong to the top view; a chat's window keeps its own run
     history.pushState(null, "", viewAddress(location.href, next, route.run !== null));
     setView(next);
     setProject(null);
@@ -300,6 +298,14 @@ export function App() {
     dispatchEvent(new PopStateEvent("popstate"));
   }, []);
   useEffect(() => bindNavigate(navigate), [navigate]);
+  // the incubator's old address (the link `canopy new` prints) names the
+  // manager's view now: the address says so, a project it names kept
+  useEffect(() => {
+    const u = new URL(location.href);
+    if (u.searchParams.get("view") !== "incubator") return;
+    u.searchParams.set("view", "manager");
+    history.replaceState(null, "", u.toString());
+  }, []);
   const showRepo = useCallback((id: string) => {
     navigate("git");
     useStore.getState().openPanel(id);
@@ -308,7 +314,7 @@ export function App() {
   useEffect(() => {
     const pop = () => {
       const query = new URLSearchParams(location.search);
-      setView(query.get("view") || "git");
+      setView(viewOf(query.get("view") || "git"));
       setProject(query.get("project"));
     };
     window.addEventListener("popstate", pop);
@@ -554,10 +560,11 @@ export function App() {
           chord.current = { key: "yank", at: Date.now() };
           return;
         case "new":
-          // ⌘N is the browser's new window, which a page cannot take
-          if (st.sproutsReady && !st.sheet && !over) {
+          // the new box, focused, over the goals and projects going; ⌘N is
+          // the browser's new window, which a page cannot take
+          if (whole && !st.sheet && !over) {
             e.preventDefault();
-            st.openNewSprout();
+            openManager(null, { new: true });
           }
           return;
         case "escape": {
@@ -590,13 +597,6 @@ export function App() {
           // only while the ring shows, and never from a focused button
           if (!whole || !st.kbRing || st.sheet || over || !ringTakes(press as RingPress, t)) return;
           if (sc.action === "peek" ? kbPeek() : kbEnter(showRepo)) e.preventDefault();
-          return;
-        case "goal":
-          // the new goal's box, over the goals going, focused
-          if (whole && !st.sheet && !over) {
-            e.preventDefault();
-            openManager(null, { new: true });
-          }
           return;
         case "select-all":
           // a select box owns ⌘A
@@ -735,8 +735,6 @@ export function App() {
         <AgentsView onGit={() => navigate("git")} />
       ) : view === "manager" ? (
         <ManagerView />
-      ) : view === "incubator" ? (
-        <IncubatorView onGit={() => navigate("git")} />
       ) : view === "health" ? (
         <HealthView />
       ) : view === "costs" ? (

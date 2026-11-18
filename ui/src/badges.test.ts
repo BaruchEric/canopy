@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, RepoStatus } from "../../src/core/types";
-import { agentsBadge, gitBadge, groupSum, healthBadge, incubatorBadge, managerBadge, partText, sumParts, sumTitle } from "./badges";
+import { agentsBadge, gitBadge, groupSum, healthBadge, managerBadge, partText, sumParts, sumTitle } from "./badges";
 
 const agent = (id: string, state: AgentCard["state"]) => ({ id, state });
 
@@ -40,17 +40,20 @@ describe("view tab badges", () => {
     });
   });
 
-  test("incubator counts sprouts on the way, rust while one waits for a yes", () => {
-    expect(incubatorBadge([{ status: "live" }, { status: "parked" }])).toBeNull();
-    expect(incubatorBadge([{ status: "building" }, { status: "live" }])).toMatchObject({ text: "1", tone: "sky" });
-    expect(incubatorBadge([{ status: "building" }, { status: "approving" }])).toMatchObject({ text: "2", tone: "rust" });
-  });
-
   test("manager counts what waits on you across the live goals, rust as the work tab's; else the goals going, sky", () => {
     expect(managerBadge([])).toBeNull();
     expect(managerBadge([{ waiting: 0 }, { waiting: 0 }])).toEqual({ text: "2", tone: "sky", title: "2 goals going; nothing waits on you" });
     expect(managerBadge([{ waiting: 2 }, { waiting: 1 }])).toEqual({ text: "3", tone: "rust", title: "3 things wait on you across 2 goals" });
     expect(managerBadge([{ waiting: 1 }])).toEqual({ text: "1", tone: "rust", title: "1 thing waits on you across 1 goal" });
+  });
+
+  test("manager counts the incubator's projects on their way too, and one waiting for a yes waits on you", () => {
+    // live and parked projects are not on their way
+    expect(managerBadge([], [{ status: "live" }, { status: "parked" }])).toBeNull();
+    expect(managerBadge([], [{ status: "building" }, { status: "live" }])).toEqual({ text: "1", tone: "sky", title: "1 project on the way; nothing waits on you" });
+    expect(managerBadge([{ waiting: 0 }], [{ status: "building" }, { status: "testing" }])).toEqual({ text: "3", tone: "sky", title: "1 goal going and 2 projects on the way; nothing waits on you" });
+    expect(managerBadge([], [{ status: "building" }, { status: "approving" }])).toEqual({ text: "1", tone: "rust", title: "1 thing waits on you across 2 projects" });
+    expect(managerBadge([{ waiting: 2 }], [{ status: "approving" }])).toEqual({ text: "3", tone: "rust", title: "3 things wait on you across 1 goal and 1 project" });
   });
 });
 

@@ -928,22 +928,22 @@ describe("a sheet a form holds (FR-062)", () => {
 
   test("Escape or the backdrop asks first while a form holds the user's words, and a no keeps the sheet", () => {
     const asked: string[] = [];
-    useStore.getState().openNewSprout();
+    useStore.getState().showSprout("sp_0123456789ab");
     useStore.getState().holdSheet("Close the form and lose the idea?");
     expect(useStore.getState().leaveSheet((q) => (asked.push(q), false))).toBe(false);
-    expect(useStore.getState().sheet).toEqual({ kind: "new-sprout" });
+    expect(useStore.getState().sheet).toEqual({ kind: "sprout", id: "sp_0123456789ab" });
     expect(asked).toEqual(["Close the form and lose the idea?"]);
     expect(useStore.getState().leaveSheet(() => true)).toBe(true);
     expect(useStore.getState().sheet).toBeNull();
     // the hold went with the sheet, so the next one closes without a word
     expect(useStore.getState().sheetHold).toBeNull();
-    useStore.getState().openNewSprout();
+    useStore.getState().showSprout("sp_0123456789ab");
     expect(useStore.getState().leaveSheet(() => { throw new Error("asked with nothing held"); })).toBe(true);
     expect(useStore.getState().sheet).toBeNull();
   });
 
   test("the sheet's own close and cancel never ask, and clear the hold", () => {
-    useStore.getState().openNewSprout();
+    useStore.getState().showSprout("sp_0123456789ab");
     useStore.getState().holdSheet("Close the form and lose the idea?");
     useStore.getState().closeSheet();
     expect(useStore.getState().sheet).toBeNull();
@@ -1860,7 +1860,7 @@ describe("several backends", () => {
     expect(useStore.getState().sprouts[parked.id]?.status).toBe("stopped");
   });
 
-  test("a failed stages read on another backend is said, and the new project sheet asks again (FR-062)", async () => {
+  test("a failed stages read on another backend is said, and the new box's project side asks again (FR-062)", async () => {
     let down = true;
     let reads = 0;
     await start(
@@ -1880,14 +1880,14 @@ describe("several backends", () => {
     expect(s.stagesErr["b"]).toBe("the proxy timed out");
     expect(reads).toBe(1);
     down = false;
-    useStore.getState().openNewSprout();
+    useStore.getState().loadMissingStages();
     await settle();
     s = useStore.getState();
     expect(reads).toBe(2);
     expect(s.stages["b"]).toEqual({ isolated: true, mode: "runner", waiting: null });
     expect(s.stagesErr["b"]).toBeUndefined();
-    // a backend whose stages are known is not asked again on open
-    useStore.getState().openNewSprout();
+    // a backend whose stages are known is not asked again
+    useStore.getState().loadMissingStages();
     await settle();
     expect(reads).toBe(2);
   });

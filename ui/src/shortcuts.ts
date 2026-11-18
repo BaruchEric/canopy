@@ -13,7 +13,6 @@ export type KeyAction =
   | "go"
   | "yank"
   | "new"
-  | "goal"
   | "filter"
   | "filters"
   | "tree"
@@ -54,8 +53,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { action: "go", press: "g", what: "Then a letter, go to a view (below)" },
   { action: "yank", press: "y", what: "Then a letter, copy from the ringed card or row, or the open run sheet (below)" },
   { action: "find", press: "mod+shift+f", what: "Search the files of every repo in view", views: GIT, anywhere: true },
-  { action: "new", press: "n", what: "A new project", views: ["git", "incubator"] },
-  { action: "goal", press: "n", what: "A new goal: its box, focused", views: ["manager"] },
+  { action: "new", press: "n", what: "Something new, a goal or a project: the new box, focused", views: ["git", "manager"] },
   { action: "filter", press: "/", what: "Filter the repos", views: GIT },
   { action: "filters", press: "f", what: "The filters menu", views: GIT },
   { action: "tree", press: "[", what: "Show or hide the tree", views: GIT },
@@ -86,7 +84,6 @@ export const GO: readonly { key: string; view: string; what: string }[] = [
   { key: "s", view: "sessions", what: "sessions" },
   { key: "t", view: "triggers", what: "triggers" },
   { key: "o", view: "clock", what: "the clock" },
-  { key: "i", view: "incubator", what: "the incubator" },
   { key: "l", view: "library", what: "the library" },
   { key: "p", view: "ports", what: "ports" },
   { key: "h", view: "health", what: "health" },
@@ -94,7 +91,7 @@ export const GO: readonly { key: string; view: string; what: string }[] = [
   { key: "k", view: "kit", what: "the kit" },
   { key: "e", view: "plugins", what: "plugins" },
   { key: "w", view: "work", what: "the work ledger" },
-  { key: "m", view: "manager", what: "the manager's top view of a goal" },
+  { key: "m", view: "manager", what: "the manager: goals, and the incubator's projects" },
 ];
 
 /** what y then a letter copies (FR-025, kbcopy.ts): the branch, the PR's link, the run's id */

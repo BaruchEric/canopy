@@ -1,6 +1,8 @@
 /**
- * The incubator: one card per new project with its stage strip. The
- * + project button and the sheets are `IncubatorSheets.tsx`.
+ * The incubator's projects, as a section of the manager's overview beside
+ * the goals: where each backend runs its stages, and one card per project
+ * with its stage strip. A project starts from the overview's new box
+ * (`NewComposer.tsx`); its sheet is `IncubatorSheets.tsx`.
  */
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -9,8 +11,7 @@ import { backendOf } from "../registry";
 import { queuedWhy, sortSprouts, sproutActivity, sproutWord, stagesWord } from "../sprouts";
 import { multi, useStore } from "../store";
 import { ago } from "../util";
-import { InboxChip } from "./Inbox";
-import { NewProjectButton, StageStrip } from "./IncubatorSheets";
+import { StageStrip } from "./IncubatorSheets";
 import { WidgetGear, shareEntries, useZoom, zoomStyle } from "./Surface";
 
 /** One project's card. It moves with what it is doing: an agent at work
@@ -85,7 +86,11 @@ function StagesWord() {
   );
 }
 
-export function IncubatorView({ onGit }: { onGit?: () => void }) {
+/** The overview's projects: the stages words and the backends' queues,
+ *  then a card per project, newest work first. The sheet a link names
+ *  (`?view=manager&sprout=<id>`, or the incubator's old address that
+ *  `canopy new` prints) opens once the list is in. */
+export function Projects() {
   const ready = useStore((s) => s.sproutsReady);
   const ids = useStore(useShallow((s) => sortSprouts(Object.values(s.sprouts)).map((x) => x.id)));
   const show = useStore((s) => s.showSprout);
@@ -99,7 +104,6 @@ export function IncubatorView({ onGit }: { onGit?: () => void }) {
   );
   const body = useRef<HTMLDivElement>(null);
   const { zoom, entry: zoomEntry } = useZoom("incubator");
-  // `canopy new` prints a link to its project: open it once the list is in
   useEffect(() => {
     const id = sproutHere(window.location.search);
     if (!id || !ready) return;
@@ -107,14 +111,11 @@ export function IncubatorView({ onGit }: { onGit?: () => void }) {
     dropSproutHere();
   }, [ready, show]);
   return (
-    <section className="incubator-view" aria-label="Incubator">
-      <div className="agents-bar">
-        <NewProjectButton />
+    <section className="mgr-projects" aria-label="projects">
+      <div className="mgr-projects-head">
+        <h2 className="mgr-h">projects</h2>
         <StagesWord />
-        <span className="agents-has">
-          <InboxChip onGit={onGit} />
-        </span>
-        <WidgetGear label="the incubator" what="incubator" zoom={zoomEntry} share={shareEntries({ el: () => body.current, label: "incubator" })} />
+        <WidgetGear label="the projects" what="incubator" zoom={zoomEntry} share={shareEntries({ el: () => body.current, label: "projects" })} />
       </div>
       <div ref={body} className="incubator-body" style={zoomStyle(zoom)}>
         {waiting.map((w) => (
@@ -123,12 +124,9 @@ export function IncubatorView({ onGit }: { onGit?: () => void }) {
           </p>
         ))}
         {!ready ? (
-          <p className="sheet-empty">No backend has an incubator to show, or none has answered yet.</p>
+          <p className="mgr-empty">No backend has an incubator to show, or none has answered yet.</p>
         ) : ids.length === 0 ? (
-          <div className="incubator-empty">
-            <p>Nothing in the incubator. A project starts from an idea, a link, a file, a voice memo or a repo, and is clarified and researched before anything is built.</p>
-            <NewProjectButton />
-          </div>
+          <p className="mgr-empty">No project in the incubator. Pick project in the new box: it starts from an idea, a link, a file, a voice memo or a repo, and is clarified and researched before anything is built.</p>
         ) : (
           <div className="sprout-grid">
             {ids.map((id, i) => (

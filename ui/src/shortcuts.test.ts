@@ -17,9 +17,8 @@ test("pressOf names ⌘ and Ctrl alike as mod, keeps a bare key as typed, and dr
 test("shortcutFor finds a press on the views it works on and nowhere else", () => {
   expect(shortcutFor("d", "git")?.action).toBe("dirty");
   expect(shortcutFor("d", "library")).toBeNull();
-  expect(shortcutFor("n", "incubator")?.action).toBe("new");
   expect(shortcutFor("n", "health")).toBeNull();
-  expect(shortcutFor("n", "manager")?.action).toBe("goal");
+  expect(shortcutFor("n", "manager")?.action).toBe("new");
   expect(shortcutFor("n", "git")?.action).toBe("new");
   expect(shortcutFor("?", "costs")?.action).toBe("help");
   expect(shortcutFor("mod+k", "kit")?.anywhere).toBe(true);
@@ -29,12 +28,9 @@ test("shortcutFor finds a press on the views it works on and nowhere else", () =
 });
 
 test("shortcutsOn lists every shortcut on git and only the everywhere ones and the view's own elsewhere", () => {
-  // every one but the manager's new goal, which shares git's n
-  expect(shortcutsOn("git")).toHaveLength(SHORTCUTS.length - 1);
-  expect(shortcutsOn("git").some((s) => s.action === "goal")).toBe(false);
+  expect(shortcutsOn("git")).toHaveLength(SHORTCUTS.length);
   expect(shortcutsOn("manager").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g", "y", "n"]);
   expect(shortcutsOn("library").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g", "y"]);
-  expect(shortcutsOn("incubator").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g", "y", "n"]);
 });
 
 test("no press means two things on one view", () => {
@@ -50,7 +46,8 @@ test("chordView goes to the view a letter names, and nowhere for a letter it doe
   expect(chordView("o")).toBe("clock");
   expect(chordView("l")).toBe("library");
   expect(chordView("h")).toBe("health");
-  expect(chordView("i")).toBe("incubator");
+  // the incubator's projects are in the manager's view, which is m
+  expect(chordView("i")).toBeNull();
   expect(chordView("s")).toBe("sessions");
   expect(chordView("b")).toBe("agents");
   expect(chordView("g")).toBe("git");

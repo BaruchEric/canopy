@@ -52,6 +52,10 @@ The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: 
 
 ## Shipped
 
+### FR-068 · New project, goal and incubator in one place
+P2 · added 2026-11-18 · source: Eric ("commbine new project,goal and incubator", 2026-11-18) · shipped 2026-11-18
+The top bar's "+ project" and "new goal" were two buttons for two forms, and the incubator was a view of its own beside the manager's. Now one **+ new** (and `n`, on the board and in the manager) opens one box in the manager's overview, whose head switches between goal and project and keeps the words and the files across the switch: a goal goes to a coordinator with its @-named repos, model and effort, a project to the incubator with its links, repo and voice memo. The overview lists the goals going and then the incubator's projects as cards, the incubator's tab and its `g i` chord are gone, its old address (the link `canopy new` prints) and the CLI and voice word `incubator` land on the overview, the manager's tab counts both, and a project card's lane says **open project**, which opens the sheet over the goal. A file a project cannot take holds start project and says so; the goal side says when the project side's links or repo would stay behind.
+
 ### FR-067 · A goal from the top
 P2 · added 2026-11-13 · source: Eric ("start from top chat (with defaults set for Providers) flow with defaults set for coordinate routing, such as model and effort etc and than base on user prompts and or attachments, repos etc start existing canopy cards and worktrees or create new ones", 2026-11-13) · shipped 2026-11-14
 Start a coordinator from a composer at the top of the manager view instead of a repo card's menu: a goal, attached files, the repos Eric names with @, and a model and effort that default to the backend's coordinate route. The goal is held at no repo (a fixed anchor id). Its cards work in existing repos as today, in a kept worktree (an existing one or one canopy makes for the branch the card names), or make a new project through the incubator and follow it until it is live.
@@ -283,7 +287,7 @@ Built 2026-10-24: ui/src/splitpanes.ts (pure, tested) and components/SessionPane
 
 ### FR-022 · g then a letter switches views
 P2 · added 2026-10-23 · source: Eric (Linear UX study) · shipped 2026-10-24
-Two-key chords switch views from anywhere outside a text box, as Linear's G then I does: g then t for triggers, l for the Library, h for health, i for the incubator, s for sessions, b for the board. The chord list lives in the same table as FR-021's sheet.
+Two-key chords switch views from anywhere outside a text box, as Linear's G then I does: g then t for triggers, l for the Library, h for health, i for the incubator (dropped 2026-11-18 with FR-068: the manager's m holds the projects), s for sessions, b for the board. The chord list lives in the same table as FR-021's sheet.
 Built 2026-10-24 with FR-021: g then g, b, s, t, i, l, p, h, c or k, within 1.5 s; the sheet lists them under "g then".
 
 ### FR-021 · ? shows every shortcut

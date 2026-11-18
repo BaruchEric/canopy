@@ -102,13 +102,20 @@ export function dropAskHere() {
   window.history.replaceState(null, "", u.toString());
 }
 
-/** `?view=incubator&sprout=<id>`: the incubator with that project open, the
- *  link `canopy new` prints */
+/** `?view=manager&sprout=<id>`: the manager's overview with that project's
+ *  sheet open. `canopy new` prints the incubator's old address,
+ *  `?view=incubator&sprout=<id>`, which the page takes as this one. */
 export function sproutHere(search: string): string | null {
   const q = new URLSearchParams(search);
   const id = q.get("sprout");
-  return q.get("view") === "incubator" && id && isSproutId(id) ? id : null;
+  const view = q.get("view");
+  return (view === "manager" || view === "incubator") && id && isSproutId(id) ? id : null;
 }
+
+/** The views that live inside another now: the incubator's projects are in
+ *  the manager's overview, beside the goals. An old link, a voice command
+ *  or a CLI word that names one lands on the view that holds it. */
+export const viewOf = (view: string): string => (view === "incubator" ? "manager" : view);
 
 /** Takes `sprout=` off this window's URL once the sheet has it. */
 export function dropSproutHere() {
@@ -126,25 +133,42 @@ export function managerHere(search: string): string | null {
   return q.get("view") === "manager" && id && RUN_ID.test(id) ? id : null;
 }
 
-/** `?view=manager&new=1`: the goals to pick from with the new goal's box
- *  focused, the top bar's "new goal" */
+/** What the new box starts: a goal across repos, or a project through the incubator. */
+export type NewKind = "goal" | "project";
+
+/** What opening the overview asks for: the new box focused, on a kind. */
+export interface ManagerOpen {
+  new?: true;
+  kind?: NewKind;
+}
+
+/** `?view=manager&new=1`: the goals and projects to pick from with the new
+ *  box focused, the top bar's "+ new" and `n` */
 export function managerNew(search: string): boolean {
   const q = new URLSearchParams(search);
   return q.get("view") === "manager" && q.get("new") === "1";
 }
 
+/** `&kind=project` or `&kind=goal` beside `new=1`: the kind the box starts
+ *  on; null leaves it on the one last used */
+export function newKindHere(search: string): NewKind | null {
+  const q = new URLSearchParams(search);
+  const kind = q.get("kind");
+  return managerNew(search) && (kind === "goal" || kind === "project") ? kind : null;
+}
+
 /** The top view's address on this page: a coordinator's goal, or with no
- *  id the goals to pick from, `new` with the new goal's box focused. */
-export function managerUrl(runId: string | null, opts?: { new?: true }): string {
-  const tail = runId ? `&run=${encodeURIComponent(runId)}` : opts?.new ? "&new=1" : "";
+ *  id the goals and projects to pick from, `new` with the new box focused. */
+export function managerUrl(runId: string | null, opts?: ManagerOpen): string {
+  const tail = runId ? `&run=${encodeURIComponent(runId)}` : opts?.new ? `&new=1${opts.kind ? `&kind=${opts.kind}` : ""}` : "";
   return `${location.pathname}?view=manager${tail}`;
 }
 
-/** Opens the top view of a coordinator's goal, or the goals to pick from.
- *  The whole page changes in place and hears it as it hears back and
- *  forward (App and ManagerView follow popstate); a window of one thing
- *  shows only what its address named when it opened, so it loads anew. */
-export function openManager(runId: string | null, opts?: { new?: true }): void {
+/** Opens the top view of a coordinator's goal, or the goals and projects to
+ *  pick from. The whole page changes in place and hears it as it hears
+ *  back and forward (App and ManagerView follow popstate); a window of one
+ *  thing shows only what its address named when it opened, so it loads anew. */
+export function openManager(runId: string | null, opts?: ManagerOpen): void {
   const url = managerUrl(runId, opts);
   const r = parseRoute(location.search);
   if (r.run || r.agent || (r.repo && (r.solo || r.shell || r.section))) {

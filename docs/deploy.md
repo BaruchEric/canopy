@@ -907,8 +907,8 @@ sudo iptables -t raw -S PREROUTING        # the drops
 If the unit failed, the incubator says "stages unfenced" and nothing runs
 until the fence is back and the next probe, within 5 minutes, times out.
 
-**8. The incubator word.** The incubator view should now say "stages
-isolated". "stages unfenced" means the runner answers but its probe got
+**8. The incubator word.** The projects heading in the manager's overview
+should now say "stages isolated". "stages unfenced" means the runner answers but its probe got
 through, failed, or has no target: its title says which.
 
 ### Hardening (amendment 4)
@@ -979,8 +979,8 @@ docker compose exec stages ls -la /home/bun/.stage-claude/.claude.json /home/bun
 
 If a login is gone, redo step 7 above.
 
-**5. Check the incubator.** The incubator view says "stages isolated", and
-each seed's card shows its status. Start a sprout, or wait for a running
+**5. Check the incubator.** The projects heading in the manager's overview
+says "stages isolated", and each seed's card shows its status. Start a sprout, or wait for a running
 one's next stage, and during it:
 
 ```

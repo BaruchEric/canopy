@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { managerHere, managerNew, managerUrl, parseRoute, popupFeatures, runUrl, soloUrl, sproutHere } from "./routes";
+import { managerHere, managerNew, managerUrl, newKindHere, parseRoute, popupFeatures, runUrl, soloUrl, sproutHere, viewOf } from "./routes";
 
 const features = (w: number, h: number): Record<string, number> => {
   const out: Record<string, number> = {};
@@ -170,10 +170,18 @@ test("a task window names its task", () => {
 });
 
 describe("sproutHere", () => {
-  test("the incubator view's sprout, and nothing else", () => {
+  test("the overview's sprout, the incubator's old address too, and nothing else", () => {
+    expect(sproutHere("?view=manager&sprout=sp_0123456789ab")).toBe("sp_0123456789ab");
+    // the link canopy new prints, from before the incubator joined the manager
     expect(sproutHere("?view=incubator&sprout=sp_0123456789ab")).toBe("sp_0123456789ab");
     expect(sproutHere("?view=git&sprout=sp_0123456789ab")).toBeNull();
     expect(sproutHere("?view=incubator&sprout=../x")).toBeNull();
+  });
+
+  test("the incubator's view is the manager's now, and every other view is its own", () => {
+    expect(viewOf("incubator")).toBe("manager");
+    expect(viewOf("manager")).toBe("manager");
+    expect(viewOf("git")).toBe("git");
   });
 });
 
@@ -192,11 +200,19 @@ describe("managerHere", () => {
 });
 
 describe("managerNew", () => {
-  test("the manager view's new goal, and nothing else", () => {
+  test("the manager view's new box, and nothing else", () => {
     expect(managerNew("?view=manager&new=1")).toBe(true);
     expect(managerNew("?view=manager")).toBe(false);
     expect(managerNew("?view=manager&new=0")).toBe(false);
     expect(managerNew("?view=git&new=1")).toBe(false);
+  });
+
+  test("the kind the box starts on, only beside new=1", () => {
+    expect(newKindHere("?view=manager&new=1&kind=project")).toBe("project");
+    expect(newKindHere("?view=manager&new=1&kind=goal")).toBe("goal");
+    expect(newKindHere("?view=manager&new=1")).toBeNull();
+    expect(newKindHere("?view=manager&new=1&kind=repo")).toBeNull();
+    expect(newKindHere("?view=manager&kind=project")).toBeNull();
   });
 
   test("the address that opens it", () => {
@@ -206,6 +222,7 @@ describe("managerNew", () => {
     try {
       expect(managerUrl(null, { new: true }).endsWith("?view=manager&new=1")).toBe(true);
       expect(managerNew(new URL(managerUrl(null, { new: true }), "http://x").search)).toBe(true);
+      expect(managerUrl(null, { new: true, kind: "project" })).toBe("/?view=manager&new=1&kind=project");
       expect(managerUrl(null)).toBe("/?view=manager");
       expect(managerUrl("mini|ed71ddfb")).toBe("/?view=manager&run=mini%7Ced71ddfb");
     } finally {

@@ -24,13 +24,14 @@ import { openView } from "../clirun";
 import { chatAim, goalText, liveCoordinators, managerRows, type Goal, type Lane, type Need, type Ring, type SayTarget, type Tone } from "../manager";
 import { PHONE, useMedia } from "../media";
 import { backendOf, isHome, plainOf } from "../registry";
-import { managerHere, managerNew, managerUrl, openManager } from "../routes";
+import { managerHere, managerNew, managerUrl, openManager, sproutHere, type ManagerOpen } from "../routes";
 import { harnessOf } from "../runs";
 import { connOf, idParts, idText, landingAll, prsAll, recordsIn, useStore, type CanopyState } from "../store";
 import { HoldButton } from "./CoordTasks";
 import { EquipSheet } from "./EquipSheet";
 import { GateChoices, oneAtATime, useGateGuard } from "./FlowSheet";
-import { GoalComposer } from "./GoalComposer";
+import { Projects } from "./Incubator";
+import { NewComposer } from "./NewComposer";
 import { RunPromptForm } from "./Prompts";
 import { useNow } from "./Registry";
 import { RunPane, useSecondPress } from "./RunSheet";
@@ -53,10 +54,11 @@ const TITLE_MAX = 120;
 const NOTE_MAX = 4000;
 
 /**
- * The view: the goal the address names, or the goals going to pick from
- * under the new goal's box. With no goal named and one going, that one
- * opens and the address names it, once every backend has sent its runs or
- * is known to be away, unless the address asks for a new goal (`new=1`). A goal
+ * The view: the goal the address names, or the overview: the new box, the
+ * goals going and the incubator's projects. With no goal named, one going
+ * and no project in the incubator, that goal opens and the address names
+ * it, once every backend has sent its runs or is known to be away, unless
+ * the address asks for the new box (`new=1`) or a project's sheet. A goal
  * the page does not hold is called ended only when its backend's runs are
  * in; while they are on their way, or the backend is offline, asks for a
  * sign-in or is hidden, the view says that instead. One the page holds
@@ -86,7 +88,9 @@ export function ManagerView() {
   // the goals it last sent, so it is not called missing
   const waiting = useStore((s) => s.backendOrder.filter((b) => reachOf(s, b) === "loading").join(" "));
   const away = useStore((s) => s.backendOrder.filter((b) => isAway(reachOf(s, b)) && !recordsIn(s, b)).join(" "));
-  const onlyId = runId === null && !fresh && waiting === "" && live.length === 1 ? live[0]?.id : undefined;
+  // a project in the incubator is something else to pick, so the overview stays
+  const projects = useStore((s) => Object.keys(s.sprouts).length);
+  const onlyId = runId === null && !fresh && waiting === "" && live.length === 1 && projects === 0 && sproutHere(search()) === null ? live[0]?.id : undefined;
   useEffect(() => {
     if (!onlyId) return;
     history.replaceState(null, "", managerUrl(onlyId));
@@ -136,8 +140,8 @@ const WAIT_WORDS: Record<Exclude<Reach, "here">, string> = {
 /** backend names as a phrase: "a", "a and b", "a, b and c" */
 const names = (list: readonly string[]): string => (list.length < 2 ? (list[0] ?? "") : `${list.slice(0, -1).join(", ")} and ${list.at(-1)}`);
 
-/** a link that opens a goal (or the new goal's box) in place, and in a new tab when asked to */
-function follow(e: MouseEvent, runId: string | null, opts?: { new?: true }): void {
+/** a link that opens a goal (or the new box) in place, and in a new tab when asked to */
+function follow(e: MouseEvent, runId: string | null, opts?: ManagerOpen): void {
   if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   e.preventDefault();
   openManager(runId, opts);
@@ -146,7 +150,7 @@ function follow(e: MouseEvent, runId: string | null, opts?: { new?: true }): voi
 function GoalPicker({ live, why, on, waiting, away, fresh }: { live: Run[]; why: Why; on: string; waiting: string[]; away: string[]; fresh: boolean }) {
   const now = useNow();
   const phone = useMedia(PHONE);
-  const heading = why === "ended" ? "This goal has ended" : why === "none" || why === "not a goal" || why === "hidden" ? "Pick a goal" : `Waiting for ${on}`;
+  const heading = why === "ended" ? "This goal has ended" : why === "none" || why === "not a goal" || why === "hidden" ? "Goals and projects" : `Waiting for ${on}`;
   return (
     <main className={`mgr-view mgr-pick${phone ? " phone" : ""}`}>
       <h1 className="mgr-goal-text">{heading}</h1>
@@ -163,7 +167,8 @@ function GoalPicker({ live, why, on, waiting, away, fresh }: { live: Run[]; why:
           Goals on {names(away)} are not listed until this page reaches {away.length === 1 ? "it" : "them"}.
         </p>
       )}
-      <GoalComposer autoFocus={fresh} />
+      <NewComposer autoFocus={fresh} />
+      <h2 className="mgr-h">goals</h2>
       {live.length === 0 ? (
         waiting.length === 0 && <p className="mgr-empty">No coordinator is running.</p>
       ) : (
@@ -181,6 +186,7 @@ function GoalPicker({ live, why, on, waiting, away, fresh }: { live: Run[]; why:
           ))}
         </ul>
       )}
+      <Projects />
     </main>
   );
 }
@@ -311,8 +317,8 @@ function GoalHead({ coord, goal, act }: { coord: Run; goal: Goal; act: Act }) {
           <button type="button" className="mini" aria-expanded={adding} title="Put a card of your own in this goal's plan" onClick={() => setAdding(!adding)}>
             add a task
           </button>
-          <a className="mini" href={managerUrl(null, { new: true })} title="Start another goal from the top" onClick={(e) => follow(e, null, { new: true })}>
-            new goal
+          <a className="mini" href={managerUrl(null, { new: true })} title="Start another goal or a project, over the goals and projects going" onClick={(e) => follow(e, null, { new: true })}>
+            + new
           </a>
           <button
             type="button"
@@ -330,7 +336,7 @@ function GoalHead({ coord, goal, act }: { coord: Run; goal: Goal; act: Act }) {
         <p className="mgr-ended">
           This goal has ended.{" "}
           <a href={managerUrl(null)} onClick={(e) => follow(e, null)}>
-            the goals going
+            the goals and projects going
           </a>
         </p>
       )}
@@ -508,14 +514,12 @@ function Needs({ coord, needs, act }: { coord: Run; needs: readonly Need[]; act:
                   <button
                     type="button"
                     className="mini strong"
-                    title="Open the project in the incubator"
+                    title="Open the project's sheet: its questions, stages and inputs"
                     onClick={() => {
-                      if (!n.sprout) return;
-                      openView("incubator");
-                      useStore.getState().showSprout(n.sprout);
+                      if (n.sprout) useStore.getState().showSprout(n.sprout);
                     }}
                   >
-                    open in incubator
+                    open project
                   </button>
                 </div>
               ) : n.kind === "group" ? (
@@ -788,11 +792,9 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
     openView("git");
     useStore.getState().openPanel(cardId);
   };
-  // a project card's sprout opens its sheet in the incubator view
+  // a project card's sprout opens its sheet over the goal
   const openProject = () => {
-    if (!lane.sprout) return;
-    openView("incubator");
-    useStore.getState().showSprout(lane.sprout);
+    if (lane.sprout) useStore.getState().showSprout(lane.sprout);
   };
   const open = () => {
     const s = useStore.getState();
@@ -899,8 +901,8 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
             </button>
           )}
           {lane.sprout && (
-            <button type="button" className="mini" title="Open the project in the incubator" onClick={openProject}>
-              open in incubator
+            <button type="button" className="mini" title="Open the project's sheet: its questions, stages and inputs" onClick={openProject}>
+              open project
             </button>
           )}
           {(runId || flowId) && (
