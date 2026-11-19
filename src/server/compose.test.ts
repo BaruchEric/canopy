@@ -358,7 +358,7 @@ describe("the secrets image", () => {
   test("is plain bun with git and ssh, and carries only the service's bundle", async () => {
     const text = await Bun.file(new URL("../../Dockerfile", import.meta.url)).text();
     expect(text).toContain("RUN bun build src/secrets/main.ts --target=bun --outfile /app/dist/secrets-service.js");
-    const start = text.indexOf("FROM oven/bun:1 AS secrets");
+    const start = text.indexOf("FROM bun-base AS secrets");
     expect(start).toBeGreaterThan(-1);
     const end = text.indexOf("\nFROM ", start + 1);
     const stage = end === -1 ? text.slice(start) : text.slice(start, end);

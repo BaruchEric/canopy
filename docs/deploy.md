@@ -213,6 +213,11 @@ everything but canopy's code) does not change when canopy's code does, so
 compose leaves that container alone. The recreated canopy logs "shells on
 tmux (/usr/bin/tmux), n held from before" and every browser's tabs rejoin.
 
+The Dockerfile pins the shared Bun base by digest. Updating that digest is a
+planned shells upgrade: it rebuilds the shell tools too and requires
+`--shells`. The former floating `oven/bun:1` tag could advance on an ordinary
+deploy and cause exit 3 even when no shell source or settings had changed.
+
 Two things do drop the shells, and both are visible in the `up` output as
 "Container canopy-shells-1 Recreated". A change to the `shells` stage (the
 apt line, the user, the claude or codex install, either tmux conf under

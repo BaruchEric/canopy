@@ -16,7 +16,12 @@
 # token (the `stages` service).
 # `secrets` and `egress` are plain bun with one bundled service each.
 
-FROM oven/bun:1 AS build
+# Bun 1.4.5, pinned by digest: the floating :1 tag also rebuilds the shells
+# and their unpinned tools when upstream moves, unexpectedly requiring --shells.
+# Update this base deliberately when a shells restart is planned.
+FROM oven/bun:1@sha256:3aa040e5445efa09d75bb428a64ba50db13e2b3ac9b6b0c7f145615f62b2ee18 AS bun-base
+
+FROM bun-base AS build
 WORKDIR /app
 COPY package.json bun.lock* ./
 RUN bun install --frozen-lockfile || bun install
@@ -39,7 +44,7 @@ RUN bun build src/secrets/main.ts --target=bun --outfile /app/dist/secrets-servi
 # carries
 RUN bun build src/egress/main.ts --target=bun --outfile /app/dist/egress-proxy.js
 
-FROM oven/bun:1 AS shells
+FROM bun-base AS shells
 # git for the scan and every mutation; tmux so a shell outlives a canopy
 # restart; python3 for the bundled Library; openssh for ssh sources and for
 # VS Code Remote-SSH from a client; curl to fetch the claude installer;
@@ -247,7 +252,7 @@ CMD ["bun", "/app/stage-runner.js"]
 # in. git and ssh (with ssh-keygen) for the eric/secrets checkout, its deploy
 # key and its push. Root, since it writes sinks under /opt/stacks that other
 # users own and chowns each back (src/core/sinks.ts).
-FROM oven/bun:1 AS secrets
+FROM bun-base AS secrets
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git openssh-client ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -261,7 +266,7 @@ CMD ["bun", "/app/secrets-service.js"]
 # coord-proxy service runs it on a network of its own, with its port
 # published on the coordinator bridge's gateway alone; it holds no login and
 # no token, and tunnels CONNECT to Anthropic's names on 443 and nothing else.
-FROM oven/bun:1 AS egress
+FROM bun-base AS egress
 COPY --from=build /app/dist/egress-proxy.js /app/egress-proxy.js
 # read-only root filesystem (docker-compose.yml): no transpiler cache
 ENV BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
