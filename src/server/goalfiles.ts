@@ -110,8 +110,10 @@ export async function readGoalFile(seeds: string, runId: string, name: string, m
 async function readChecked(seeds: string, runId: string, name: string, max: number, { room, race }: GoalReadMore): Promise<Uint8Array> {
   if (!plainName(name)) throw new Refused(`not a plain file name: ${name}`);
   const dir = goalFilesDir(seeds, runId);
-  const real = await realpath(dir).catch(() => null);
-  if (real === null) throw new Refused("the goal's files folder is gone");
+  const real = await realpath(dir).catch((e: unknown) => {
+    if (errCode(e) === "ENOENT") throw new Refused("the goal's files folder is gone");
+    throw e;
+  });
   const expected = goalFilesDir(await realpath(seeds), runId);
   if (real !== expected) throw new Refused("the goal's files folder is a link; canopy reads no goal file through one");
   const path = join(expected, name);
