@@ -217,12 +217,20 @@ The Dockerfile pins the shared Bun base by digest. Updating that digest is a
 planned shells upgrade: it rebuilds the shell tools too and requires
 `--shells`. The former floating `oven/bun:1` tag could advance on an ordinary
 deploy and cause exit 3 even when no shell source or settings had changed.
+Pin the digest the running shells were built on, not upstream's newest: the
+Bun version is the `org.opencontainers.image.version` label in
+`docker inspect canopy-shells-1`, and Docker Hub's tag for that version gives
+the digest. On 2026-11-19 the first pin took 1.4.5, which had landed that
+morning, while the shells ran 1.4.4, so the pin itself asked for `--shells`
+until it was moved back to 1.4.4. With the build cache intact, the same
+digest rebuilds the shells stage to the same image and compose leaves the
+container alone.
 
 Two things do drop the shells, and both are visible in the `up` output as
 "Container canopy-shells-1 Recreated". A change to the `shells` stage (the
 apt line, the user, the claude or codex install, either tmux conf under
 `lib/`) rebuilds
-that image, and a base image bump (`oven/bun:1` moving) may also move
+that image, and a base image bump (a new digest in the `bun-base` stage) may also move
 Debian's tmux, and a tmux client and server of different versions refuse each
 other, so after a base bump restart both services in one `up` rather than
 canopy alone. Plan either for a moment when nothing is running in a shell.

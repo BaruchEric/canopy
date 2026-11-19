@@ -25,7 +25,7 @@ One developer (the owner) across a laptop, an always-on Linux backend, a tablet 
 ## Stack and versions
 
 - Bun 1.4.2 runs the server, the CLI and the tests (`bun test`).
-- Docker uses Bun 1.4.5, pinned by digest in `Dockerfile`; changing it requires a planned shells restart.
+- Docker uses Bun 1.4.4, pinned by digest in `Dockerfile` to the base the running shells were built on; changing it requires a planned shells restart.
 - TypeScript 7.0.2, `strict` in both `tsconfig.json` and `ui/tsconfig.json`.
 - React 19.3.1, Zustand 5.0.16, Vite 8.3.5 with @vitejs/plugin-react 6.1.2 for the SPA; a second Vite build makes the service worker (`ui/sw.ts`) into `dist/web/sw.js`.
 - @xterm/xterm 6.0.0 for shells; tmux on the backend keeps them alive.
