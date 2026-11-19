@@ -16,10 +16,11 @@
 # token (the `stages` service).
 # `secrets` and `egress` are plain bun with one bundled service each.
 
-# Bun 1.4.5, pinned by digest: the floating :1 tag also rebuilds the shells
-# and their unpinned tools when upstream moves, unexpectedly requiring --shells.
-# Update this base deliberately when a shells restart is planned.
-FROM oven/bun:1@sha256:3aa040e5445efa09d75bb428a64ba50db13e2b3ac9b6b0c7f145615f62b2ee18 AS bun-base
+# Bun 1.4.4, pinned by digest to the base the running shells were built on:
+# the floating :1 tag rebuilt the shells and their unpinned tools whenever
+# upstream moved, so an ordinary deploy stopped asking for --shells. Bump it
+# only as a planned shells restart (docs/deploy.md).
+FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS bun-base
 
 FROM bun-base AS build
 WORKDIR /app
