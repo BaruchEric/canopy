@@ -1149,13 +1149,17 @@ export interface CoordTask {
 /** the actions a card's run takes: every card's but a project card's, which starts no run */
 export type RunCardAction = Exclude<CoordTask["action"], "project">;
 
-/** What a card starts with (FR-065): a kit.json loadout and Eric's overrides of it. */
+/** What a card starts with (FR-065): a kit.json loadout and Eric's overrides of it.
+ *  A card with no loadout takes the repo's, the machine's or kit.json's
+ *  default when it starts (FR-069); `none` takes none. */
 export interface CardEquip {
   loadout?: string;
   model?: string;
   effort?: AgentEffort;
   skills?: string[];
   mcp?: string[];
+  /** a kit provider of the loadout's harness, or `default` for the harness's own login (FR-069) */
+  provider?: string;
 }
 
 export type RunStatus =
@@ -4277,6 +4281,87 @@ export interface Loadout {
   /** server names from the kit's `mcp` block */
   mcp: string[];
   canopyTools: boolean;
+  /** a provider from kit.json's `providers` block, of the loadout's harness
+   *  (FR-069); absent keeps the route's when the harness is the route's */
+  provider?: string;
+}
+
+/** The name that says "no loadout" outright, so a start takes none even where
+ *  a default would give one (FR-069). No loadout may take it. */
+export const NO_LOADOUT = "none";
+
+/** A card's provider override that means the harness's own login: no
+ *  provider file and no `model_provider`, whatever the loadout or the
+ *  route name (FR-069). The provider ids kit.json takes never include it. */
+export const DEFAULT_PROVIDER = "default";
+
+/** kit.json's `defaults` (FR-069): the loadout a start takes when it names
+ *  none, by repo, then machine, then everywhere. Each value is a loadout's
+ *  name or `none`. */
+export interface LoadoutDefaults {
+  loadout: string | null;
+  /** kit machine name to loadout */
+  machines: Record<string, string>;
+  /** a repo's path under the scan root (`dev-tools/canopy`), or a glob of
+   *  such paths (`dev-tools/*`), to loadout */
+  repos: Record<string, string>;
+}
+
+/** Where an inherited loadout came from (FR-069). */
+export type LoadoutFrom = "repo" | "machine" | "default";
+
+/** The loadout a start takes when it names none, and why (FR-069). */
+export interface LoadoutDefault {
+  /** null: no default reaches this start, or the one that does is `none` */
+  name: string | null;
+  from: LoadoutFrom | null;
+  /** the repo pattern or machine name that matched */
+  key?: string;
+  /** defaults passed over, each with its reason (a loadout kit.json does not
+   *  hold, a harness the start cannot run) */
+  skipped?: string[];
+}
+
+/** A provider's state on one backend (FR-069): `ok` the kit's file is in
+ *  place; `hand` the machine keeps its own file; `drift` the kit wrote the
+ *  file and someone changed it since; `missing` declared without settings and
+ *  no file here; `unresolved` an `${env:…}` the backend's env does not set;
+ *  `refused` a value from the env on a backend whose config the shells read;
+ *  `declared` a Codex provider, which lives in codex's own config; `off` not
+ *  for this machine. */
+export type ProviderState = "ok" | "hand" | "drift" | "missing" | "unresolved" | "refused" | "declared" | "off";
+
+/** kit.json's `providers` block, parsed (FR-069). Server-side only: its
+ *  settings may name env variables, and are never sent to a page. */
+export interface KitProvider {
+  id: string;
+  note: string;
+  harness: Harness;
+  /** kit machine names; null: every backend */
+  machines: string[] | null;
+  /** a Claude provider's settings file, `${env:NAME}` strings unresolved;
+   *  null: declared only, each machine keeps its own file */
+  settings: Record<string, unknown> | null;
+}
+
+/** A provider as a page sees it: names, never values (FR-069). */
+export interface ProviderView {
+  id: string;
+  note: string;
+  harness: Harness;
+  machines: string[] | null;
+  /** whether kit.json carries its settings, or each machine keeps its own */
+  central: boolean;
+  /** the env variables its settings read */
+  envNames: string[];
+  /** the top-level keys of its settings, and the keys of its `env` block */
+  keys: string[];
+  /** this backend's state */
+  state: ProviderState;
+  /** why, for every state but `ok` and `off` */
+  why?: string;
+  /** a hand file was moved aside for the kit's; put back restores it */
+  adopted?: boolean;
 }
 
 /** kit.json's loadouts as this backend parsed them (FR-065). */
@@ -4289,6 +4374,12 @@ export interface LoadoutsInfo {
   /** every server in the kit's `mcp` block (canopy's own left out), sorted, by name only.
    *  `here` is false when a run on this backend would refuse the server. */
   servers: { name: string; here: boolean }[];
+  /** kit.json's `defaults` (FR-069); absent when it has none or the backend predates them */
+  defaults?: LoadoutDefaults;
+  /** kit.json's `providers` with this backend's state of each (FR-069) */
+  providers?: ProviderView[];
+  /** the kit machine this backend is, which `defaults.machines` keys on */
+  machine?: string | null;
 }
 
 /** What a loadout resolved to at a run's start, kept on the run (FR-065). */
@@ -4298,6 +4389,11 @@ export interface RunEquip {
   effort: AgentEffort;
   skills: string[];
   mcp: string[];
+  /** the loadout's provider (FR-069); absent when it names none */
+  provider?: string;
+  /** where an inherited loadout came from, with the key that matched
+   *  (FR-069); absent when the start named it */
+  from?: { from: LoadoutFrom; key?: string };
   /** how many of the machine's skills the run started without: the user
    *  skills turned off and the skills of the plugins turned off, counting
    *  any the person's own settings already turn off */

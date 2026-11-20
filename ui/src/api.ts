@@ -13,6 +13,8 @@ import type {
   KitAction,
   KitApplyResult,
   KitInfo,
+  LoadoutDefault,
+  LoadoutsInfo,
   LandEntry,
   LandingInfo,
   WorktreesInfo,
@@ -741,6 +743,11 @@ export const api = {
   /** the kit on one backend: the machines it reaches, their cells and plans */
   kit: (b: string = homeName()) => req<KitInfo>(b, "/api/kit"),
   kitScan: (b: string) => req<KitInfo>(b, "/api/kit/scan", { method: "POST", body: "{}" }),
+  /** move a backend's own providers/<id>.json aside for kit.json's, or put it back (FR-069) */
+  kitProvider: (b: string, act: "adopt" | "restore", id: string) =>
+    req<LoadoutsInfo>(b, `/api/kit/providers/${act}`, { method: "POST", body: JSON.stringify({ id }) }),
+  /** the loadout a start in this repo takes when it names none, and the defaults passed over */
+  loadoutResolve: (id: string, action: string) => repoReq<LoadoutDefault>(id, (p) => `/api/loadouts/resolve?${rq(p, { action })}`),
   /** the machine's whole plan, or the actions given (one cell's) */
   kitApply: (b: string, machine: string, actions?: KitAction[]) =>
     req<KitApplyResult>(b, "/api/kit/apply", { method: "POST", body: JSON.stringify({ machine, actions }) }),

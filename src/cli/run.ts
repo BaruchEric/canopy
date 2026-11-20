@@ -86,7 +86,7 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
     times = Number(rawTimes);
     if (times < 1 || times > 3) return "--times must be 1, 2, or 3";
   }
-  if (loadout !== undefined && (times > 1 || profilesFlag)) return "--loadout starts one run; use --profiles for a group";
+  if (loadout !== undefined && loadout !== "none" && (times > 1 || profilesFlag)) return "--loadout starts one run; use --profiles for a group";
   if (autoLand && times === 1) return "--auto-land requires --times 2 or 3";
   if (profilesFlag && times === 1) return "--profiles requires --times 2 or 3";
   if (reviewersFlag && times === 1) return "--reviewers requires --times 2 or 3";
@@ -276,7 +276,7 @@ async function runStartCommand(argv: string[], { fail }: RunCommandDeps): Promis
     return;
   }
   if (parsed.times > 1) return fail("the backend did not return a group record");
-  if (parsed.loadout !== undefined && !result.equip) {
+  if (parsed.loadout !== undefined && parsed.loadout !== "none" && !result.equip) {
     return fail(`run ${result.id} started on ${backendWord(target)} without loadout ${parsed.loadout}; stop it and redeploy ${backendWord(target)}`);
   }
   console.log(`${result.id} ${result.status}`);

@@ -297,6 +297,14 @@ export class BranchTrees {
     return this.leaving.has(dir);
   }
 
+  /** The checkout a kept tree's folder was made from, or null for a folder
+   *  that is no kept tree: kit.json's repo defaults key on the checkout's
+   *  path (FR-069). */
+  checkoutOf(dir: string): string | null {
+    for (const [path, rec] of this.records) if (rec.trees.some((x) => treeDir(path, x.slug, this.root) === dir)) return path;
+    return null;
+  }
+
   /** The tree a folder is, for a shell restored into one: its name and port. */
   treeAt(dir: string): { slug: string; port: number | null } | null {
     for (const [path, rec] of this.records) {

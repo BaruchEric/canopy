@@ -627,11 +627,14 @@ try {
       const open = await sheet.waitFor({ timeout: 5000 }).then(() => true, () => false);
       await page.waitForTimeout(800);
       const box = open ? await sheet.boundingBox() : null;
+      // three loadouts and none (FR-069), which takes no loadout at all
       const picks = open ? await sheet.locator(".mgr-equip-pick").count() : 0;
       const skills = open ? await sheet.locator('section[aria-label="skills"] .mgr-equip-opt').count() : 0;
+      // the kit's answer holds no providers, so the row offers the route's and the login
+      const providers = open ? (await sheet.locator('section[aria-label="model and effort"] .mgr-equip-seg').last().locator("button").allInnerTexts()).map((t) => t.trim()) : [];
       check(
-        open && Math.round(box?.width ?? 0) === 390 && Math.round(box?.height ?? 0) === 844 && picks === 3 && skills === 3,
-        `at 390px t3's equip sheet fills the screen (${Math.round(box?.width ?? 0)} by ${Math.round(box?.height ?? 0)}) with ${picks} loadouts and ${skills} skills`,
+        open && Math.round(box?.width ?? 0) === 390 && Math.round(box?.height ?? 0) === 844 && picks === 4 && skills === 3 && providers.join(",") === "the route's,login",
+        `at 390px t3's equip sheet fills the screen (${Math.round(box?.width ?? 0)} by ${Math.round(box?.height ?? 0)}) with ${picks} picks (three loadouts and none), ${skills} skills and the providers ${providers.join(", ") || "none"}`,
       );
       const inSheet = await shortButtons(page, ".mgr-equip");
       check(

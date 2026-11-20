@@ -436,7 +436,7 @@ describe("a coordinator's card with a loadout", () => {
   let kitFile = "";
   /** kit.json with this backend as its one machine and these loadouts; the
    *  store target sits in the scratch folder, so a scan never reads the real ~/.claude */
-  const writeKit = (loadouts: Record<string, unknown>): Promise<void> =>
+  const writeKit = (loadouts: Record<string, unknown>, more: Record<string, unknown> = {}): Promise<void> =>
     writeFile(kitFile, JSON.stringify({
       version: 1,
       machines: { here: { backend: selfName(null, hostname()) } },
@@ -444,6 +444,7 @@ describe("a coordinator's card with a loadout", () => {
       skills: {},
       mcp: { probe: { command: "bash", args: ["-c", "true"], machines: ["here"] } },
       loadouts,
+      ...more,
     }));
   /** the loadouts these tests start from: `quick` holds no server, `probed` one */
   const LOADOUTS = { quick: { model: "haiku", canopyTools: true }, probed: { model: "haiku", effort: "low", mcp: ["probe"] } };
@@ -555,6 +556,36 @@ describe("a coordinator's card with a loadout", () => {
     expect(callers.callers.filter((c) => c.kind === "run")).toEqual([]);
     await postAs(s, "/api/runs/stop", { id }, s.page);
     await until(async () => !existsSync(ctx.spec.settings ?? ""), "the child's settings file to go");
+  });
+
+  test("a card with no loadout takes the repo's default (FR-069), and none takes none", async () => {
+    try {
+      await writeKit(LOADOUTS, { defaults: { repos: { app: "probed" } } });
+      expect((await postAs(s, "/api/kit/scan", {}, s.page)).status).toBe(200);
+      await until(async () => ((await (await call(s, "/api/loadouts", s.page)).json()) as LoadoutsInfo).defaults?.repos["app"] === "probed", "the repo's default");
+      const bare = await startCard({});
+      const id = bare.tasks[0]?.run ?? "";
+      live.push(id);
+      const child = (await runs()).find((r) => r.id === id);
+      expect(child?.equip).toMatchObject({ loadout: "probed", from: { from: "repo", key: "app" } });
+      // the card itself stays bare: what it inherits is read when it starts
+      expect(bare.tasks[0]?.equip).toBeUndefined();
+      const ctx = await ctxOf(id);
+      expect(ctx.spec.servers).toEqual(["probe"]);
+      expect(ctx.spec.canopy).toBeUndefined();
+      // one coordinator per repo at a time, so this one ends before the next
+      for (const r of live.splice(0).reverse()) await postAs(s, "/api/runs/stop", { id: r }, s.page);
+      await until(async () => !(await runs()).some((r) => r.id === bare.coord && isRunActive(r)), "the first coordinator to end");
+
+      const none = await startCard({ equip: { loadout: "none" } });
+      const nid = none.tasks[0]?.run ?? "";
+      live.push(nid);
+      expect((await runs()).find((r) => r.id === nid)?.equip).toBeUndefined();
+    } finally {
+      await writeKit(LOADOUTS);
+      expect((await postAs(s, "/api/kit/scan", {}, s.page)).status).toBe(200);
+      await until(async () => ((await (await call(s, "/api/loadouts", s.page)).json()) as LoadoutsInfo).defaults === undefined, "the defaults gone");
+    }
   });
 
   test("a card with times gives every member the card's loadout", async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { actionText, adoptableIn, allowAct, cellActions, cellAt, columns, homesFor, machineSpans, mcpViewsOf, mergeKit, rows, serverAt, serverRows, serverSheetFor, sheetFor, sheetKey, skillSheetFor, toolAt, toolRows, toolSheetFor } from "./kit";
+import { actionText, adoptableIn, allowAct, cellActions, cellAt, columns, defaultsLines, homesFor, machineSpans, mcpViewsOf, mergeKit, providerAct, providerTable, rows, serverAt, serverRows, serverSheetFor, sheetFor, sheetKey, skillSheetFor, toolAt, toolRows, toolSheetFor } from "./kit";
 import { parseAct } from "../../src/core/secretwire";
-import type { KitAction, KitCell, KitInfo, KitMachineView, KitMcpView } from "../../src/core/types";
+import type { KitAction, KitCell, KitInfo, KitMachineView, KitMcpView, ProviderView } from "../../src/core/types";
 
 const c = (machine: string, agent: string, skill: string, state: KitCell["state"]): KitCell => ({ machine, agent, skill, state, why: "" });
 const info = (cells: KitCell[]): KitInfo => ({ ok: true, error: null, machines: [], cells });
@@ -164,5 +164,46 @@ describe("tools", () => {
     expect(toolSheetFor(toolAt(cells, "jq", "gpd"))).toEqual({ kind: "tool", machine: "gpd", name: "jq" });
     expect(toolSheetFor(toolAt(cells, "sops", "gpd"))).toBeNull();
     expect(toolSheetFor(toolAt(cells, "jq", "mac"))).toBeNull();
+  });
+});
+
+describe("providers and defaults (FR-069)", () => {
+  const view = (id: string, state: ProviderView["state"], more: Partial<ProviderView> = {}): ProviderView =>
+    ({ id, note: "", harness: "claude", machines: null, central: true, envNames: [], keys: [], state, ...more });
+  const withProviders = (machine: string | null, providers: ProviderView[] | undefined): KitInfo => ({
+    ok: true, error: null, machines: [], cells: [],
+    loadouts: { base: [], loadouts: [], errors: [], servers: [], machine, ...(providers ? { providers } : {}) },
+  });
+
+  test("one column per backend with providers, one row per provider", () => {
+    const t = providerTable({
+      mac: withProviders("mac", [view("local", "hand", { central: false }), view("gw", "ok")]),
+      mini: withProviders("mini", [view("local", "off", { central: false }), view("gw", "unresolved")]),
+      desoto: withProviders(null, undefined),
+      broken: { ok: false, error: "no kit.json", machines: [], cells: [] },
+    });
+    expect(t.cols).toEqual([{ backend: "mac", machine: "mac" }, { backend: "mini", machine: "mini" }]);
+    expect(t.rows.map((r) => r.id)).toEqual(["local", "gw"]);
+    expect(t.rows[1]?.cells["mini"]?.state).toBe("unresolved");
+  });
+
+  test("a backend kit.json does not name is labelled by its own name", () => {
+    expect(providerTable({ desoto: withProviders(null, [view("gw", "ok")]) }).cols).toEqual([{ backend: "desoto", machine: "desoto" }]);
+  });
+
+  test("a hand file with central settings offers adopt; an adopted one offers put back", () => {
+    expect(providerAct(view("gw", "hand"))).toBe("adopt");
+    expect(providerAct(view("local", "hand", { central: false }))).toBeNull();
+    expect(providerAct(view("gw", "ok", { adopted: true }))).toBe("restore");
+    expect(providerAct(view("gw", "ok"))).toBeNull();
+    expect(providerAct(undefined)).toBeNull();
+  });
+
+  test("the defaults read everywhere first, then machines, then repos", () => {
+    expect(defaultsLines({ loadout: "quick", machines: { mini: "feature" }, repos: { "web-apps/clms": "frontend", "dev-tools/*": "none" } })).toEqual([
+      "every start: quick", "machine mini: feature", "web-apps/clms: frontend", "dev-tools/*: none",
+    ]);
+    expect(defaultsLines({ loadout: null, machines: {}, repos: {} })).toEqual([]);
+    expect(defaultsLines(undefined)).toEqual([]);
   });
 });

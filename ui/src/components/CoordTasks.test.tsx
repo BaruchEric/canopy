@@ -308,9 +308,9 @@ describe("the card's form", () => {
     return [...body.matchAll(/<option[^>]*>([^<]*)<\/option>/g)].map((m) => m[1] ?? "");
   };
 
-  test("a proposed card's form offers a loadout, none first, a workflow and an after field", () => {
+  test("a proposed card's form offers a loadout, the default and none first, a workflow and an after field", () => {
     const html = form(card("t4", "proposed", { after: ["t1"] }));
-    expect(options(html, "Loadout")).toEqual(["no loadout", "feature", "docs (sonnet)"]);
+    expect(options(html, "Loadout")).toEqual(["the default loadout", "no loadout, not even the default", "feature", "docs (sonnet)"]);
     expect(options(html, "Workflow")[0]).toBe("no workflow");
     expect(html).toMatch(/<input [^>]*aria-label="After"[^>]*value="t1"\/>/);
     expect(html).toContain('aria-label="Card title"');
@@ -318,7 +318,7 @@ describe("the card's form", () => {
 
   test("a queued card's form offers only its loadout and after", () => {
     const html = form(card("t2", "queued", { equip: { loadout: "docs" } }));
-    expect(options(html, "Loadout")).toEqual(["no loadout", "feature", "docs (sonnet)"]);
+    expect(options(html, "Loadout")).toEqual(["the default loadout", "no loadout, not even the default", "feature", "docs (sonnet)"]);
     expect(html).toContain('aria-label="After"');
     expect(html).not.toContain('aria-label="Card title"');
     expect(html).not.toContain('aria-label="Workflow"');

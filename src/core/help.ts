@@ -107,7 +107,12 @@ usage:
                                      what the paid services spent across every backend the home one lists, by service and by repo;
                                      --share adds the tooling share, dollars and Claude sessions, and eight weeks of it
     --on NAME / --backend URL        as canopy health
-  canopy loadouts [--json]           the loadouts kit.json offers a run, the skills always on, and what kit.json got wrong
+  canopy loadouts [--json]           the loadouts kit.json offers a run, the skills always on, the defaults by repo,
+                                     machine and everywhere, each provider's state on the backend, and what kit.json got wrong
+  canopy loadouts resolve <repo> [--action propose]
+                                     the loadout a start in the repo takes when it names none, and the defaults passed over
+  canopy loadouts adopt|restore <provider>
+                                     move the backend's own providers/<id>.json aside for kit.json's, or put it back
     --backend URL | --on NAME        select the backend
   canopy capacity [--json]           each backend's usage windows, the limit hit that holds work, and the starts held for capacity
   canopy capacity read               read the windows now
@@ -139,7 +144,8 @@ usage:
   canopy mcp tools                   the tools that token holds, one per line
   canopy run <repo> <action> [-m note] [--times 1|2|3] [--profiles a,b,c] [--reviewers 2] [--auto-land] [--pr]   start one branch run or a group to compare
   canopy run <repo> <action> --tools|--no-tools   canopy's tools on or off for this run, over its settings
-  canopy run <repo> <action> --loadout NAME   start one run with a loadout from kit.json: its model, effort, skills and servers
+  canopy run <repo> <action> --loadout NAME   start one run with a loadout from kit.json: its model, effort, skills and servers;
+                                     with none, a run takes no loadout; without the flag, the repo's, machine's or kit's default
     --priority interactive|normal|low  who goes first when the plan's window runs low; a group is low unless raised
     --backend URL | --on NAME       select the backend that owns the repo
   canopy runs child <repo> --note text --parent <run> [--action ask|propose]   start a child of a live run, as its canopy_run_start would

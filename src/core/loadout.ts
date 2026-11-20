@@ -1,23 +1,38 @@
 // Loadouts (FR-065): the `loadoutBase` and `loadouts` blocks of kit.json,
-// parsed and checked against the kit's servers. Pure and browser-safe.
+// parsed and checked against the kit's servers, with the providers a loadout
+// may name and the defaults that hand one to a start that names none
+// (FR-069). Pure and browser-safe.
 import { takesEffort, takesModel } from "./harness";
+import { parseProviders } from "./providers";
+import { TREES_SOURCE } from "./treewords";
 import {
   isHarness,
+  LAUNCH_SOURCE,
+  NO_LOADOUT,
+  DEFAULT_PROVIDER,
   type AgentSettings,
   type CardEquip,
   type Harness,
   type KitManifest,
   type KitMcpEntry,
+  type KitProvider,
   type Loadout,
+  type LoadoutDefault,
+  type LoadoutDefaults,
+  type LoadoutFrom,
   type LoadoutsInfo,
   type Mention,
+  type Repo,
   type RunEquip,
 } from "./types";
 
 export const LOADOUT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const SKILL_KEY = /^[A-Za-z0-9][\w.-]*(:[A-Za-z0-9][\w.-]*)?$/;
 const BASE_KEY = /^[A-Za-z0-9][\w.-]*(:([A-Za-z0-9][\w.-]*|\*))?$/;
-const FIELDS = ["note", "harness", "model", "effort", "skills", "mcp", "canopyTools"];
+const FIELDS = ["note", "harness", "model", "effort", "skills", "mcp", "canopyTools", "provider"];
+/** a repo's path under the scan root, or a glob of such paths: no leading
+ *  slash, no `..`, `*` for any run of characters */
+const REPO_KEY = /^[A-Za-z0-9._*-]+(\/[A-Za-z0-9._*-]+)*$/;
 
 export const EMPTY_LOADOUTS: LoadoutsInfo = { base: [], loadouts: [], errors: [], servers: [] };
 
@@ -39,7 +54,7 @@ export function baseCovers(base: readonly string[], skill: string): boolean {
   return base.some((b) => b === skill || (b.endsWith(":*") && skill.startsWith(b.slice(0, -1))));
 }
 
-function parseOne(name: string, o: Record<string, unknown>, kit: KitManifest, errors: string[]): Loadout | null {
+function parseOne(name: string, o: Record<string, unknown>, kit: KitManifest, providers: readonly KitProvider[], errors: string[]): Loadout | null {
   const at = `loadouts.${name}`;
   const before = errors.length;
   const bad = (field: string, why: string): void => void errors.push(`${at}.${field}: ${why}`);
@@ -105,17 +120,63 @@ function parseOne(name: string, o: Record<string, unknown>, kit: KitManifest, er
     else bad("canopyTools", "true or false");
   }
 
+  let provider: string | undefined;
+  if (o["provider"] !== undefined && harnessOk) {
+    const p = typeof o["provider"] === "string" ? providers.find((x) => x.id === o["provider"]) : undefined;
+    if (!p) bad("provider", `no provider ${String(o["provider"])} in kit.json's providers`);
+    else if (p.harness !== harness) bad("provider", `${p.id} is a ${p.harness} provider; the loadout runs ${harness}`);
+    else provider = p.id;
+  }
+
   if (errors.length > before) return null;
-  return { name, note, harness, model, effort, skills, mcp, canopyTools };
+  return { name, note, harness, model, effort, skills, mcp, canopyTools, ...(provider ? { provider } : {}) };
+}
+
+/** A default's value: a loadout that parsed, or `none`. */
+function defaultValue(v: unknown, at: string, loadouts: readonly Loadout[], errors: string[]): string | null {
+  if (v === NO_LOADOUT) return NO_LOADOUT;
+  if (typeof v !== "string" || !LOADOUT_NAME.test(v)) { errors.push(`${at}: a loadout's name or none`); return null; }
+  if (!loadouts.some((l) => l.name === v)) { errors.push(`${at}: no loadout ${v} that parsed`); return null; }
+  return v;
+}
+
+/** kit.json's `defaults` block (FR-069), checked against the loadouts that
+ *  parsed and the machines kit.json declares. An entry with a problem is left
+ *  out and named; the rest still apply. */
+function parseDefaults(raw: unknown, kit: KitManifest, loadouts: readonly Loadout[], errors: string[]): LoadoutDefaults | undefined {
+  if (raw === undefined) return undefined;
+  if (!isObj(raw)) { errors.push("defaults: an object with loadout, machines and repos"); return undefined; }
+  for (const k of Object.keys(raw)) if (!["loadout", "machines", "repos"].includes(k)) errors.push(`defaults.${k}: not a defaults field`);
+  const out: LoadoutDefaults = { loadout: null, machines: {}, repos: {} };
+  if (raw["loadout"] !== undefined) out.loadout = defaultValue(raw["loadout"], "defaults.loadout", loadouts, errors);
+  const block = (field: "machines" | "repos", keyOk: (k: string) => string | null): void => {
+    const v = raw[field];
+    if (v === undefined) return;
+    if (!isObj(v)) { errors.push(`defaults.${field}: an object of ${field === "machines" ? "machine" : "repo path"} to loadout`); return; }
+    for (const [k, x] of Object.entries(v)) {
+      const why = keyOk(k);
+      if (why) { errors.push(`defaults.${field}.${k}: ${why}`); continue; }
+      const name = defaultValue(x, `defaults.${field}.${k}`, loadouts, errors);
+      if (name !== null) out[field][k] = name;
+    }
+  };
+  // a typo in a machine's name would keep its default off where it was meant for
+  block("machines", (k) => (kit.machines.some((m) => m.name === k) ? null : "not a machine kit.json declares"));
+  block("repos", (k) => (REPO_KEY.test(k) && !k.split("/").includes("..") ? null : "a repo's path under the dev folder, like dev-tools/canopy, or a glob like dev-tools/*"));
+  return out;
 }
 
 /** kit.json's `loadoutBase` and `loadouts` blocks. A loadout with a problem
  *  is left out and named in `errors`; the rest still parse. With no kit
  *  there is nothing to check servers against, so no loadout is taken. */
 export function parseLoadouts(raw: unknown, kit: KitManifest | null): LoadoutsInfo {
-  if (!isObj(raw) || (raw["loadouts"] === undefined && raw["loadoutBase"] === undefined)) return EMPTY_LOADOUTS;
+  if (!isObj(raw) || (raw["loadouts"] === undefined && raw["loadoutBase"] === undefined && raw["defaults"] === undefined && raw["providers"] === undefined)) return EMPTY_LOADOUTS;
   if (!kit) return { base: [], loadouts: [], errors: ["loadouts: kit.json did not parse, so no loadout can be checked"], servers: [] };
   const errors: string[] = [];
+  // the providers' own problems are named here; the kit hub parses them again for their settings
+  const parsedProviders = parseProviders(raw["providers"], kit.machines);
+  const providers = parsedProviders.providers;
+  errors.push(...parsedProviders.errors);
 
   let base: string[] = [];
   const lb = raw["loadoutBase"];
@@ -132,23 +193,80 @@ export function parseLoadouts(raw: unknown, kit: KitManifest | null): LoadoutsIn
     else {
       for (const [name, def] of Object.entries(block)) {
         if (!LOADOUT_NAME.test(name)) errors.push(`loadouts.${name}: a name of lowercase letters, digits and dashes`);
+        else if (name === NO_LOADOUT) errors.push(`loadouts.${name}: ${NO_LOADOUT} is kept to mean no loadout`);
         else if (!isObj(def)) errors.push(`loadouts.${name}: not an object`);
         else {
-          const l = parseOne(name, def, kit, errors);
+          const l = parseOne(name, def, kit, providers, errors);
           if (l) loadouts.push(l);
         }
       }
     }
   }
-  // the servers (and where they run) are filled in by the kit hub, which knows this machine
-  return { base, loadouts, errors, servers: [] };
+  const defaults = parseDefaults(raw["defaults"], kit, loadouts, errors);
+  // the servers (and where they run) and the providers' states are filled in
+  // by the kit hub, which knows this machine
+  return { base, loadouts, errors, servers: [], ...(defaults ? { defaults } : {}) };
+}
+
+const globMatch = (pattern: string, s: string): boolean =>
+  new RegExp(`^${pattern.split("*").map((x) => x.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`).test(s);
+
+/** The repo patterns in `defaults.repos` that match a repo's path, most
+ *  specific first: the exact key, then globs by length, longest first. */
+export function repoKeysFor(repos: Readonly<Record<string, string>>, rel: string): string[] {
+  const keys = Object.keys(repos);
+  const exact = keys.filter((k) => k === rel);
+  const globs = keys.filter((k) => k !== rel && k.includes("*") && globMatch(k, rel)).sort((a, b) => b.length - a.length || a.localeCompare(b));
+  return [...exact, ...globs];
+}
+
+/** The loadout a start that names none takes (FR-069): the repo's default,
+ *  then the machine's, then kit.json's. `none` at any of them stops there
+ *  with no loadout. A default naming a loadout kit.json does not hold, or
+ *  one `fits` turns away (a harness the start cannot run), is passed over
+ *  and named in `skipped`. */
+export function defaultLoadout(
+  info: Pick<LoadoutsInfo, "defaults" | "loadouts">,
+  at: { machine: string | null; rel: string | null },
+  fits: (l: Loadout) => string | null = () => null,
+): LoadoutDefault {
+  const d = info.defaults;
+  const skipped: string[] = [];
+  const done = (r: LoadoutDefault): LoadoutDefault => (skipped.length > 0 ? { ...r, skipped } : r);
+  if (!d) return { name: null, from: null };
+  const tries: { from: LoadoutFrom; key?: string; name: string }[] = [
+    ...(at.rel === null ? [] : repoKeysFor(d.repos, at.rel).map((key) => ({ from: "repo" as const, key, name: d.repos[key] ?? "" }))),
+    ...(at.machine !== null && d.machines[at.machine] !== undefined ? [{ from: "machine" as const, key: at.machine, name: d.machines[at.machine] ?? "" }] : []),
+    ...(d.loadout !== null ? [{ from: "default" as const, name: d.loadout }] : []),
+  ];
+  for (const t of tries) {
+    const where = t.key ? `${t.from} ${t.key}` : t.from;
+    if (t.name === NO_LOADOUT) return done({ name: null, from: t.from, ...(t.key ? { key: t.key } : {}) });
+    const lo = info.loadouts.find((l) => l.name === t.name);
+    if (!lo) { skipped.push(`${where}: no loadout ${t.name} in kit.json`); continue; }
+    const why = fits(lo);
+    if (why) { skipped.push(`${where}: ${t.name} ${why}`); continue; }
+    return done({ name: lo.name, from: t.from, ...(t.key ? { key: t.key } : {}) });
+  }
+  return done({ name: null, from: null });
+}
+
+/** The key `defaults.repos` matches a repo by: its path under its source's
+ *  root, read back out of its id (bare under the launch root, after
+ *  `<source>:` elsewhere), so `dev-tools/canopy` on the Mac and the mini
+ *  alike. A kept tree's card has no key of its own; its checkout's is used. */
+export function defaultsKey(repo: Pick<Repo, "id" | "source">): string | null {
+  if (repo.source === TREES_SOURCE) return null;
+  const rel = repo.source === LAUNCH_SOURCE ? repo.id : repo.id.startsWith(`${repo.source}:`) ? repo.id.slice(repo.source.length + 1) : repo.id;
+  return rel === "" || rel === "." ? null : rel;
 }
 
 /** What `GET /api/loadouts` answers a caller. A coordinator gets base and
  *  loadouts only: kit.json's errors are Eric's to read (a parse error can
  *  quote the file), and the server list is for the person's page. */
-export function loadoutsView(info: LoadoutsInfo, caller: string | undefined): LoadoutsInfo | Pick<LoadoutsInfo, "base" | "loadouts"> {
-  return caller === "coordinator" ? { base: info.base, loadouts: info.loadouts } : info;
+export function loadoutsView(info: LoadoutsInfo, caller: string | undefined): LoadoutsInfo | Pick<LoadoutsInfo, "base" | "loadouts" | "defaults"> {
+  // the defaults name loadouts only, so a manager sees what a card it leaves bare takes
+  return caller === "coordinator" ? { base: info.base, loadouts: info.loadouts, ...(info.defaults ? { defaults: info.defaults } : {}) } : info;
 }
 
 /** The loadout a card starts with: the named one with Eric's overrides laid
@@ -163,19 +281,30 @@ export function cardLoadout(equip: CardEquip, info: LoadoutsInfo): Loadout | { r
   if (equip.mcp?.includes("canopy")) return { refused: "a card's worker never holds canopy's own server" };
   if (equip.model !== undefined && !takesModel(lo.harness, equip.model)) return { refused: `${lo.harness} does not take ${equip.model}` };
   if (equip.effort !== undefined && !takesEffort(lo.harness, equip.effort)) return { refused: `${lo.harness} does not take ${equip.effort}` };
+  if (equip.provider !== undefined && equip.provider !== DEFAULT_PROVIDER) {
+    const p = info.providers?.find((x) => x.id === equip.provider);
+    if (!p) return { refused: `no provider ${equip.provider} in kit.json` };
+    if (p.harness !== lo.harness) return { refused: `${p.id} is a ${p.harness} provider; ${lo.name} runs ${lo.harness}` };
+  }
+  const provider = equip.provider ?? lo.provider;
+  const { provider: _own, ...rest } = lo;
   return {
-    ...lo,
+    ...rest,
     model: equip.model ?? lo.model,
     effort: equip.effort ?? lo.effort,
     skills: [...(equip.skills ?? lo.skills)],
     mcp: [...(equip.mcp ?? lo.mcp)],
     canopyTools: false,
+    ...(provider ? { provider } : {}),
   };
 }
 
 /** The loadout a run started with, rebuilt from its equip, so a restart gets the same one whatever kit.json says now. */
 export function loadoutOfEquip(equip: RunEquip, harness: Harness): Loadout {
-  return { name: equip.loadout, note: "", harness, model: equip.model, effort: equip.effort, skills: [...equip.skills], mcp: [...equip.mcp], canopyTools: false };
+  return {
+    name: equip.loadout, note: "", harness, model: equip.model, effort: equip.effort, skills: [...equip.skills], mcp: [...equip.mcp], canopyTools: false,
+    ...(equip.provider ? { provider: equip.provider } : {}),
+  };
 }
 
 /** What a loadout start needs from the route and the machine. */
@@ -255,6 +384,8 @@ export function planLoadoutStart(o: {
   /** the kit's own name for this machine, for the refusal */
   machine: string;
   entryOf: (server: string) => { entry: KitMcpEntry } | { why: string };
+  /** why the loadout's provider cannot serve a start here, or null */
+  providerRefusal?: (id: string) => string | null;
 }): LoadoutStartPlan | { refused: string } {
   const loadout = o.info.loadouts.find((l) => l.name === o.name);
   if (!loadout) {
@@ -272,10 +403,15 @@ export function planLoadoutStart(o: {
     if ("why" in got) return { refused: `loadout ${loadout.name}: ${got.why}` };
     servers[name] = got.entry;
   }
+  if (loadout.provider) {
+    const why = o.providerRefusal?.(loadout.provider) ?? null;
+    if (why) return { refused: `loadout ${loadout.name}: ${why}` };
+  }
   const codex = loadout.harness === "codex";
   const { provider: _provider, ...rest } = o.agent;
   const kept = loadout.harness === o.agent.harness ? o.agent : { ...rest, extra: "" };
-  const agent: AgentSettings = { ...kept, harness: loadout.harness, model: loadout.model, effort: loadout.effort };
+  // the loadout's provider beats the route's; with none, the route's stays on its own harness
+  const agent: AgentSettings = { ...kept, harness: loadout.harness, model: loadout.model, effort: loadout.effort, ...(loadout.provider ? { provider: loadout.provider } : {}) };
   const { overrides, plugins, pluginsOff, off }: SkillPlan = codex ? { overrides: {}, plugins: {}, pluginsOff: [], off: 0 } : skillOverridesFor(loadout, o.info.base, o.skills);
   return {
     agent,
@@ -286,6 +422,7 @@ export function planLoadoutStart(o: {
     equip: {
       loadout: loadout.name, model: loadout.model, effort: loadout.effort, skills: [...loadout.skills], mcp: [...loadout.mcp], off,
       ...(pluginsOff.length > 0 ? { pluginsOff } : {}),
+      ...(loadout.provider ? { provider: loadout.provider } : {}),
     },
   };
 }

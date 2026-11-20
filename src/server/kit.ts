@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { onHost } from "../core/exec";
 import { buildEntry, cellsOf, hasSecrets, maskEntry, needsSudo, OWNED_NOT_IGNORED, mcpDefOf, mcpHash, mcpTargets, mcpWanted, parseKit, planKit, planMcp, pluginAgentsOn, secretsOf, wantLink, withCanopyServer } from "../core/kit";
 import { EMPTY_LOADOUTS, parseLoadouts } from "../core/loadout";
+import { parseProviders, providerHere } from "../core/providers";
+import { ProviderError, type ProviderSync } from "./providers";
 import { applyKit } from "../core/kitapply";
 import { seeKit, seeMcp, seeTools } from "../core/kitscan";
 import { catalogOf, changeLines, commitMessage, isPluginAgent, isPluginOp, jsonOf, opPlan, outcomeOf, parseCodexList, PLUGIN_ID, refusal, searchCatalog, settingsChange } from "../core/plugins";
@@ -49,9 +51,12 @@ export interface KitHubDeps {
   hostHome?: string;
   /** where ${env:NAME} resolves; this process's environment by default */
   procEnv?: Record<string, string | undefined>;
+  /** this backend's providers folder, kept in step with kit.json's
+   *  `providers` (FR-069); absent: the kit writes no provider here */
+  providers?: ProviderSync;
 }
 
-class KitError extends Error {
+export class KitError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
 
@@ -109,6 +114,63 @@ export class KitHub {
     return this.kit?.machines.find((m) => m.backend === this.deps.self)?.name ?? null;
   }
 
+  /** kit.json's providers written here (FR-069), and each one's state on the
+   *  loadouts the page reads. A sync that fails says so in the errors and
+   *  leaves the folder as it was. */
+  private async syncProviders(raw: unknown): Promise<void> {
+    if (!this.kit) return;
+    const block = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>)["providers"] : undefined;
+    const { providers } = parseProviders(block, this.kit.machines);
+    let views = this.deps.providers?.views() ?? [];
+    let error: string | null = null;
+    if (this.deps.providers) {
+      views = await this.deps.providers.sync(providers).catch((err: unknown) => {
+        error = `providers: ${err instanceof Error ? err.message : String(err)}`;
+        return views;
+      });
+    }
+    this.loadoutsInfo = {
+      ...this.loadoutsInfo,
+      machine: this.machineName(),
+      ...(block !== undefined || views.length > 0 ? { providers: views } : {}),
+      ...(error ? { errors: [...this.loadoutsInfo.errors, error] } : {}),
+    };
+  }
+
+  /** Why a start here cannot use a provider (FR-069), or null. A provider
+   *  kit.json declares must be for this machine and in a state a start can
+   *  read; one kit.json does not declare is a hand file the start reads as
+   *  before, and fails on there when it is missing. */
+  providerRefusal(id: string): string | null {
+    const view = this.loadoutsInfo.providers?.find((p) => p.id === id);
+    if (!view) return null;
+    const where = this.machineName() ?? this.deps.self;
+    if (view.state === "off") return `provider ${id} is not for ${where}`;
+    if (view.state === "missing" || view.state === "unresolved" || view.state === "refused") return `provider ${id} cannot serve here: ${view.why ?? view.state}`;
+    return null;
+  }
+
+  /** Adopt or put back a provider's hand file (FR-069), then publish. */
+  async providerAct(kind: "adopt" | "restore", id: string): Promise<LoadoutsInfo> {
+    if (!this.deps.providers) throw new KitError("this backend keeps no providers", 409);
+    try {
+      const views = kind === "adopt" ? await this.deps.providers.adopt(id) : await this.deps.providers.restore(id);
+      this.loadoutsInfo = { ...this.loadoutsInfo, providers: views };
+    } catch (err) {
+      if (err instanceof ProviderError) throw new KitError(err.message, err.status);
+      throw err;
+    }
+    this.last = { ...this.last, loadouts: this.loadoutsInfo };
+    this.deps.broadcast({ type: "kit", kit: this.last });
+    return this.loadoutsInfo;
+  }
+
+  /** whether kit.json puts a provider on this backend; for the page's picks */
+  providerIsHere(id: string): boolean {
+    const p = this.loadoutsInfo.providers?.find((x) => x.id === id);
+    return p ? providerHere(p, this.machineName()) : false;
+  }
+
   /** the claude entry a run on this backend gets for a kit server, or why it gets none */
   runEntry(server: string): { entry: KitMcpEntry } | { why: string } {
     const machine = this.machineName();
@@ -156,9 +218,11 @@ export class KitHub {
    *  (gpd waiting on a Tailscale browser check) never holds up the others */
   private async doScan(): Promise<KitInfo> {
     let kit: KitManifest;
+    let raw: unknown;
     try {
       const r = await this.read();
       kit = r.kit;
+      raw = r.raw;
       this.loadoutsInfo = parseLoadouts(r.raw, kit);
     } catch (err) {
       this.kit = null;
@@ -175,6 +239,7 @@ export class KitHub {
     this.kit = kit;
     // runEntry reads this.kit, so the servers wait until it is set
     this.loadoutsInfo = { ...this.loadoutsInfo, servers: kit.mcp.filter((x) => x.name !== "canopy").map((x) => x.name).sort().map((name) => ({ name, here: "entry" in this.runEntry(name) })) };
+    await this.syncProviders(raw);
     const mine = this.mine(kit);
     for (const name of this.views.keys()) if (!mine.some((m) => m.name === name)) this.views.delete(name);
     // a backend that is no machine and reaches none has no scan to publish,
@@ -643,6 +708,11 @@ export class KitHub {
         if (path === "/api/kit/plugins/details") return json(await this.details(machine, agent, q.get("id") ?? ""));
         const limit = Math.min(200, Math.max(1, Number(q.get("limit") ?? "50") || 50));
         return json(await this.catalog(machine, agent, q.get("q") ?? "", limit, q.get("fresh") === "1"));
+      }
+      if ((path === "/api/kit/providers/adopt" || path === "/api/kit/providers/restore") && req.method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as { id?: unknown };
+        if (typeof body.id !== "string" || body.id === "") return json({ error: "id is required" }, 400);
+        return json(await this.providerAct(path.endsWith("/adopt") ? "adopt" : "restore", body.id));
       }
       if ((path === "/api/kit/adopt" || path === "/api/kit/restore") && req.method === "POST") {
         const body = (await req.json().catch(() => ({}))) as { machine?: unknown; agent?: unknown; name?: unknown; names?: unknown };

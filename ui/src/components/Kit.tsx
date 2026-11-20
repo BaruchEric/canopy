@@ -3,11 +3,12 @@ import { copyText } from "../share";
 import { api } from "../api";
 import { useStore } from "../store";
 import {
-  GLYPH, PROBLEM, actionText, adoptableIn, allowAct, cellActions, cellAt, columns, homesFor, machineSpans, mcpViewsOf, mergeKit, rows, serverAt, serverRows,
-  serverSheetFor, sheetKey, skillSheetFor, toolAt, toolRows, toolSheetFor, type KitFilter, type KitMcpPick, type KitSheet,
+  GLYPH, PROBLEM, PROVIDER_GLYPH, PROVIDER_PROBLEM, actionText, adoptableIn, allowAct, cellActions, cellAt, columns, defaultsLines, homesFor, machineSpans,
+  mcpViewsOf, mergeKit, providerAct, providerTable, rows, serverAt, serverRows, serverSheetFor, sheetKey, skillSheetFor, toolAt, toolRows, toolSheetFor,
+  type KitFilter, type KitMcpPick, type KitSheet,
 } from "../kit";
 import { errorText, gateHere, hostOf, isGateClosed, readersOf, writerOf } from "../secrets";
-import type { KitAction, KitApplyResult, KitCell, KitInstallResult, KitMachineView, KitMcpPreview } from "../../../src/core/types";
+import type { KitAction, KitApplyResult, KitCell, KitInstallResult, KitMachineView, KitMcpPreview, ProviderView } from "../../../src/core/types";
 import type { SecretAct } from "../../../src/core/secretwire";
 
 /** which backend reaches a machine: the one whose info lists it */
@@ -331,6 +332,44 @@ function AllowSheet({ view, machines, onDone }: { view: KitMcpPick; machines: Ki
   );
 }
 
+/** Adopt or put back one backend's provider file (FR-069). Values never
+ *  reach the page; the sheet names the settings keys kit.json writes. */
+function ProviderSheet({ backend, machine, view, act, onDone }: { backend: string; machine: string; view: ProviderView; act: "adopt" | "restore"; onDone: (msg: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function go() {
+    setBusy(true);
+    setError(null);
+    try {
+      const info = await api.kitProvider(backend, act, view.id);
+      const now = info.providers?.find((p) => p.id === view.id);
+      onDone(`${view.id} on ${machine}: ${now ? now.state : "gone"}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="kit-sheet">
+      <h4>provider {view.id} on {machine}</h4>
+      <p className="kit-note">{view.state}{view.why ? `: ${view.why}` : ""}</p>
+      {act === "adopt" ? (
+        <p className="kit-note">
+          Adopt moves {machine}'s own providers/{view.id}.json to providers/.canopy-kit-adopted and writes kit.json's in its place
+          {view.keys.length > 0 ? `, which sets ${view.keys.join(", ")}` : ""}{view.envNames.length > 0 ? `, reading ${view.envNames.join(", ")} from the backend's env` : ""}. Put back reverses it.
+        </p>
+      ) : (
+        <p className="kit-error">Put back {machine}'s own providers/{view.id}.json over kit.json's? The kit leaves it alone after that.</p>
+      )}
+      {error && <p className="kit-error">{error}</p>}
+      <div className="kit-line">
+        <button type="button" className="mini strong" disabled={busy} onClick={() => void go()}>{act === "adopt" ? "adopt" : "put back"}</button>
+        <button type="button" className="mini" onClick={() => onDone("")}>cancel</button>
+      </div>
+    </div>
+  );
+}
+
 export function KitView() {
   const byBackend = useStore((s) => s.kit);
   const [f, setF] = useState<KitFilter>({ agent: null, machine: null, problems: false, text: "" });
@@ -352,6 +391,13 @@ export function KitView() {
   const sheetOwner = sheet && sheet.kind !== "allow" ? ownerOf(byBackend, sheet.machine) : null;
   const sheetView = sheet?.kind === "allow" ? views.find((v) => v.name === sheet.name) : undefined;
   const toolNames = useMemo(() => toolRows(merged.cells, f), [merged, f]);
+  const providers = useMemo(() => providerTable(byBackend), [byBackend]);
+  // every backend reads the same kit.json, so the first that parsed defaults speaks for all
+  const defaults = useMemo(() => defaultsLines(Object.values(byBackend).find((i) => i.loadouts?.defaults)?.loadouts?.defaults), [byBackend]);
+  const [providerPick, setProviderPick] = useState<{ backend: string; id: string } | null>(null);
+  const providerCol = providerPick ? providers.cols.find((c) => c.backend === providerPick.backend) : undefined;
+  const providerView = providerPick ? providers.rows.find((r) => r.id === providerPick.id)?.cells[providerPick.backend] : undefined;
+  const providerDo = providerAct(providerView);
   const viewOf = (machine: string) => merged.machines.find((x) => x.machine === machine);
   // the sheet reads its cell from the live cells, so a rescan shows the new state
   const sheetCell = sheet?.kind === "cell"
@@ -514,7 +560,54 @@ export function KitView() {
             </tbody>
           </table>
         )}
+        {(providers.rows.length > 0 || defaults.length > 0) && (
+          <section className="kit-providers" aria-label="providers and defaults">
+            {providers.rows.length > 0 && (
+              <table className="kit-grid">
+                <thead>
+                  <tr>
+                    <th>providers</th>
+                    {providers.cols.map((c) => <th key={`prov/${c.backend}`} title={`the backend ${c.backend}`}>{c.machine}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {providers.rows.map((r) => (
+                    <tr key={`prov/${r.id}`}>
+                      <th scope="row" title={[r.note, r.harness === "codex" ? "a codex provider: a model_providers entry in codex's own config.toml" : ""].filter(Boolean).join("\n")}>
+                        {r.id}{r.harness === "codex" ? " (codex)" : ""}
+                      </th>
+                      {providers.cols.map((c) => {
+                        const v = r.cells[c.backend];
+                        const state = v?.state ?? "off";
+                        const act = providerAct(v);
+                        const title = v ? `${state}${v.adopted ? " (adopted)" : ""}${v.why ? `: ${v.why}` : ""}` : "";
+                        return (
+                          <td key={`prov/${c.backend}`} className={`kit-cell kit-${state}${PROVIDER_PROBLEM.has(state) ? " kit-problem" : ""}`} title={title}>
+                            {act
+                              ? <button type="button" className="kit-cell-button" aria-label={`${act === "adopt" ? "adopt" : "put back"} ${r.id} on ${c.machine}`} onClick={() => setProviderPick({ backend: c.backend, id: r.id })}>{PROVIDER_GLYPH[state]}</button>
+                              : PROVIDER_GLYPH[state]}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {defaults.length > 0 && (
+              <div className="kit-defaults">
+                <strong>default loadouts</strong>
+                <ul>{defaults.map((d) => <li key={d}>{d}</li>)}</ul>
+                <p className="kit-note">A start that names no loadout takes its repo's, then its machine's, then every start's. none takes no loadout. Edit them in kit.json.</p>
+              </div>
+            )}
+          </section>
+        )}
       </div>
+      {providerPick && providerCol && providerView && providerDo && (
+        <ProviderSheet key={`${providerPick.backend}/${providerPick.id}`} backend={providerPick.backend} machine={providerCol.machine} view={providerView} act={providerDo}
+          onDone={(msg) => { setProviderPick(null); if (msg) setSaid(msg); }} />
+      )}
       {sheet?.kind === "cell" && sheetOwner && sheetCell && (
         <CellSheet key={sheetKey(sheet)} backend={sheetOwner} cell={sheetCell} actions={cellActions(viewOf(sheet.machine), sheetCell)}
           adoptedTo={viewOf(sheet.machine)?.seen.targets.find((t) => t.agent === sheet.agent)?.adoptedFrom?.[sheet.name] ?? null} onDone={closer(sheetKey(sheet))} />

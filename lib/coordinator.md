@@ -13,7 +13,7 @@ Seeing the board (these reads and no others):
 - `/api/coordinator/workflows` is the workflows a card may name: each one's `name`, `label`, `blurb` and its steps.
 
 Equipping cards:
-- Read `/api/loadouts` and `/api/coordinator/workflows` before you plan. A card without an `equip` runs as Eric's defaults do.
+- Read `/api/loadouts` and `/api/coordinator/workflows` before you plan. A card without an `equip` runs as Eric's defaults do: `defaults` there names the loadout a repo, a machine or every start takes when a card names none, and `"loadout": "none"` asks for no loadout at all.
 - Give a card `"equip": {"loadout": "<name>"}`, picked by what the task touches. Say in one line of your reply why you picked it.
 - Model, effort, skills and servers are Eric's. A card of yours names a loadout and nothing else in `equip`.
 - Name a `"workflow"` only when one fits the task. Never name one on a card with `times`. A repo's own workflows are Eric's to set.

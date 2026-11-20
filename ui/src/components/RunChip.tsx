@@ -3,6 +3,7 @@ import { landingAll, useStore } from "../store";
 import { keepKeys } from "../surface";
 import { flowWord } from "../flows";
 import { AGENT_NAME, harnessOf, ranUnchanged, runWord } from "../runs";
+import { fromWord } from "../loadouts";
 import type { Flow, Run } from "../../../src/core/types";
 
 /** One word about a repo's run, on the card and in the panel. Clicking it
@@ -20,7 +21,7 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
     <button
       type="button"
       className={`run-chip st-${group ? group.state === "needs-you" || group.state === "picked" ? "waiting" : ["working", "scoring", "reviewing"].includes(group.state) ? "working" : "done" : run.status}${noChange ? " no-change" : ""}`}
-      title={group ? "Show the branch group" : `Show the run (${AGENT_NAME[harness]})${run.equip ? `\nloadout ${run.equip.loadout}` : ""}`}
+      title={group ? "Show the branch group" : `Show the run (${AGENT_NAME[harness]})${run.equip ? `\nloadout ${run.equip.loadout}${run.equip.from ? `, ${fromWord(run.equip.from)}` : ""}${run.equip.provider ? `\nprovider ${run.equip.provider}` : ""}` : ""}`}
       onClick={(e) => {
         e.stopPropagation();
         if (group) showGroup(group.id);

@@ -1139,6 +1139,24 @@ describe("card fields on the plan and tasks routes", () => {
     expect(card("t1")?.action).toBe("ask");
   });
 
+  test("FR-069: none takes no loadout and no fields; Eric names a provider of the loadout's harness, or default for the login", async () => {
+    const prov = (id: string, harness: "claude" | "codex") => ({ id, note: "", harness, machines: null, central: harness === "claude", envNames: [], keys: [], state: "ok" as const });
+    const h = hub({ loadouts: () => ({ base: [], loadouts: [lo()], errors: [], servers: [], providers: [prov("gw", "claude"), prov("or", "codex")] }) });
+    expect((await post(h, "plan", { run: "co1", tasks: [task({ equip: { loadout: "none" } })] }, coordCaller("co1"))).status).toBe(200);
+    expect(card("t1")?.equip).toEqual({ loadout: "none" });
+    expect(await post(h, "plan", { run: "co1", tasks: [task({ equip: { loadout: "none", model: "opus" } })] })).toEqual({ status: 400, body: { error: "tasks[0].equip: none takes no fields" } });
+    expect(await post(h, "plan", { run: "co1", tasks: [task({ equip: { loadout: "quick", provider: "gw" } })] }, coordCaller("co1"))).toEqual({
+      status: 400,
+      body: { error: "tasks[0].equip: a coordinator names a loadout; its fields are Eric's" },
+    });
+    expect((await post(h, "plan", { run: "co1", tasks: [task({ title: "gw", equip: { loadout: "quick", provider: "gw" } })] })).status).toBe(200);
+    expect(card("t2")?.equip).toEqual({ loadout: "quick", provider: "gw" });
+    expect((await post(h, "plan", { run: "co1", tasks: [task({ title: "login", equip: { loadout: "quick", provider: "default" } })] })).status).toBe(200);
+    expect(card("t3")?.equip).toEqual({ loadout: "quick", provider: "default" });
+    expect(await post(h, "plan", { run: "co1", tasks: [task({ equip: { loadout: "quick", provider: "or" } })] })).toEqual({ status: 400, body: { error: "tasks[0].equip.provider: or is a codex provider; quick runs claude" } });
+    expect(await post(h, "plan", { run: "co1", tasks: [task({ equip: { loadout: "quick", provider: "nope" } })] })).toEqual({ status: 400, body: { error: "tasks[0].equip.provider: no provider nope in kit.json" } });
+  });
+
   test("a proposed card's equip, workflow and after change through tasks", async () => {
     const h = hub();
     await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two" })] });

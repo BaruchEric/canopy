@@ -16170,7 +16170,10 @@ button.trigger-title:hover {
 .kit-ok { color: var(--moss); }
 .kit-problem { color: var(--rust); }
 .kit-local, .kit-off, .kit-noagent { color: var(--ink-faint); }
-.kit-servers, .kit-tools { margin-top: 16px; }
+.kit-servers, .kit-tools, .kit-providers { margin-top: 16px; }
+.kit-providers { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.kit-defaults { font-size: var(--t-md); }
+.kit-defaults ul { margin: 4px 0; padding-left: 16px; font-family: var(--mono); }
 .kit-allow { margin-left: 8px; }
 .kit-cell-button { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; }
 .kit-cell-button:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
@@ -18372,6 +18375,12 @@ button.clock-job + .clock-lane {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+/* a provider that cannot serve on this backend (FR-069); its title says why */
+.mgr-equip-seg button:disabled {
+  color: var(--ink-faint);
+  border-style: dashed;
+  cursor: not-allowed;
 }
 .mgr-equip-find {
   box-sizing: border-box;

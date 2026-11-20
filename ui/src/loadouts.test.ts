@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { Loadout, Mention } from "../../src/core/types";
-import { equipFrom, equipTitle, loadoutLabel, loadoutsFor, pluginLine, serversHere, skillRows } from "./loadouts";
+import type { Loadout, Mention, ProviderView } from "../../src/core/types";
+import { equipFrom, equipTitle, fromWord, inheritedLabel, loadoutLabel, loadoutsFor, pluginLine, providersFor, serversHere, skillRows } from "./loadouts";
 
 const L = (over: Partial<Loadout>): Loadout => ({ name: "x", note: "", harness: "claude", model: "default", effort: "default", skills: [], mcp: [], canopyTools: false, ...over });
 
@@ -60,5 +60,50 @@ describe("loadouts in the page", () => {
     const here = serversHere(quick.mcp, servers);
     expect(here).toEqual(["github"]);
     expect(equipFrom(quick, { model: "default", effort: "default", skills: [], mcp: here })).toEqual({ loadout: "quick", mcp: ["github"] });
+  });
+});
+
+describe("inherited loadouts (FR-069)", () => {
+  test("where a loadout came from, in words", () => {
+    expect(fromWord({ from: "repo", key: "dev-tools/*" })).toBe("from dev-tools/*");
+    expect(fromWord({ from: "machine", key: "mini" })).toBe("from machine mini");
+    expect(fromWord({ from: "default" })).toBe("the kit's default");
+    expect(fromWord({ from: null })).toBe("");
+    expect(fromWord(undefined)).toBe("");
+  });
+
+  test("the plan sheet's first option names what a bare start takes", () => {
+    const list = [L({ name: "feature", model: "opus" })];
+    expect(inheritedLabel({ name: "feature", from: "repo", key: "dev-tools/*" }, list)).toBe("feature (opus), from dev-tools/*");
+    expect(inheritedLabel(null, list)).toBe("the repo's route");
+    expect(inheritedLabel({ name: null, from: null }, list)).toBe("the repo's route");
+    expect(inheritedLabel({ name: null, from: "repo", key: "dev-tools/canopy" }, list)).toBe("the repo's route (dev-tools/canopy says none)");
+    expect(inheritedLabel({ name: null, from: "machine", key: "mini" }, list)).toBe("the repo's route (machine mini says none)");
+  });
+
+  test("a run's title names its provider and where its loadout came from", () => {
+    expect(equipTitle({ loadout: "offline", model: "default", effort: "default", skills: [], mcp: [], off: 0, provider: "local", from: { from: "machine", key: "mac" } }))
+      .toBe("loadout offline, from machine mac\nprovider local");
+  });
+});
+
+describe("a card's provider (FR-069)", () => {
+  test("the card keeps a provider only when it differs from the loadout's", () => {
+    const picks = { model: "default", effort: "default", skills: [], mcp: [] };
+    expect(equipFrom(L({ name: "a" }), { ...picks, provider: "" })).toEqual({ loadout: "a" });
+    expect(equipFrom(L({ name: "a", provider: "gw" }), { ...picks, provider: "gw" })).toEqual({ loadout: "a" });
+    expect(equipFrom(L({ name: "a", provider: "gw" }), { ...picks, provider: "default" })).toEqual({ loadout: "a", provider: "default" });
+    expect(equipFrom(L({ name: "a" }), { ...picks, provider: "local" })).toEqual({ loadout: "a", provider: "local" });
+  });
+
+  test("the sheet offers the harness's providers on this backend, and says which cannot serve", () => {
+    const v = (id: string, harness: "claude" | "codex", state: ProviderView["state"]): ProviderView =>
+      ({ id, note: "", harness, machines: null, central: true, envNames: [], keys: [], state, ...(state === "missing" ? { why: "no file" } : {}) });
+    const list = [v("gw", "claude", "ok"), v("local", "claude", "hand"), v("far", "claude", "off"), v("gone", "claude", "missing"), v("or", "codex", "declared")];
+    expect(providersFor("claude", list)).toEqual([
+      { id: "gw", usable: true, why: "" }, { id: "local", usable: true, why: "" }, { id: "gone", usable: false, why: "no file" },
+    ]);
+    expect(providersFor("codex", list)).toEqual([{ id: "or", usable: true, why: "" }]);
+    expect(providersFor("claude", undefined)).toEqual([]);
   });
 });

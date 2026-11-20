@@ -906,6 +906,9 @@ describe("a card in a kept tree", () => {
   });
   test("the facts line names the tree", () => {
     expect(cardCarries({ id: "t1", title: "x", repo: "web", note: "n", action: "ask", state: "queued", tree: "feat/x" }).tree).toBe("in tree feat/x");
+    // FR-069: none says no loadout, and a provider override counts as a change
+    expect(cardCarries({ id: "t1", title: "x", repo: "web", note: "n", action: "ask", state: "queued", equip: { loadout: "none" } }).loadout?.word).toBe("no loadout");
+    expect(cardCarries({ id: "t1", title: "x", repo: "web", note: "n", action: "ask", state: "queued", equip: { loadout: "quick", provider: "gw" } }).loadout).toEqual({ word: "quick, changed", title: "loadout quick; provider gw" });
   });
 });
 

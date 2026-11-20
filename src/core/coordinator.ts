@@ -8,7 +8,7 @@ import { takesEffort, takesModel } from "./harness";
 import { inQueue, landWord, sentBack } from "./landing";
 import { inputType, isSeedId } from "./sprout";
 import { isBranchName } from "./treewords";
-import { isRunActive, type GateKind, type StepMode, type WorkflowEntry, type CardEquip, type CoordTask, type RunCardAction, type Flow, type LandEntry, type LoadoutsInfo, type ReviewVerdict, type BranchTreeState, type Repo, type Run, type Sprout, type RunBranchState } from "./types";
+import { DEFAULT_PROVIDER, isRunActive, NO_LOADOUT, type GateKind, type StepMode, type WorkflowEntry, type CardEquip, type CoordTask, type RunCardAction, type Flow, type LandEntry, type LoadoutsInfo, type ReviewVerdict, type BranchTreeState, type Repo, type Run, type Sprout, type RunBranchState } from "./types";
 
 /** tasks one plan call may add */
 export const MAX_PLAN = 8;
@@ -81,11 +81,12 @@ type CardContext = PlanContext & { holds?: string };
 /** the fields a project card refuses: it starts no run, so nothing shapes one */
 const NOT_ON_A_PROJECT = ["times", "workflow", "workflowRepo", "tree", "equip"] as const;
 
-const EQUIP_KEYS = ["loadout", "model", "effort", "skills", "mcp"] as const;
+const EQUIP_KEYS = ["loadout", "model", "effort", "skills", "mcp", "provider"] as const;
 
 /** A card's `equip` off the wire: a coordinator names a loadout and nothing
- *  else; Eric may override the loadout's model, effort, skills and servers,
- *  and only with what the loadout's harness takes. */
+ *  else; Eric may override the loadout's model, effort, skills, servers and
+ *  provider, and only with what the loadout's harness takes. `none` says
+ *  the card takes no loadout, not even the one it would inherit (FR-069). */
 function checkEquip(v: unknown, at: string, ctx: PlanContext): { equip: CardEquip | undefined } | { error: string } {
   if (!isRecord(v)) return { error: `${at}.equip must be an object` };
   for (const k of Object.keys(v)) {
@@ -100,6 +101,10 @@ function checkEquip(v: unknown, at: string, ctx: PlanContext): { equip: CardEqui
     return { equip: undefined };
   }
   if (typeof name !== "string" || !name) return { error: `${at}.equip.loadout must be a loadout name` };
+  if (name === NO_LOADOUT) {
+    if (fields.length > 0) return { error: `${at}.equip: ${NO_LOADOUT} takes no fields` };
+    return { equip: { loadout: NO_LOADOUT } };
+  }
   const lo = ctx.loadouts.loadouts.find((l) => l.name === name);
   if (!lo) return { error: `${at}.equip.loadout: no loadout ${name} in kit.json` };
   const equip: CardEquip = { loadout: name };
@@ -121,6 +126,15 @@ function checkEquip(v: unknown, at: string, ctx: PlanContext): { equip: CardEqui
     if (l === undefined) continue;
     if (!Array.isArray(l) || l.some((x) => typeof x !== "string" || !x)) return { error: `${at}.equip.${k} must be a list of names` };
     equip[k] = l as string[];
+  }
+  const provider = v["provider"];
+  // `default` is the harness's own login, over the loadout's provider and the route's
+  if (provider === DEFAULT_PROVIDER) equip.provider = DEFAULT_PROVIDER;
+  else if (provider !== undefined) {
+    const p = typeof provider === "string" ? ctx.loadouts.providers?.find((x) => x.id === provider) : undefined;
+    if (!p) return { error: `${at}.equip.provider: no provider ${String(provider)} in kit.json` };
+    if (p.harness !== lo.harness) return { error: `${at}.equip.provider: ${p.id} is a ${p.harness} provider; ${lo.name} runs ${lo.harness}` };
+    equip.provider = p.id;
   }
   return { equip };
 }
@@ -1042,6 +1056,7 @@ function overrides(e: CardEquip): string[] {
     e.effort !== undefined ? `effort ${e.effort}` : "",
     e.skills !== undefined ? `skills ${list(e.skills)}` : "",
     e.mcp !== undefined ? `servers ${list(e.mcp)}` : "",
+    e.provider !== undefined ? `provider ${e.provider}` : "",
   ].filter(Boolean);
 }
 
@@ -1064,7 +1079,8 @@ export interface CardCarries {
 export function cardCarries(task: CoordTask): CardCarries {
   const out: CardCarries = {};
   const e = task.equip;
-  if (e?.loadout) {
+  if (e?.loadout === NO_LOADOUT) out.loadout = { word: "no loadout", title: "no loadout, not even the one the repo, machine or kit would give it" };
+  else if (e?.loadout) {
     const set = overrides(e);
     out.loadout = { word: set.length > 0 ? `${e.loadout}, changed` : e.loadout, title: [`loadout ${e.loadout}`, ...set].join("; ") };
   }

@@ -114,7 +114,8 @@ import { fence } from "../core/pr";
 import { mapPool, searchRepo } from "../core/search";
 import { FinderError, listDir, listFiles, readRaw, RAW_MAX, safeRel } from "../core/finder";
 import { listMentions } from "../core/mentions";
-import { cardLoadout, LOADOUT_NAME, loadoutOfEquip, loadoutsView, mergeProviderSettings, planLoadoutStart, type LoadoutStartPlan } from "../core/loadout";
+import { inContainer, ProviderSync } from "./providers";
+import { cardLoadout, defaultLoadout, defaultsKey, LOADOUT_NAME, loadoutOfEquip, loadoutsView, mergeProviderSettings, planLoadoutStart, type LoadoutStartPlan } from "../core/loadout";
 import { mimeOf } from "../core/filekind";
 import { readActivity } from "../core/activity";
 import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine, transcriptFile } from "../core/sessions";
@@ -154,6 +155,7 @@ import {
   setWorkspaceLook,
   upsertWorkspace,
   setCapacitySettings,
+  providersDir,
 } from "../core/store";
 import { RememberedRules, scopeOf } from "../core/remember";
 import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
@@ -229,8 +231,8 @@ import {
   TERM_GONE,
   type TaskTree,
 } from "../core/types";
-import type { About, AdviceAccepted, AgentEffort, Emulator, EmulatorOpened, AdviceEntry, CoordTask, RunCardAction, IncubatorStages, Loadout, LoadoutsInfo, RepoStatus, Sprout } from "../core/types";
-import { AWAKE_MODES, EMULATOR_KINDS, cleanLabel, isFlowActive, isLiveAgent, isRunActive, LIVE_AGENT_STATES, statusFingerprint } from "../core/types";
+import type { About, AdviceAccepted, AgentEffort, Emulator, EmulatorOpened, AdviceEntry, CoordTask, RunCardAction, IncubatorStages, Loadout, LoadoutDefault, LoadoutsInfo, RepoStatus, Sprout } from "../core/types";
+import { AWAKE_MODES, EMULATOR_KINDS, cleanLabel, isFlowActive, isLiveAgent, isRunActive, LIVE_AGENT_STATES, NO_LOADOUT, statusFingerprint } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { COORD_LOGIN, loginRefusal, loginRefusedHint, loginWord, probeRefusal, probeWord, STAGE_AWAY, STAGES_LOGIN, type LoginSite } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
@@ -1286,16 +1288,23 @@ async function startRepoRun(
     ...(priority === "interactive" ? {} : { priority }),
     ...(how.parent ? { parent: how.parent, child: true as const } : {}),
   };
+  // a start that names no loadout takes the repo's, the machine's or
+  // kit.json's default (FR-069); `none` takes none, and a workspace run
+  // never inherits one
+  const inherited = how.loadout === undefined && !scope
+    ? await inheritedLoadout(state, repo, action === "propose" ? "plan, then build needs Claude Code" : null)
+    : null;
+  const pick = how.loadout === NO_LOADOUT ? undefined : how.loadout ?? inherited?.name ?? undefined;
   // the start's word beats the loadout's, and the loadout's the settings'; a
   // start that asks outright hears below why it cannot have them, and
   // settings that cannot apply here are passed over
   const refused = toolsRefusal(state, repo);
-  const named = how.loadout === undefined ? undefined : state.kit.loadouts().loadouts.find((l) => l.name === how.loadout);
-  const withTools = !refused && (how.tools ?? (how.loadout === undefined ? routed.canopyTools === true : named?.canopyTools === true));
+  const named = pick === undefined ? undefined : state.kit.loadouts().loadouts.find((l) => l.name === pick);
+  const withTools = !refused && (how.tools ?? (pick === undefined ? routed.canopyTools === true : named?.canopyTools === true));
   // a loadout's harness, model and effort replace the route's, so every
   // check below hears the agent that will run (FR-065); its files are
   // written here, and go again when a check refuses the start
-  const loaded = how.loadout === undefined ? null : await withLoadout(state, repo, how.loadout, routed, base, withTools);
+  const loaded = pick === undefined ? null : await withLoadout(state, repo, pick, routed, base, withTools, fromOf(inherited));
   const agent = loaded?.agent ?? routed;
   let tools = loaded ?? { extras: base, release: async () => {} };
   try {
@@ -1400,7 +1409,8 @@ function flowStepExtras(flow: Flow, step: FlowStep, agent: AgentSettings): StepE
 function equipAgent(routed: AgentSettings, equip: RunEquip): AgentSettings {
   const { provider: _provider, ...rest } = routed;
   const kept = routed.harness === "claude" ? routed : { ...rest, extra: "" };
-  return { ...kept, harness: "claude", model: equip.model, effort: equip.effort };
+  // the loadout's provider (FR-069) beats the route's, as at the flow's start
+  return { ...kept, harness: "claude", model: equip.model, effort: equip.effort, ...(equip.provider ? { provider: equip.provider } : {}) };
 }
 
 /** A loadout's plan for a start here (FR-065), or the 400 that says why it
@@ -1415,9 +1425,65 @@ async function planLoadout(state: ServerState, repo: Repo, loadout: string | Loa
   // a codex loadout takes no skills, so only a claude one reads them
   const claude = info.loadouts.find((l) => l.name === name)?.harness === "claude";
   const skills = claude ? await listMentions(repo.path).catch((err: unknown) => { throw err instanceof FinderError ? new HttpError(err.status, err.message) : err; }) : [];
-  const plan = planLoadoutStart({ name, info, agent, skills, machine: state.kit.machineName() ?? hostname(), entryOf: (s) => state.kit.runEntry(s) });
+  const plan = planLoadoutStart({
+    name, info, agent, skills, machine: state.kit.machineName() ?? hostname(), entryOf: (s) => state.kit.runEntry(s), providerRefusal: (id) => state.kit.providerRefusal(id),
+  });
   if ("refused" in plan) throw new HttpError(400, plan.refused);
   return plan;
+}
+
+/** A repo's key for `defaults.repos` (FR-069): a kept worktree's card reads
+ *  as the checkout it was made from. */
+function repoRelFor(state: ServerState, repo: Repo): string | null {
+  const checkout = state.trees.checkoutOf(repo.path);
+  const r = checkout === null ? repo : state.result.repos.find((x) => x.path === checkout);
+  return r ? defaultsKey(r) : null;
+}
+
+/** The loadout a start in this repo takes when it names none (FR-069): the
+ *  repo's default, the machine's, then kit.json's. One whose harness this
+ *  backend lacks or the start cannot run (`claudeOnly` says why), or whose
+ *  provider cannot serve here, is passed over. A repo on another host or
+ *  the forge and an incubator seed take none. */
+async function inheritedLoadout(state: ServerState, repo: Repo, claudeOnly: string | null): Promise<LoadoutDefault> {
+  const none: LoadoutDefault = { name: null, from: null };
+  if (repo.host || repo.forge || isSeedPath(state.root, repo.path)) return none;
+  const info = state.kit.loadouts();
+  if (!info.defaults) return none;
+  const lacks = new Map<Harness, string | null>();
+  for (const h of new Set(info.loadouts.map((l) => l.harness))) lacks.set(h, await harnessRefusal(state, h, repo.path));
+  return defaultLoadout(info, { machine: state.kit.machineName(), rel: repoRelFor(state, repo) }, (l) => {
+    if (claudeOnly && l.harness !== "claude") return `runs ${l.harness}; ${claudeOnly}`;
+    const lack = lacks.get(l.harness);
+    if (lack) return lack;
+    return l.provider ? state.kit.providerRefusal(l.provider) : null;
+  });
+}
+
+/** What a run's equip says about where its inherited loadout came from. */
+const fromOf = (d: LoadoutDefault | null): RunEquip["from"] =>
+  d?.name && d.from ? { from: d.from, ...(d.key ? { key: d.key } : {}) } : undefined;
+
+/** A coordinator's card's loadout: the one it names with Eric's overrides
+ *  laid over (refused when kit.json can no longer give it), none for `none`,
+ *  and otherwise the repo's, the machine's or kit.json's default (FR-069),
+ *  unless `noInherit` (a group: each member's profile is the point). A
+ *  manager's worker never holds canopy's tools, inherited or not. */
+async function cardLoadoutFor(
+  state: ServerState, task: CoordTask, repo: Repo, claudeOnly: string | null, noInherit = false,
+): Promise<{ loadout: Loadout | null; from?: RunEquip["from"] }> {
+  const info = state.kit.loadouts();
+  const name = task.equip?.loadout;
+  if (name === NO_LOADOUT) return { loadout: null };
+  if (name && task.equip) {
+    const lo = cardLoadout(task.equip, info);
+    if ("refused" in lo) throw new Error(lo.refused);
+    return { loadout: lo };
+  }
+  if (noInherit) return { loadout: null };
+  const d = await inheritedLoadout(state, repo, claudeOnly);
+  const lo = d.name === null ? undefined : info.loadouts.find((l) => l.name === d.name);
+  return lo ? { loadout: { ...lo, canopyTools: false }, from: fromOf(d) } : { loadout: null };
 }
 
 /** A claude loadout run's files: its own settings file (the provider's, with
@@ -1447,8 +1513,13 @@ async function loadoutFiles(state: ServerState, repo: Repo, plan: LoadoutStartPl
  *  loadout writes none, and holds canopy's tools only through `runTools`.
  *  It never sets `child`: a coordinator's card names its `parent` alone.
  *  `release` removes what was written, for a start that fails. */
-async function withLoadout(state: ServerState, repo: Repo, loadout: string | Loadout, routed: AgentSettings, base: StartExtras, withTools: boolean): Promise<{ agent: AgentSettings; extras: StartExtras; release: () => Promise<void> }> {
+async function withLoadout(
+  state: ServerState, repo: Repo, loadout: string | Loadout, routed: AgentSettings, base: StartExtras, withTools: boolean,
+  /** where an inherited loadout came from (FR-069); absent for one the start named */
+  from?: RunEquip["from"],
+): Promise<{ agent: AgentSettings; extras: StartExtras; release: () => Promise<void> }> {
   const plan = await planLoadout(state, repo, loadout, routed);
+  if (from) plan.equip = { ...plan.equip, from };
   // a loadout run's files are named by its id, so the id comes first
   const own: StartExtras = { ...base, id: base.id ?? crypto.randomUUID().slice(0, 8), equip: plan.equip };
   const files = plan.agent.harness === "claude" ? await loadoutFiles(state, repo, plan, own, withTools)
@@ -2493,18 +2564,21 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed; its runs work in the seed, not on a branch`);
   // the card's loadout with Eric's overrides, as kit.json has it now; one
   // it can no longer have fails the card in its words (FR-065)
-  const loadout = task.equip?.loadout ? cardLoadout(task.equip, state.kit.loadouts()) : null;
-  if (loadout && "refused" in loadout) throw new Error(loadout.refused);
   // a card in a kept tree runs in place there and holds no branch slot (FR-067)
-  if (task.tree !== undefined) return startCoordTree(state, coordId, task, repo, priority);
+  if (task.tree !== undefined) {
+    // its loadout is read again at the tree run's start; a bad one stops it here
+    await cardLoadoutFor(state, task, repo, null);
+    return startCoordTree(state, coordId, task, repo, priority);
+  }
+  const times = task.times ?? 1;
+  const { loadout, from } = await cardLoadoutFor(state, task, repo, task.workflow ? "a card's flow needs Claude Code" : task.action === "propose" ? "plan, then build needs Claude Code" : null, times > 1);
   // the runner's own count takes held branch runs too, so both are asked
   const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
-  const times = task.times ?? 1;
   if (going + times > BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
   const work: WorkStart = { title: task.title, from: { kind: "coordinator", run: coordId, card: task.id } };
   if (task.workflow) {
     try {
-      return await startCoordWorkflow(state, coordId, task, repo, loadout, work, priority);
+      return await startCoordWorkflow(state, coordId, task, repo, loadout, work, priority, from);
     } catch (err) {
       if (err instanceof SlotsFullError || isCapacityHeld(err)) return { busy: err.message };
       throw err;
@@ -2537,7 +2611,7 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
     // the governor before the loadout's files, so a held card writes none
     needCapacity(state, harness, priority);
     // a manager's worker never holds canopy's tools, whatever its loadout says
-    const loaded = loadout ? await withLoadout(state, repo, loadout, routed, base, false) : { agent: routed, extras: base, release };
+    const loaded = loadout ? await withLoadout(state, repo, loadout, routed, base, false, from) : { agent: routed, extras: base, release };
     release = loaded.release;
     return {
       run: await startBranchRun(state, repo, task.action, note, loaded.agent, "coordinator", false, ACTIONS[task.action], loaded.extras, work),
@@ -2658,8 +2732,7 @@ function flowInTree(state: ServerState, dir: string): string | undefined {
 async function startTreeRun(state: ServerState, coordId: string, task: CoordTask, treeRepo: Repo, how: TreeRunHow): Promise<ChildResume> {
   const repo = state.result.repos.find((r) => r.id === task.repo);
   if (!repo) throw new Error(`${task.repo} is no longer in the tree`);
-  const loadout = task.equip?.loadout ? cardLoadout(task.equip, state.kit.loadouts()) : null;
-  if (loadout && "refused" in loadout) throw new Error(loadout.refused);
+  const { loadout, from } = await cardLoadoutFor(state, task, repo, how.action === "propose" ? "plan, then build needs Claude Code" : null);
   const routed = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: task.action });
   const harness = loadout?.harness ?? routed.harness;
   if (how.action === "propose" && harness !== "claude") throw new Error("plan, then build needs Claude Code");
@@ -2682,7 +2755,7 @@ async function startTreeRun(state: ServerState, coordId: string, task: CoordTask
     // the governor before the loadout's files, so a held card writes none
     needCapacity(state, harness, how.priority);
     // a manager's worker never holds canopy's tools, whatever its loadout says
-    const loaded = loadout ? await withLoadout(state, treeRepo, loadout, routed, base, false) : { agent: routed, extras: base, release };
+    const loaded = loadout ? await withLoadout(state, treeRepo, loadout, routed, base, false, from) : { agent: routed, extras: base, release };
     release = loaded.release;
     // no await from here to the start: the tree is read again here, since a
     // merge, a clean-up or a remove may have begun during the awaits above
@@ -2764,7 +2837,11 @@ async function followCoordTree(state: ServerState, coordId: string, task: CoordT
  *  workflow), and the loadout's settings file and servers cover every step,
  *  kept under the flow's own id (`flowToolsId`) until the flow ends. Every
  *  refusal comes before anything is written. */
-async function startCoordWorkflow(state: ServerState, coordId: string, task: CoordTask, repo: Repo, loadout: Loadout | null, work: WorkStart, priority: Priority): Promise<RunStart> {
+async function startCoordWorkflow(
+  state: ServerState, coordId: string, task: CoordTask, repo: Repo, loadout: Loadout | null, work: WorkStart, priority: Priority,
+  /** where an inherited loadout came from (FR-069) */
+  from?: RunEquip["from"],
+): Promise<RunStart> {
   const name = task.workflow ?? "";
   const own = task.workflowRepo === true;
   const found = findWorkflow(await loadWorkflows(own ? repo : { path: "", host: "none" }), name);
@@ -2787,6 +2864,7 @@ async function startCoordWorkflow(state: ServerState, coordId: string, task: Coo
   const routed = agentFor(cfg, repo.path, "job", undefined, { kind: "workflow", name: wf.name });
   // planned before anything is written; its files come once nothing refuses
   const planned = loadout ? await planLoadout(state, repo, loadout, routed) : null;
+  if (planned && from) planned.equip = { ...planned.equip, from };
   const base = planned?.agent ?? routed;
   const select = (profile: string | undefined): AgentSettings => (profile ? agentFor(cfg, repo.path, "job", { profile }, { kind: "workflow", name: wf.name }) : base);
   for (const step of wf.steps.filter((s) => s.body)) {
@@ -4798,6 +4876,15 @@ async function handleApi(
     // a coordinator reads the loadouts to name one on a card (see loadoutsView)
     return json(loadoutsView(state.kit.loadouts(), caller?.kind));
   }
+  if (path === "/api/loadouts/resolve" && method === "GET") {
+    // the loadout a start in this repo takes when it names none (FR-069)
+    const id = url.searchParams.get("id") ?? "";
+    const repo = state.result.repos.find((r) => r.id === id);
+    if (!repo) return json({ error: `no repo ${id}` }, 404);
+    const action = url.searchParams.get("action");
+    const claudeOnly = action === "propose" ? "plan, then build needs Claude Code" : action === "workflow" ? "a card's flow needs Claude Code" : null;
+    return json(await inheritedLoadout(state, repo, claudeOnly));
+  }
   if (path === "/api/coordinator/workflows" && method === "GET") return json(coordWorkflows(await loadWorkflows({ path: "", host: "none" })));
   // a goal from the top (FR-067), ahead of the hub, since it starts the coordinator
   if (path === "/api/coordinator/new" && method === "POST") return json(await newGoal(state, req), 201);
@@ -6343,8 +6430,8 @@ async function handleApi(
       if (b.canopyTools === true && (times > 1 || b.action === "coordinate")) return json({ error: "a group or a coordinator starts without canopy tools" }, 400);
       if (b.loadout !== undefined && !(typeof b.loadout === "string" && LOADOUT_NAME.test(b.loadout))) return json({ error: "loadout must be a loadout's name" }, 400);
       const loadout = typeof b.loadout === "string" ? b.loadout : undefined;
-      if (loadout !== undefined && times > 1) return json({ error: "a loadout starts one run; a group picks a profile per member" }, 400);
-      if (loadout !== undefined && b.action === "coordinate") return json({ error: "a coordinator starts without a loadout" }, 400);
+      if (loadout !== undefined && loadout !== NO_LOADOUT && times > 1) return json({ error: "a loadout starts one run; a group picks a profile per member" }, 400);
+      if (loadout !== undefined && loadout !== NO_LOADOUT && b.action === "coordinate") return json({ error: "a coordinator starts without a loadout" }, 400);
       if (times > 1) return json(await startGroup(state, repo, b.action, note, b.client, times, profiles, b.autoLand === true, b.pr === true, priority, b.reviewers === 2 ? { reviewers: 2 } : {}), 201);
       if (b.action === "coordinate") {
         if (b.branch === true || b.pr === true) return json({ error: "a coordinator works on no branch; each of its tasks gets one" }, 400);
@@ -7825,6 +7912,8 @@ export async function startServer(opts: {
       secrets: () => state.secrets.info(null),
       // the mini's canopy writes for the host's home, not the container's /home/bun (docker-compose.yml)
       hostHome: process.env["CANOPY_HOST_HOME"] || homedir(),
+      // kit.json's providers, written into this backend's providers folder (FR-069)
+      providers: new ProviderSync({ dir: providersDir(), machine: () => state.kit.machineName(), container: inContainer(), env: process.env }),
     }),
     // the same name as backendName below; the reader writes this machine's sinks by it
     secrets: createSecretsHub({

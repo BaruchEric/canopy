@@ -1,5 +1,5 @@
-import { expect, test } from "bun:test";
-import { baseCovers, cardLoadout, loadoutOfEquip, mergeProviderSettings, parseLoadouts, planLoadoutStart, skillOverridesFor, type LoadoutStartPlan } from "./loadout";
+import { describe, expect, test } from "bun:test";
+import { baseCovers, cardLoadout, defaultLoadout, loadoutOfEquip, mergeProviderSettings, parseLoadouts, planLoadoutStart, defaultsKey, repoKeysFor, skillOverridesFor, type LoadoutStartPlan } from "./loadout";
 import { parseKit, withCanopyServer } from "./kit";
 import { sortMentions } from "./mentions";
 import { DEFAULT_AGENT, type Harness, type KitManifest, type Loadout, type LoadoutsInfo, type Mention } from "./types";
@@ -239,4 +239,122 @@ test("a loadout rebuilt from a run's equip keeps its name, model, effort, skills
   // a copy: the run's own record is not shared with the restart
   got.skills.push("more");
   expect(equip.skills).toEqual(["unslop"]);
+});
+
+/* ---------- providers and defaults (FR-069) ---------- */
+
+const withProviders = {
+  providers: {
+    local: { machines: ["mac"] },
+    gw: { settings: { env: { ANTHROPIC_BASE_URL: "http://x" } } },
+    or: { harness: "codex" },
+  },
+};
+
+test("a loadout names a provider of its harness", () => {
+  const info = parseLoadouts({ ...withProviders, loadouts: { off: { provider: "local" }, cx: { harness: "codex", provider: "or" } } }, kit);
+  expect(info.errors).toEqual([]);
+  expect(info.loadouts.find((l) => l.name === "off")?.provider).toBe("local");
+  expect(info.loadouts.find((l) => l.name === "cx")?.provider).toBe("or");
+});
+test.each([
+  [{ a: { provider: "nope" } }, "loadouts.a.provider: no provider nope in kit.json's providers"],
+  [{ a: { provider: "or" } }, "loadouts.a.provider: or is a codex provider; the loadout runs claude"],
+  [{ a: { harness: "codex", provider: "gw" } }, "loadouts.a.provider: gw is a claude provider; the loadout runs codex"],
+  [{ none: {} }, "loadouts.none: none is kept to mean no loadout"],
+])("%j is refused with its reason", (bad, why) => {
+  const info = parseLoadouts({ ...withProviders, loadouts: { ...bad, good: {} } }, kit);
+  expect(info.errors).toEqual([why]);
+  expect(info.loadouts.map((l) => l.name)).toEqual(["good"]);
+});
+test("a provider's own problem is one of the loadouts' errors", () => {
+  expect(parseLoadouts({ providers: { p: { machines: ["desk"] } } }, kit).errors).toEqual(["providers.p.machines: names desk, which machines does not declare"]);
+});
+
+const defaultsKit = { loadouts: { feature: {}, quick: {}, cx: { harness: "codex" } } };
+
+test("defaults parse against the loadouts and machines", () => {
+  const info = parseLoadouts({ ...defaultsKit, defaults: { loadout: "quick", machines: { mac: "feature" }, repos: { "web-apps/clms": "feature", "dev-tools/*": "none" } } }, kit);
+  expect(info.errors).toEqual([]);
+  expect(info.defaults).toEqual({ loadout: "quick", machines: { mac: "feature" }, repos: { "web-apps/clms": "feature", "dev-tools/*": "none" } });
+});
+test("no defaults block leaves defaults out", () => {
+  expect(parseLoadouts(defaultsKit, kit).defaults).toBeUndefined();
+});
+test.each([
+  [{ loadout: "gone" }, "defaults.loadout: no loadout gone that parsed"],
+  [{ loadout: 3 }, "defaults.loadout: a loadout's name or none"],
+  [{ machines: { desk: "quick" } }, "defaults.machines.desk: not a machine kit.json declares"],
+  [{ repos: { "/abs/path": "quick" } }, "defaults.repos./abs/path: a repo's path under the dev folder, like dev-tools/canopy, or a glob like dev-tools/*"],
+  [{ repos: { "a/../b": "quick" } }, "defaults.repos.a/../b: a repo's path under the dev folder, like dev-tools/canopy, or a glob like dev-tools/*"],
+  [{ repos: "x" }, "defaults.repos: an object of repo path to loadout"],
+  [{ roles: {} }, "defaults.roles: not a defaults field"],
+])("default %j is refused and the rest kept", (bad, why) => {
+  const info = parseLoadouts({ ...defaultsKit, defaults: { repos: { "dev-tools/canopy": "feature" }, ...bad } }, kit);
+  expect(info.errors).toEqual([why]);
+  expect(info.defaults).toBeDefined();
+  if (!("repos" in bad)) expect(info.defaults?.repos).toEqual({ "dev-tools/canopy": "feature" });
+});
+test("a defaults block alone still parses", () => {
+  expect(parseLoadouts({ defaults: {} }, kit)).toMatchObject({ errors: [], defaults: { loadout: null, machines: {}, repos: {} } });
+});
+
+describe("defaultLoadout", () => {
+  const info = parseLoadouts({ ...defaultsKit, defaults: { loadout: "quick", machines: { mac: "feature" }, repos: { "dev-tools/canopy": "cx", "dev-tools/*": "feature", "dev-*/*": "none", "web-apps/*": "quick" } } }, kit);
+  test("the exact repo beats a glob, a longer glob a shorter one, then the machine, then the default", () => {
+    expect(defaultLoadout(info, { machine: "mac", rel: "dev-tools/canopy" })).toEqual({ name: "cx", from: "repo", key: "dev-tools/canopy" });
+    expect(defaultLoadout(info, { machine: "mac", rel: "dev-tools/other" })).toEqual({ name: "feature", from: "repo", key: "dev-tools/*" });
+    expect(defaultLoadout(info, { machine: "mac", rel: "games/x" })).toEqual({ name: "feature", from: "machine", key: "mac" });
+    expect(defaultLoadout(info, { machine: null, rel: "games/x" })).toEqual({ name: "quick", from: "default" });
+    expect(defaultLoadout(info, { machine: null, rel: null })).toEqual({ name: "quick", from: "default" });
+  });
+  test("none stops the walk with no loadout", () => {
+    expect(defaultLoadout(info, { machine: "mac", rel: "dev-stuff/x" })).toEqual({ name: null, from: "repo", key: "dev-*/*" });
+  });
+  test("a loadout the start cannot run is passed over and named", () => {
+    const fits = (l: Loadout) => (l.harness === "codex" ? "runs codex; plan, then build needs Claude Code" : null);
+    expect(defaultLoadout(info, { machine: "mac", rel: "dev-tools/canopy" }, fits)).toEqual({
+      name: "feature", from: "repo", key: "dev-tools/*", skipped: ["repo dev-tools/canopy: cx runs codex; plan, then build needs Claude Code"],
+    });
+  });
+  test("a loadout gone since the parse is passed over", () => {
+    const gone = { defaults: { loadout: "quick", machines: {}, repos: { a: "feature" } }, loadouts: info.loadouts.filter((l) => l.name !== "feature") };
+    expect(defaultLoadout(gone, { machine: null, rel: "a" })).toEqual({ name: "quick", from: "default", skipped: ["repo a: no loadout feature in kit.json"] });
+  });
+  test("no defaults is no loadout", () => {
+    expect(defaultLoadout({ loadouts: info.loadouts }, { machine: "mac", rel: "a" })).toEqual({ name: null, from: null });
+  });
+});
+
+test("repoKeysFor orders the matches", () => {
+  expect(repoKeysFor({ "a/*": "x", "a/b": "x", "*": "x", "a/b*": "x", "c/*": "x" }, "a/b")).toEqual(["a/b", "a/b*", "a/*", "*"]);
+});
+test("defaultsKey is the path under the source's root, and none for a tree's card", () => {
+  expect(defaultsKey({ id: "dev-tools/canopy", source: "launch" })).toBe("dev-tools/canopy");
+  expect(defaultsKey({ id: "extra:web-apps/x", source: "extra" })).toBe("web-apps/x");
+  expect(defaultsKey({ id: "trees:canopy-1/b", source: "trees" })).toBeNull();
+  expect(defaultsKey({ id: ".", source: "launch" })).toBeNull();
+});
+
+test("a loadout's provider beats the route's, refuses where it is not, and rides in equip", () => {
+  const lo: Loadout = { name: "off", note: "", harness: "claude", model: "default", effort: "default", skills: [], mcp: [], canopyTools: false, provider: "local" };
+  const info: LoadoutsInfo = { ...planInfo, loadouts: [lo] };
+  const plan = planLoadoutStart({ ...planBase, info, name: "off", agent: { ...DEFAULT_AGENT, provider: "zai" } }) as LoadoutStartPlan;
+  expect(plan.agent.provider).toBe("local");
+  expect(plan.equip.provider).toBe("local");
+  expect(planLoadoutStart({ ...planBase, info, name: "off", providerRefusal: () => "provider local is not on mini" })).toEqual({ refused: "loadout off: provider local is not on mini" });
+  expect(loadoutOfEquip(plan.equip, "claude").provider).toBe("local");
+});
+
+test("a card may change the provider to one of the loadout's harness", () => {
+  const info = { ...parseLoadouts({ ...withProviders, loadouts: { feature: {} } }, kit), providers: [
+    { id: "gw", note: "", harness: "claude" as const, machines: null, central: true, envNames: [], keys: [], state: "ok" as const },
+    { id: "or", note: "", harness: "codex" as const, machines: null, central: false, envNames: [], keys: [], state: "declared" as const },
+  ] };
+  expect(cardLoadout({ loadout: "feature", provider: "gw" }, info)).toMatchObject({ name: "feature", provider: "gw" });
+  expect(cardLoadout({ loadout: "feature", provider: "or" }, info)).toEqual({ refused: "or is a codex provider; feature runs claude" });
+  expect(cardLoadout({ loadout: "feature", provider: "x" }, info)).toEqual({ refused: "no provider x in kit.json" });
+  expect(cardLoadout({ loadout: "feature" }, info)).not.toHaveProperty("provider");
+  // default is the login, over the loadout's provider and the route's
+  expect(cardLoadout({ loadout: "feature", provider: "default" }, info)).toMatchObject({ provider: "default" });
 });

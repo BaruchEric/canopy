@@ -359,8 +359,9 @@ export function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask
 
   const loadoutPick = (
     <select className="settings-input" value={loadout} aria-label="Loadout" title="A named set of model, effort, skills and servers from kit.json. Another one replaces any field you changed" onChange={(e) => setLoadout(e.target.value)}>
-      <option value="">no loadout</option>
-      {loadout && !offered.some((l) => l.name === loadout) && <option value={loadout}>{loadout}</option>}
+      <option value="">the default loadout</option>
+      <option value="none">no loadout, not even the default</option>
+      {loadout && loadout !== "none" && !offered.some((l) => l.name === loadout) && <option value={loadout}>{loadout}</option>}
       {offered.map((l) => (
         <option key={l.name} value={l.name} title={l.note}>
           {loadoutLabel(l)}

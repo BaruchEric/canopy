@@ -9,7 +9,7 @@ import { agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, task
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
 import { branchByDefault, runLanding, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
-import { equipTitle, loadoutLabel, loadoutsFor } from "../loadouts";
+import { equipTitle, fromWord, inheritedLabel, loadoutLabel, loadoutsFor } from "../loadouts";
 import { planPriority, priorityTitle } from "../capacity";
 import { DEFAULT_CAPACITY, type CapacitySettings } from "../../../src/core/capacity";
 import { resolveAgent } from "../../../src/core/route";
@@ -42,6 +42,7 @@ import {
   type AgentRole,
   type Harness,
   type LaunchSettings,
+  type LoadoutDefault,
   type RepoAgent,
   type Repo,
   type Run,
@@ -303,8 +304,24 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const loadouts = loadoutsFor(action, useStore((s) => s.kit[backendOf(repo.id)]?.loadouts?.loadouts));
   const [loadoutPick, setLoadoutPick] = useState("");
   const loadoutOffered = loadouts.length > 0 && !coordinate && !workspace && !repo.host && !repo.forge && times === 1;
-  // a pick that no longer fits (the list changed, or the run became a group) is not sent
-  const loadout = loadoutOffered ? loadouts.find((l) => l.name === loadoutPick) : undefined;
+  // FR-069: what a start that names none takes here, asked of the repo's
+  // backend only when its kit.json has defaults
+  const hasDefaults = useStore((s) => s.kit[backendOf(repo.id)]?.loadouts?.defaults !== undefined);
+  const [inherited, setInherited] = useState<LoadoutDefault | null>(null);
+  useEffect(() => {
+    setInherited(null);
+    if (!loadoutOffered || !hasDefaults) return;
+    let live = true;
+    api.loadoutResolve(repo.id, action).then((d) => live && setInherited(d), () => {});
+    return () => {
+      live = false;
+    };
+  }, [repo.id, action, loadoutOffered, hasDefaults]);
+  const inheritedLoadout = inherited?.name ? loadouts.find((l) => l.name === inherited.name) : undefined;
+  // a pick that no longer fits (the list changed, or the run became a group)
+  // is not sent; no pick shows the inherited one, which the server applies
+  const loadout = !loadoutOffered || loadoutPick === "none" ? undefined : loadoutPick === "" ? inheritedLoadout : loadouts.find((l) => l.name === loadoutPick);
+  const sentLoadout = !loadoutOffered ? undefined : loadoutPick === "none" ? (inheritedLoadout ? "none" : undefined) : loadoutPick === "" ? undefined : loadout?.name;
   // the agent that will run: the loadout's harness replaces the route's
   const harness = loadout?.harness ?? agent.harness;
   const name = AGENT_NAME[harness];
@@ -346,7 +363,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
     try {
       // the default is the backend's to apply, so a repo with no main yet keeps its propose in the checkout
       if (branchable && onBranch && times > 1) await startGroup(repo.id, action, note, times, groupProfiles(picks, times), autoLand, pr, reviewers === 2 ? 2 : undefined, raised ? "interactive" : undefined);
-      else await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr || startDev ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined, startDev ? true : undefined, toolsPick ?? undefined, loadout?.name));
+      else await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr || startDev ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined, startDev ? true : undefined, toolsPick ?? undefined, sentLoadout));
     } catch (err) {
       setError(errText(err));
       setBusy(false);
@@ -378,7 +395,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
             </span>
           ))}
           {loadout ? (
-            <span className="branch" title={loadout.note || "The loadout this run starts with"}>
+            <span className="branch" title={[loadout.note || "The loadout this run starts with", loadoutPick === "" ? fromWord(inherited ?? undefined) : "", loadout.provider ? `provider ${loadout.provider}` : ""].filter(Boolean).join("\n")}>
               {loadoutLabel(loadout)}
             </span>
           ) : !isDefaultAgent(agent) && (
@@ -437,8 +454,9 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
         {loadoutOffered && (
           <label className="plan-branch plan-loadout" title="Start with a named set of model, effort, skills and servers from kit.json">
             <span>loadout</span>
-            <select value={loadout?.name ?? ""} onChange={(e) => setLoadoutPick(e.target.value)} aria-label="Loadout">
-              <option value="">the repo's route</option>
+            <select value={loadoutPick === "none" || loadoutPick === "" ? loadoutPick : loadout?.name ?? ""} onChange={(e) => setLoadoutPick(e.target.value)} aria-label="Loadout">
+              <option value="">{inheritedLabel(inherited, loadouts)}</option>
+              {inheritedLoadout && <option value="none">no loadout: the repo's route</option>}
               {loadouts.map((l) => (
                 <option key={l.name} value={l.name} title={l.note}>
                   {loadoutLabel(l)}

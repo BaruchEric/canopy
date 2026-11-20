@@ -1,4 +1,4 @@
-import type { KitAction, KitCell, KitCellState, KitInfo, KitMachineView, KitMcpView } from "../../src/core/types";
+import type { KitAction, KitCell, KitCellState, KitInfo, KitMachineView, KitMcpView, LoadoutDefaults, ProviderState, ProviderView } from "../../src/core/types";
 import type { SecretAct } from "../../src/core/secretwire";
 
 export interface KitFilter { agent: string | null; machine: string | null; problems: boolean; text: string }
@@ -209,3 +209,62 @@ export function sheetFor(cell: KitCell | null, name: string, hasView: boolean): 
 /** a server cell's sheet: adopt, put back or allow first, then its own apply */
 export const serverSheetFor = (cell: KitCell | null, name: string, hasView: boolean, actions: KitAction[]): KitSheet | null =>
   sheetFor(cell, name, hasView) ?? (cell && actions.length > 0 ? { kind: "cell", of: "mcp", machine: cell.machine, agent: cell.agent, name } : null);
+
+/** A provider's state on one backend as a cell glyph (FR-069). */
+export const PROVIDER_GLYPH: Record<ProviderState, string> = {
+  ok: "●", hand: "◇", drift: "≠", missing: "○", unresolved: "∅", refused: "⊘", declared: "·", off: "",
+};
+
+/** the provider states that need someone: a file the kit cannot write, or one changed by hand */
+export const PROVIDER_PROBLEM: ReadonlySet<ProviderState> = new Set(["drift", "missing", "unresolved", "refused"]);
+
+export interface ProviderColumn {
+  backend: string;
+  /** the kit machine the backend is, else the backend's own name */
+  machine: string;
+}
+
+export interface ProviderRow {
+  id: string;
+  note: string;
+  harness: string;
+  /** each backend's view of the provider, by backend */
+  cells: Record<string, ProviderView>;
+}
+
+/** The providers table: one column per backend that read kit.json, one row
+ *  per provider any of them declares, in the order kit.json lists them. */
+export function providerTable(byBackend: Record<string, KitInfo>): { cols: ProviderColumn[]; rows: ProviderRow[] } {
+  const cols: ProviderColumn[] = [];
+  const rows = new Map<string, ProviderRow>();
+  for (const [backend, info] of Object.entries(byBackend)) {
+    const list = info.loadouts?.providers;
+    if (!info.ok || !list) continue;
+    cols.push({ backend, machine: info.loadouts?.machine ?? backend });
+    for (const p of list) {
+      const row = rows.get(p.id) ?? { id: p.id, note: p.note, harness: p.harness, cells: {} };
+      row.cells[backend] = p;
+      rows.set(p.id, row);
+    }
+  }
+  return { cols, rows: [...rows.values()] };
+}
+
+/** What a provider cell offers: adopt a hand file kit.json has settings
+ *  for, or put back one adopted before. */
+export function providerAct(v: ProviderView | undefined): "adopt" | "restore" | null {
+  if (!v) return null;
+  if (v.adopted) return "restore";
+  return v.state === "hand" && v.central ? "adopt" : null;
+}
+
+/** The defaults as lines, everywhere first and repos last, which is the
+ *  reverse of the order a start reads them in. */
+export function defaultsLines(d: LoadoutDefaults | undefined): string[] {
+  if (!d) return [];
+  return [
+    ...(d.loadout !== null ? [`every start: ${d.loadout}`] : []),
+    ...Object.entries(d.machines).map(([m, name]) => `machine ${m}: ${name}`),
+    ...Object.entries(d.repos).map(([r, name]) => `${r}: ${name}`),
+  ];
+}

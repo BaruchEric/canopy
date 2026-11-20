@@ -1,15 +1,17 @@
 /**
  * The equip sheet (FR-065): a not-yet-started card's loadout and what Eric
- * changes on top of it, model, effort, skills and servers. It sends a whole
- * `CardEquip` (`equipFrom`), the loadout's name plus only the fields that
- * differ, so the server replaces the card's equip with it. A Codex loadout
- * takes model and effort only. Layout follows the Equip mockup.
+ * changes on top of it, model, effort, provider, skills and servers. It
+ * sends a whole `CardEquip` (`equipFrom`), the loadout's name plus only the
+ * fields that differ, so the server replaces the card's equip with it. A
+ * Codex loadout takes model, effort and provider only. `none` takes no
+ * loadout at all, not even the one the card would inherit (FR-069). Layout
+ * follows the Equip mockup.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { HARNESS } from "../../../src/core/harness";
-import type { CardEquip, CoordTask, Loadout, Mention, Run } from "../../../src/core/types";
+import { DEFAULT_PROVIDER, NO_LOADOUT, type CardEquip, type CoordTask, type Loadout, type LoadoutDefault, type Mention, type Run } from "../../../src/core/types";
 import { api } from "../api";
-import { equipFrom, loadoutsFor, serversHere, skillRows } from "../loadouts";
+import { equipFrom, fromWord, loadoutsFor, providersFor, serversHere, skillRows } from "../loadouts";
 import { backendOf } from "../registry";
 import { useStore } from "../store";
 
@@ -18,13 +20,15 @@ interface Picks {
   effort: string;
   skills: string[];
   mcp: string[];
+  /** "" keeps the loadout's provider; `default` is the login */
+  provider: string;
 }
 
 /** the loadout's own values, with the card's saved overrides on top when it
  *  was saved against that loadout */
 function picksOf(l: Loadout, saved: CardEquip | undefined): Picks {
   const mine = saved?.loadout === l.name ? saved : undefined;
-  return { model: mine?.model ?? l.model, effort: mine?.effort ?? l.effort, skills: [...(mine?.skills ?? l.skills)], mcp: [...(mine?.mcp ?? l.mcp)] };
+  return { model: mine?.model ?? l.model, effort: mine?.effort ?? l.effort, skills: [...(mine?.skills ?? l.skills)], mcp: [...(mine?.mcp ?? l.mcp)], provider: mine?.provider ?? "" };
 }
 
 const flip = (list: readonly string[], name: string): string[] => (list.includes(name) ? list.filter((x) => x !== name) : [...list, name]);
@@ -39,8 +43,14 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
   // a project card starts no run, so it takes no loadout
   const offered = task.action === "project" ? [] : loadoutsFor(task.workflow ? "propose" : task.action, info?.loadouts);
   const first = offered.find((l) => l.name === task.equip?.loadout) ?? offered[0];
-  const [name, setName] = useState<string | undefined>(first?.name);
-  const loadout = offered.find((l) => l.name === name) ?? first;
+  const [name, setName] = useState<string | undefined>(task.equip?.loadout === NO_LOADOUT ? NO_LOADOUT : first?.name);
+  const none = name === NO_LOADOUT;
+  const loadout = none ? undefined : (offered.find((l) => l.name === name) ?? first);
+  // what the card takes left bare, asked of its backend when kit.json has defaults
+  const hasDefaults = info?.defaults !== undefined;
+  const [inherited, setInherited] = useState<LoadoutDefault | null>(null);
+  // whether Eric picked a loadout or none here, so the inherited one never overrides that
+  const picked = useRef(false);
   const [picks, setPicks] = useState<Picks | null>(() => (first ? picksOf(first, task.equip) : null));
   const [words, setWords] = useState<Mention[] | null>(null);
   const [wordsError, setWordsError] = useState<string | null>(null);
@@ -58,6 +68,74 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
       live = false;
     };
   }, [task.repo]);
+
+  useEffect(() => {
+    if (!hasDefaults || task.action === "project") return;
+    let live = true;
+    api.loadoutResolve(task.repo, task.workflow ? "workflow" : task.action).then((d) => {
+      if (!live) return;
+      setInherited(d);
+      // a bare card's sheet opens on the loadout it would take, so cancel leaves what it showed
+      const l = !task.equip && d.name ? offered.find((x) => x.name === d.name) : undefined;
+      if (l && !picked.current) {
+        setName(l.name);
+        setPicks(picksOf(l, undefined));
+      }
+    }, () => {});
+    return () => {
+      live = false;
+    };
+  }, [task.repo, task.action, task.workflow, hasDefaults]);
+
+  const bare = inherited?.name ? `Left bare, this card takes ${inherited.name}, ${fromWord(inherited)}.` : null;
+
+  const noneApply = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await coordPlanEdit(run.id, task.id, { equip: { loadout: NO_LOADOUT } });
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  };
+
+  if (none) {
+    return (
+      <aside className="mgr-equip" aria-label={`Equip ${task.id}`}>
+        <Head task={task} />
+        <div className="mgr-equip-body">
+          <section aria-label="loadout">
+            <h3>loadout</h3>
+            <div className="mgr-equip-row">
+              {offered.map((l) => (
+                <button key={l.name} type="button" className="mgr-equip-pick" aria-pressed={false} onClick={() => { picked.current = true; setName(l.name); setPicks(picksOf(l, task.equip)); }}>
+                  {l.name}
+                </button>
+              ))}
+              <button type="button" className="mgr-equip-pick" aria-pressed={true}>
+                none
+              </button>
+            </div>
+            <p className="mgr-equip-note">No loadout: the worker starts as the repo's route says, with every skill and server it has.{inherited?.name ? ` Without none, the card would take ${inherited.name}, ${fromWord(inherited)}.` : ""}</p>
+          </section>
+        </div>
+        <div className="mgr-equip-foot">
+          <p className="mgr-equip-summary">no loadout</p>
+          {error && <p className="note err">{error}</p>}
+          <div className="mgr-equip-row">
+            <button type="button" className="mini strong" disabled={busy} onClick={() => void noneApply()}>
+              apply to {task.id}
+            </button>
+            <button type="button" className="mini" onClick={onDone}>
+              cancel
+            </button>
+          </div>
+        </div>
+      </aside>
+    );
+  }
 
   if (!loadout || !picks) {
     return (
@@ -83,15 +161,19 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
   const saved: Picks = { ...picks, mcp: here };
   const equip = equipFrom(loadout, saved);
   const changed = Object.keys(equip).length > 1;
+  const providers = providersFor(loadout.harness, info?.providers);
+  const providerWord = picks.provider === DEFAULT_PROVIDER ? "the login" : picks.provider || loadout.provider || "";
   const summary = [
     loadout.name,
     picks.model !== "default" ? picks.model : "",
     picks.effort !== "default" ? `effort ${picks.effort}` : "",
+    providerWord ? `on ${providerWord}` : "",
     codex ? "" : count(picks.skills.length, "skill"),
     codex ? "" : count(here.length, "server"),
   ].filter(Boolean).join(", ");
 
   const choose = (l: Loadout) => {
+    picked.current = true;
     setName(l.name);
     setPicks(picksOf(l, task.equip));
   };
@@ -119,8 +201,11 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
                 {l.name}
               </button>
             ))}
+            <button type="button" className="mgr-equip-pick" aria-pressed={false} title="No loadout, not even the one the card would inherit" onClick={() => { picked.current = true; setName(NO_LOADOUT); }}>
+              none
+            </button>
           </div>
-          <p className="mgr-equip-note">{changed ? `Changed from ${loadout.name}. ` : ""}{loadout.note || `The ${loadout.name} loadout.`}</p>
+          <p className="mgr-equip-note">{changed ? `Changed from ${loadout.name}. ` : ""}{loadout.note || `The ${loadout.name} loadout.`}{bare ? ` ${bare}` : ""}</p>
         </section>
 
         <section aria-label="model and effort">
@@ -128,6 +213,20 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
           <Segment values={models} on={picks.model} pick={(model) => setPicks({ ...picks, model })} />
           <h3>effort</h3>
           <Segment values={efforts} on={picks.effort} pick={(effort) => setPicks({ ...picks, effort })} />
+          <h3>provider</h3>
+          <div className="mgr-equip-seg">
+            <button type="button" aria-pressed={picks.provider === "" || picks.provider === loadout.provider} title={loadout.provider ? "The loadout's provider" : "The provider the repo's route names, if any"} onClick={() => setPicks({ ...picks, provider: "" })}>
+              {loadout.provider ?? "the route's"}
+            </button>
+            <button type="button" aria-pressed={picks.provider === DEFAULT_PROVIDER} title={`${loadout.harness === "codex" ? "Codex" : "Claude Code"}'s own login, with no provider`} onClick={() => setPicks({ ...picks, provider: DEFAULT_PROVIDER })}>
+              login
+            </button>
+            {providers.filter((p) => p.id !== loadout.provider).map((p) => (
+              <button key={p.id} type="button" disabled={!p.usable} aria-pressed={picks.provider === p.id} title={p.why || undefined} onClick={() => setPicks({ ...picks, provider: p.id })}>
+                {p.id}
+              </button>
+            ))}
+          </div>
         </section>
 
         <section aria-label="skills">
