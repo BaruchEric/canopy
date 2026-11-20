@@ -119,8 +119,8 @@ loadout kit.json does not hold.
   `canopy loadouts adopt|restore <id>`; `canopy run --loadout none`.
 - Kit view: a providers table (one cell per backend) and the defaults.
 - The plan sheet's loadout pick shows the inherited one and offers `none`.
-- The equip sheet shows what a card inherits, takes a provider (or the
-  login) and offers `none`; the card form's loadout select offers the
+- The equip sheet opens a bare card on what it inherits, takes a provider
+  (or the login) and offers `none`; the card form's loadout select offers the
   default and `none`.
 - The run sheet and run chip name the provider and where the loadout came
   from.
