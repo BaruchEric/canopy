@@ -350,7 +350,9 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
   const repo = args.shift() ?? null;
   if (jsonFlagCount > 1 || repo?.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
   const info = await getInfo();
+  // a path such as . names the repo at that folder, as for the other forms
+  const shown = repo !== null && isPathArgument(repo) ? await repoIdIn(info, repo, fail) : repo;
   const trees = await getTrees();
   if (json) console.log(JSON.stringify(trees ? { ...info, trees } : info, null, 2));
-  else for (const line of worktreeLines(info, repo, Date.now(), trees)) console.log(line);
+  else for (const line of worktreeLines(info, shown, Date.now(), trees)) console.log(line);
 }
