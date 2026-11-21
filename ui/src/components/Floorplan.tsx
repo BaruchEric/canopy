@@ -45,7 +45,7 @@ export function FullButton({ mode, setMode, what = "map" }: { mode: SurfaceMode;
  * preview slot, so its Ask bar talks to its own server on another origin.
  * The section reads the map's state, starts the run that makes or updates
  * it, and starts, frames and stops the map's server. `kinds` is the
- * Floorplan | Archify switch (Map.tsx), at the top of the body.
+ * map's kind switch (Map.tsx), at the top of the body.
  */
 export function FloorplanMap({ repo, kinds }: { repo: Repo; kinds: ReactNode }) {
   const closed = useSectionClosed(repo.id, "map");

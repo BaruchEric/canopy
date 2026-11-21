@@ -107,6 +107,13 @@ describe("needs", () => {
     expect(needs("GET", "/api/repos/archify")).toBe("operate");
   });
 
+  test("a graph's start, its viewer, its prepare and its read are a hand's (FR-072)", () => {
+    // make starts a Claude run, open starts a viewer, prepare installs the plugin
+    expect(needs("POST", "/api/repos/understand")).toBe("operate");
+    // the status reads the checkout's graph and its git history
+    expect(needs("GET", "/api/repos/understand")).toBe("operate");
+  });
+
   test("operate rows", () => {
     expect(needs("POST", "/api/runs/answer")).toBe("operate");
     expect(needs("DELETE", "/api/runs")).toBe("operate");

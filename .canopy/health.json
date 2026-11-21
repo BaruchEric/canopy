@@ -1,6 +1,7 @@
 {
   "checks": [
     { "name": "dev", "kind": "task", "task": "dev", "heal": "auto" },
-    { "name": "floorplan", "kind": "command", "run": "bun scripts/floorplan-update.ts --check", "every": 21600, "heal": "none" }
+    { "name": "floorplan", "kind": "command", "run": "bun scripts/floorplan-update.ts --check", "every": 21600, "heal": "none" },
+    { "name": "understand", "kind": "command", "run": "bun scripts/understand-update.ts --check", "every": 21600, "heal": "none" }
   ]
 }

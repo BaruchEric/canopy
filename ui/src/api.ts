@@ -5,6 +5,7 @@ import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } fro
 import type { CostReport } from "../../src/core/costs";
 import type { FloorplanInfo } from "../../src/core/floorplan";
 import type { ArchifyInfo, ArchifyPick } from "../../src/core/archify";
+import { isWait, type UnderstandInfo, type UnderstandWait } from "../../src/core/understand";
 import type { CapacitySettings } from "../../src/core/capacity";
 import type { PushEntryView, PushKeyInfo, PushListInfo, PushTestResult } from "../../src/core/push";
 import type { VoiceEngine } from "./voicelive";
@@ -1525,6 +1526,30 @@ export const api = {
   /** removes a diagram's folder */
   archifyRemove: (id: string, diagram: string) =>
     repoReq<{ removed: string }>(id, (p) => `/api/repos/archify?${rq(p)}`, { method: "POST", body: JSON.stringify({ act: "remove", diagram }) }),
+  /** a checkout's knowledge graph (FR-072): the graph file, the commits
+   *  since, the prepared plugin, its viewer and the run making it, that
+   *  run's id under the backend's name */
+  understand: async (id: string): Promise<UnderstandInfo> => {
+    const [b, plain] = on(id);
+    const got = await req<UnderstandInfo>(b, `/api/repos/understand?${rq(plain)}`);
+    return got.run ? { ...got, run: qual(b, got.run) } : got;
+  },
+  /** makes, updates or rebuilds the graph (a Claude run in the checkout),
+   *  or answers that the backend is preparing the plugin first */
+  understandMake: async (id: string, note: string, full: boolean): Promise<Run | UnderstandWait> => {
+    const [b, plain] = on(id);
+    const got = await req<Run | UnderstandWait>(b, `/api/repos/understand?${rq(plain)}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "make", note, ...(full ? { full } : {}), client: clientId() }),
+    });
+    return isWait(got) ? got : from(b, got, qRun);
+  },
+  /** starts the graph's viewer (or finds it) and answers its port and
+   *  token, for a preview slot; or that the plugin is being prepared */
+  understandOpen: (id: string) =>
+    repoReq<{ port: number; token: string } | UnderstandWait>(id, (p) => `/api/repos/understand?${rq(p)}`, { method: "POST", body: JSON.stringify({ act: "open" }) }),
+  /** stops the graph's viewer */
+  understandStop: (id: string) => repoReq<{ stopped: boolean }>(id, (p) => `/api/repos/understand?${rq(p)}`, { method: "POST", body: JSON.stringify({ act: "stop" }) }),
   /** archives a repo in canopy, or takes the mark off; answers the repo */
   archive: async (id: string, archived: boolean) => {
     const [b, plain] = on(id);

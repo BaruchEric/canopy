@@ -5,7 +5,7 @@ test("parseMapKinds keeps only real choices", () => {
   expect(parseMapKinds(null)).toEqual({});
   expect(parseMapKinds("not json")).toEqual({});
   expect(parseMapKinds("[1]")).toEqual({});
-  expect(parseMapKinds('{"a":"archify","b":"floorplan","c":"other","d":3}')).toEqual({ a: "archify", b: "floorplan" });
+  expect(parseMapKinds('{"a":"archify","b":"floorplan","c":"other","d":3,"e":"understand"}')).toEqual({ a: "archify", b: "floorplan", e: "understand" });
 });
 
 test("withMapKind keeps a repo's choice last and drops the default", () => {

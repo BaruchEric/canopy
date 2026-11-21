@@ -82,7 +82,7 @@ type Rule = { methods: readonly string[]; paths: readonly string[]; right: Right
 const POST = ["POST"];
 const DEL = ["DELETE"];
 const POST_DEL = ["POST", "DELETE"];
-const REPO_OPERATE = ["run", "flow", "resume", "stage", "commit", "push", "dropstale", "pull", "unlock", "note", "favorite", "harness", "spec", "suggest", "refresh", "floorplan", "archify"];
+const REPO_OPERATE = ["run", "flow", "resume", "stage", "commit", "push", "dropstale", "pull", "unlock", "note", "favorite", "harness", "spec", "suggest", "refresh", "floorplan", "archify", "understand"];
 
 /** The GETs a caller with no token gets, each for a reason. `about` is the
  *  build and the machine's name, which a deploy checks came up. `auth` says

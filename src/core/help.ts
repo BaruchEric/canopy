@@ -186,6 +186,10 @@ usage:
   canopy archify <repo> save <diagram> [file]   save a diagram's page here as one HTML file
   canopy archify <repo> rm <diagram>            remove a diagram's folder; one the repo tracks is refused
     --backend URL | --on NAME       select the backend that owns the repo
+  canopy understand <repo> [--json]  the repo's knowledge graph (Understand-Anything) in .ua/: its nodes, files and layers, its age, the commits since, its viewer and the run making it
+  canopy understand <repo> make|update|rebuild [-m note]   a Claude run makes the graph, refreshes what changed, or rebuilds it from nothing; the first on a backend prepares the plugin there
+  canopy understand <repo> open|stop|prepare   start the graph's viewer on the backend (the map section frames it), stop it, or only prepare the plugin
+    --backend URL | --on NAME       select the backend that owns the repo
   canopy scenarios <repo>            the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
   canopy scenarios <repo> add <name> [--judge] [--run CMD]   a new scenario file under <configDir>/scenarios/<repo key>/; edit it there
   canopy scenarios <repo> run [<run>]   run the set against a branch run's worktree, else against the main checkout

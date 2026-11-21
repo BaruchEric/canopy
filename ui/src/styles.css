@@ -11706,6 +11706,11 @@ body:has(.focus-grip.se.dragging) {
   align-self: flex-start;
   font-size: var(--t-md);
 }
+/* the knowledge graph's notice while a backend prepares Understand-Anything
+   (FR-072): a status line in full ink, since the section waits on it */
+.map-line.ua-prep {
+  color: var(--ink);
+}
 
 /* ---------- the map's diagrams: Archify (FR-071) ---------- */
 

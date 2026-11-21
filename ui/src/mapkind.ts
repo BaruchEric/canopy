@@ -1,10 +1,10 @@
 /**
- * What a repo's map section shows: Floorplan's map (FR-070) or Archify's
- * diagrams (FR-071), remembered per repo in this browser. Tested in
- * mapkind.test.ts.
+ * What a repo's map section shows: Floorplan's map (FR-070), Archify's
+ * diagrams (FR-071) or Understand-Anything's knowledge graph (FR-072),
+ * remembered per repo in this browser. Tested in mapkind.test.ts.
  */
 
-export type MapKind = "floorplan" | "archify";
+export type MapKind = "floorplan" | "archify" | "understand";
 
 /** where each repo's choice is kept (localStorage), by repo id */
 export const MAP_KIND_KEY = "canopy.mapKind";
@@ -12,7 +12,7 @@ export const MAP_KIND_KEY = "canopy.mapKind";
 /** the most repos the memory keeps; the oldest go first */
 const KEEP = 200;
 
-const isKind = (v: unknown): v is MapKind => v === "floorplan" || v === "archify";
+const isKind = (v: unknown): v is MapKind => v === "floorplan" || v === "archify" || v === "understand";
 
 /** The saved choices, read leniently: anything that is not one is dropped. */
 export function parseMapKinds(raw: string | null): Record<string, MapKind> {

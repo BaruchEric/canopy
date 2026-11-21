@@ -64,6 +64,7 @@ import { landCommand } from "./land";
 import { worktreesCommand } from "./worktrees";
 import { floorplanCommand } from "./floorplan";
 import { archifyCommand } from "./archify";
+import { understandCommand } from "./understand";
 import { peersRoot, type PeersAnswer } from "./peersroot";
 import { issuesCommand } from "./issues";
 import { driftCommand } from "./drift";
@@ -144,6 +145,7 @@ export const COMMANDS = new Set([
   "worktrees",
   "floorplan",
   "archify",
+  "understand",
   "queue",
   "collisions",
   "scenarios",
@@ -884,6 +886,8 @@ export async function main(argv: string[]): Promise<void> {
       return floorplanCommand(args, { fail });
     case "archify":
       return archifyCommand(args, { fail });
+    case "understand":
+      return understandCommand(args, { fail });
     case "scenarios":
       return scenariosCommand(args, { fail });
     case "workflow":

@@ -4,6 +4,8 @@ import { FLOORPLAN_ACTION, floorplanSpec, isUpdate } from "../core/floorplan";
 import { FLOORPLAN_PLUGIN, FLOORPLAN_SKILL, FloorplanError, floorplanEnv, floorplanInfo, openFloorplan, readFloorplanStatus, realRoot, stopFloorplan } from "./floorplan";
 import { ARCHIFY_ACTION, archifyFolder, archifySpec, isArchifyPick, type ArchifyStart } from "../core/archify";
 import { ARCHIFY_PLUGIN, ARCHIFY_SKILL, ArchifyError, archifyEnv, diagramPage, hasOrigin, keepOutOfGit, listDiagrams, removeDiagram } from "./archify";
+import { UNDERSTAND_ACTION, graphRun, understandSpec, type UnderstandWait } from "../core/understand";
+import * as understand from "./understand";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { coordApiHost, Library, libraryCall, libraryOriginAllowed, libraryStateDir, openBind, returnLeg, tailnetHost } from "../core/library";
 import { LibrarySync } from "./libsync";
@@ -1436,6 +1438,60 @@ async function archifyRoute(state: ServerState, repo: Repo, method: string, req:
     return json(run, 201);
   } catch (err) {
     if (err instanceof ArchifyError) throw new HttpError(400, err.message);
+    throw err;
+  }
+}
+
+/** A checkout's knowledge graph (FR-072). GET reads it (the graph file, the
+ *  commits since, the prepared plugin, its viewer, the run at it). POST
+ *  `{act}` makes, updates or rebuilds it (`make`, with `full` for a
+ *  rebuild: a Claude run in the checkout with canopy's prepared copy of
+ *  Understand-Anything loaded), starts its viewer for a preview slot
+ *  (`open`, answering the port and the viewer's token), stops that
+ *  (`stop`), or prepares the plugin (`prepare`). A start or an open before
+ *  the plugin is prepared on this machine starts the prepare and answers
+ *  202 `{preparing}`; the caller waits and asks again. The graph lives in
+ *  the checkout, so a repo on another host and an incubator seed are
+ *  refused, as for the map. */
+async function understandRoute(state: ServerState, repo: Repo, method: string, req: Request): Promise<Response> {
+  if (repo.host) throw new HttpError(400, `the graph is made on the checkout's own machine; ${repo.name} is on ${repo.host}`);
+  if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
+  const liveRun = (): string | null => {
+    const r = state.runner.activeFor(repo.id);
+    return r?.action === UNDERSTAND_ACTION ? r.id : null;
+  };
+  if (method === "GET") return json(await understand.understandInfo(repo.path, liveRun()));
+  if (method !== "POST") throw new HttpError(405, "GET or POST");
+  const b = await objectBody(req);
+  const wait = (): Response => json({ preparing: true, plugin: understand.startPrepare() } satisfies UnderstandWait, 202);
+  try {
+    if (b.act === "stop") return json({ stopped: await understand.stopUnderstand(repo.path) });
+    if (b.act !== "make" && b.act !== "open" && b.act !== "prepare") throw new HttpError(400, "act is make, open, stop or prepare");
+    if (b.note !== undefined && typeof b.note !== "string") throw new HttpError(400, "note must be text");
+    if (understand.pluginInfo().state !== "ready") return wait();
+    if (b.act === "prepare") return json({ plugin: understand.pluginInfo() });
+    if (b.act === "open") return json(await understand.openUnderstand(repo.path));
+    if (liveRun()) throw new HttpError(409, "a graph run is going on this repo already");
+    const root = realRoot(repo.path);
+    const folder = understand.folderOf(root);
+    const info = await understand.understandInfo(root, null);
+    await understand.keepOutOfGit(root, folder);
+    const spec = understandSpec({
+      pluginDir: understand.pluginDir(),
+      skillDir: understand.skillDir(),
+      scripts: understand.skillScripts(),
+      root,
+      folder,
+      how: graphRun(info.state, b.full === true),
+    });
+    const run = await startRepoRun(state, repo, "ask", typeof b.note === "string" ? b.note : "", b.client, undefined, false, false, "interactive", {
+      loadout: NO_LOADOUT,
+      tools: false,
+      custom: { action: UNDERSTAND_ACTION, spec, extras: { pluginDirs: [understand.pluginDir()], env: understand.understandEnv() }, claudeOnly: "the graph is made by Claude Code" },
+    });
+    return json(run, 201);
+  } catch (err) {
+    if (err instanceof understand.UnderstandError) throw new HttpError(400, err.message);
     throw err;
   }
 }
@@ -6083,6 +6139,7 @@ async function handleApi(
 
     if (action === "floorplan") return floorplanRoute(state, repo, method, req);
     if (action === "archify") return archifyRoute(state, repo, method, req);
+    if (action === "understand") return understandRoute(state, repo, method, req);
     if (method === "GET" && action === "log") {
       return json(await getLog(repo.path));
     }

@@ -72,7 +72,7 @@ function DiagramRow({ d, on, pick }: { d: ArchifyDiagram; on: boolean; pick: () 
  * Claude run into the repo's own `.archify/` and shown here in a sandboxed
  * frame. Lists the diagrams, starts the run that draws or revises one,
  * shows one, saves its page as a file and removes it. `kinds` is the
- * Floorplan | Archify switch, which sits at the top of the body.
+ * map's kind switch, which sits at the top of the body.
  */
 export function ArchifyMap({ repo, kinds }: { repo: Repo; kinds: ReactNode }) {
   const closed = useSectionClosed(repo.id, "map");
