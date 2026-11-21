@@ -163,6 +163,15 @@ test("cliArgs adds one --add-dir per extra folder", () => {
   expect(cliArgs({ allowedTools: [], maxTurns: 5 })).not.toContain("--add-dir");
 });
 
+test("cliArgs loads each plugin of the run with --plugin-dir, and none without (FR-070)", () => {
+  const args = cliArgs({ allowedTools: ["Read"], maxTurns: 5, addDirs: ["/x"], pluginDirs: ["/app/lib/floorplan"] });
+  const at = args.indexOf("--plugin-dir");
+  expect(args.slice(at, at + 2)).toEqual(["--plugin-dir", "/app/lib/floorplan"]);
+  // after the variadic --add-dir, so the folder is never read as a rule or a dir
+  expect(at).toBeGreaterThan(args.indexOf("/x"));
+  expect(cliArgs({ allowedTools: [], maxTurns: 5 })).not.toContain("--plugin-dir");
+});
+
 test("cliArgs: a fork adds --fork-session after --resume, and nothing without a session to resume (FR-043 plan 3)", () => {
   const args = cliArgs({ allowedTools: [], maxTurns: 5, resume: "sess-1", fork: true });
   const at = args.indexOf("--resume");

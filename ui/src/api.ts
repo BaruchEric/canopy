@@ -3,6 +3,7 @@ import type { QuickNote, QuickNotesInfo } from "../../src/core/notes";
 import type { Clip, ClipDevice, ClipIn, ClipSource, ClipsInfo } from "../../src/core/clips";
 import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
 import type { CostReport } from "../../src/core/costs";
+import type { FloorplanInfo } from "../../src/core/floorplan";
 import type { CapacitySettings } from "../../src/core/capacity";
 import type { PushEntryView, PushKeyInfo, PushListInfo, PushTestResult } from "../../src/core/push";
 import type { VoiceEngine } from "./voicelive";
@@ -1479,6 +1480,27 @@ export const api = {
     });
     return { ...got, repo: from(b, got.repo, qRepo) };
   },
+  /** a checkout's map (FR-070): status.mjs's word, its server and the
+   *  run making it, that run's id under the backend's name */
+  floorplan: async (id: string): Promise<FloorplanInfo> => {
+    const [b, plain] = on(id);
+    const got = await req<FloorplanInfo>(b, `/api/repos/floorplan?${rq(plain)}`);
+    return got.run ? { ...got, run: qual(b, got.run) } : got;
+  },
+  /** makes or updates the map: a Claude run in the checkout */
+  floorplanMake: async (id: string, note: string, developers: boolean) => {
+    const [b, plain] = on(id);
+    const got = await req<Run>(b, `/api/repos/floorplan?${rq(plain)}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "make", note, ...(developers ? { developers } : {}), client: clientId() }),
+    });
+    return from(b, got, qRun);
+  },
+  /** starts the map's own server (or finds it) and answers its port, for
+   *  a preview slot */
+  floorplanOpen: (id: string) => repoReq<{ port: number }>(id, (p) => `/api/repos/floorplan?${rq(p)}`, { method: "POST", body: JSON.stringify({ act: "open" }) }),
+  /** stops the map's server */
+  floorplanStop: (id: string) => repoReq<{ stopped: boolean }>(id, (p) => `/api/repos/floorplan?${rq(p)}`, { method: "POST", body: JSON.stringify({ act: "stop" }) }),
   /** archives a repo in canopy, or takes the mark off; answers the repo */
   archive: async (id: string, archived: boolean) => {
     const [b, plain] = on(id);

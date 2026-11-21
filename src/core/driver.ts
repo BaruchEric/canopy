@@ -61,6 +61,10 @@ export interface DriveSpec {
   maxTurns: number;
   /** folders beside the cwd the agent may use (`--add-dir`): a workspace run's other members */
   addDirs?: readonly string[];
+  /** Claude plugins loaded for this run alone (`--plugin-dir`): canopy's
+   *  copy of Floorplan for a map run (FR-070). Codex has no such flag, and a
+   *  start that needs one refuses Codex before it gets here. */
+  pluginDirs?: readonly string[];
   /** no one answers this run: every prompt is denied at once with this
    *  message, and the run never waits */
   unattended?: string;

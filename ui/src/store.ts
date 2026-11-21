@@ -178,7 +178,7 @@ export const FEED = { min: 100, max: 900, initial: 220 };
 /** the event feed as a column on a side, in px of width */
 export const FEED_W = { min: 240, max: 1200, initial: 420 };
 /** sections that start folded, matching how the panel read before they could fold */
-const DEFAULT_CLOSED = ["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files", "health"];
+const DEFAULT_CLOSED = ["search", "history", "claude", "launch", "peers", "spec", "preview", "map", "agents", "files", "health"];
 /** the folded-by-default set a layout saved before `knownSections` existed
  *  had decided about; anything added to DEFAULT_CLOSED since folds for it */
 const OLD_KNOWN = ["search", "history", "claude"];

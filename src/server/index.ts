@@ -1,5 +1,7 @@
 import { parseAnswer } from "./answers";
 import { ACTIONS, branchLine, branchPrompt, busyWith, splitMembers, type ActionSpec } from "../core/actions";
+import { FLOORPLAN_ACTION, floorplanSpec, isUpdate } from "../core/floorplan";
+import { FLOORPLAN_PLUGIN, FLOORPLAN_SKILL, FloorplanError, floorplanEnv, floorplanInfo, openFloorplan, readFloorplanStatus, realRoot, stopFloorplan } from "./floorplan";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { coordApiHost, Library, libraryCall, libraryOriginAllowed, libraryStateDir, openBind, returnLeg, tailnetHost } from "../core/library";
 import { LibrarySync } from "./libsync";
@@ -1311,6 +1313,7 @@ async function startRepoRun(
     // Before the workspace and install checks, so a workspace propose on
     // Codex hears what is wrong with the action, not with the workspace.
     if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, "plan, then build needs Claude Code");
+    if (how.custom?.claudeOnly && agent.harness !== "claude") throw new HttpError(400, how.custom.claudeOnly);
     if (scope && agent.harness !== "claude") throw new HttpError(400, "workspace runs need Claude Code");
     await needHarness(state, agent.harness, repo.path);
     // the device it was started from, when the browser said and is on the stream
@@ -1322,9 +1325,46 @@ async function startRepoRun(
       const resolved = await issueNoteFor(repo, note);
       return await startBranchRun(state, repo, action, resolved.note, agent, by, pr, ACTIONS[action], { ...tools.extras, ...(how.devTask ? { devTask: true } : {}) }, resolved.work);
     }
+    if (how.custom) return state.runner.start(repo, how.custom.action, how.custom.spec, note, agent, by, scope, undefined, { ...tools.extras, ...how.custom.extras });
     return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope, undefined, tools.extras);
   } catch (err) {
     await tools.release();
+    throw err;
+  }
+}
+
+/** A checkout's map (FR-070). GET reads it (status.mjs, its server, the run
+ *  at it); POST `{act}` makes or updates it (`make`, a Claude run in the
+ *  checkout with canopy's copy of Floorplan loaded), starts its server for
+ *  a preview slot (`open`, answering the port) or stops that (`stop`). The
+ *  map lives in the checkout, so a repo on another host, an incubator seed
+ *  and a run's branch are refused, as a plain run is. */
+async function floorplanRoute(state: ServerState, repo: Repo, method: string, req: Request): Promise<Response> {
+  if (repo.host) throw new HttpError(400, `the map is drawn on the checkout's own machine; ${repo.name} is on ${repo.host}`);
+  if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
+  const liveRun = (): string | null => {
+    const r = state.runner.activeFor(repo.id);
+    return r?.action === FLOORPLAN_ACTION ? r.id : null;
+  };
+  if (method === "GET") return json(await floorplanInfo(repo.path, liveRun()));
+  if (method !== "POST") throw new HttpError(405, "GET or POST");
+  const b = await objectBody(req);
+  try {
+    if (b.act === "open") return json(await openFloorplan(repo.path));
+    if (b.act === "stop") return json({ stopped: await stopFloorplan(repo.path) });
+    if (b.act !== "make") throw new HttpError(400, "act is make, open or stop");
+    if (b.note !== undefined && typeof b.note !== "string") throw new HttpError(400, "note must be text");
+    const root = realRoot(repo.path);
+    const status = await readFloorplanStatus(root);
+    const spec = floorplanSpec({ skillDir: FLOORPLAN_SKILL, root, update: isUpdate(status.state), developers: b.developers === true });
+    const run = await startRepoRun(state, repo, "ask", b.note ?? "", b.client, undefined, false, false, "interactive", {
+      loadout: NO_LOADOUT,
+      tools: false,
+      custom: { action: FLOORPLAN_ACTION, spec, extras: { pluginDirs: [FLOORPLAN_PLUGIN], env: floorplanEnv() }, claudeOnly: "the map is drawn by Claude Code" },
+    });
+    return json(run, 201);
+  } catch (err) {
+    if (err instanceof FloorplanError) throw new HttpError(400, err.message);
     throw err;
   }
 }
@@ -1341,6 +1381,10 @@ interface RunStartHow {
   devTask?: boolean;
   /** a loadout from kit.json to start with (FR-065) */
   loadout?: string;
+  /** a run that is none of the built-in actions, in the checkout: its own
+   *  action name and spec, extras laid over the start's, and the refusal a
+   *  harness other than Claude Code gets (a map run, FR-070) */
+  custom?: { action: string; spec: ActionSpec; extras: StartExtras; claudeOnly?: string };
 }
 
 /** Why a run here cannot hold canopy's tools, or null. An incubator seed runs
@@ -5966,6 +6010,7 @@ async function handleApi(
       );
     }
 
+    if (action === "floorplan") return floorplanRoute(state, repo, method, req);
     if (method === "GET" && action === "log") {
       return json(await getLog(repo.path));
     }

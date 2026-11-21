@@ -206,11 +206,11 @@ function firstWord(args: string[]): string | undefined {
   return undefined;
 }
 
-function requestFailure(target: Target, fail: Fail): (error: unknown) => never {
+export function requestFailure(target: Target, fail: Fail): (error: unknown) => never {
   return (error: unknown) => fail(error instanceof Unreachable ? `${target.name} did not answer: ${error.message}` : errText(error));
 }
 
-async function selectedTarget(args: Pick<RunArgs, "backend" | "on">, fail: Fail): Promise<Target> {
+export async function selectedTarget(args: Pick<RunArgs, "backend" | "on">, fail: Fail): Promise<Target> {
   const home = apiBase(args.backend);
   if (!/^https?:\/\/[^/\s]+$/.test(home)) return fail(`--backend must be an http(s) origin, got ${home}`);
   const homeTarget: Target = { name: "home", urls: [home] };
@@ -228,7 +228,7 @@ function isPathArgument(value: string): boolean {
   return value === "." || value.startsWith("/") || value.startsWith("./") || value.startsWith("../") || value.startsWith("~");
 }
 
-async function repoId(repoArg: string, target: Target, fail: Fail): Promise<string> {
+export async function repoId(repoArg: string, target: Target, fail: Fail): Promise<string> {
   if (!isPathArgument(repoArg)) return repoArg;
   const path = await realpath(resolve(repoArg.replace(/^~(?=$|\/)/, process.env["HOME"] ?? "~")))
     .catch(() => fail(`no such folder: ${repoArg}`));

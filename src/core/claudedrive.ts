@@ -188,6 +188,7 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, s
     ...(spec.mcpConfig ? ["--mcp-config", spec.mcpConfig] : []),
     ...(allowed.length ? ["--allowedTools", allowed.join(",")] : []),
     ...(spec.addDirs ?? []).flatMap((d) => ["--add-dir", d]),
+    ...(spec.pluginDirs ?? []).flatMap((d) => ["--plugin-dir", d]),
     ...(spec.resume ? ["--resume", spec.resume] : []),
     // a fork (FR-043 plan 3): the resumed session goes on under a new id,
     // with the old transcript as its context (probe P1, 2026-11-02)

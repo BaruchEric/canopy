@@ -11615,6 +11615,93 @@ body:has(.focus-grip.se.dragging) {
   max-height: none;
 }
 
+/* ---------- the map: Floorplan's drawing of the checkout (FR-070) ---------- */
+
+.map-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px var(--gutter) 10px;
+}
+.map-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: var(--t-md);
+}
+.map-start,
+.map-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.map-note {
+  flex: 1 1 16rem;
+  min-width: 0;
+  font: inherit;
+  font-size: var(--t-md);
+  padding: 2px 8px;
+  border-radius: var(--r);
+  border: 1px solid var(--hair2);
+  background: var(--bark1);
+  color: var(--ink);
+}
+.map-dev {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-dim);
+  font-size: var(--t-md);
+  white-space: nowrap;
+}
+.map-error {
+  margin: 0;
+  color: var(--rust);
+  font-size: var(--t-md);
+  overflow-wrap: anywhere;
+}
+.map-frame-wrap {
+  height: var(--preview-h, 600px);
+  min-height: 240px;
+  max-height: 85vh;
+  max-height: 85dvh;
+  overflow: hidden;
+  border: 1px solid var(--hair2);
+  border-radius: var(--r);
+  /* the map's own page paints itself; this shows only while it loads */
+  background: var(--bark1);
+}
+.map-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+/* filling the panel, the frame takes whatever the box has */
+.map.section-full {
+  display: flex;
+  flex-direction: column;
+}
+.map.section-full > .section-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.map.section-full .map-body {
+  flex: 1;
+  min-height: 0;
+}
+.map.section-full .map-frame-wrap {
+  flex: 1;
+  height: auto;
+  max-height: none;
+}
+
 /* ---------- the launcher: builds, releases and pull requests in the panel ---------- */
 
 .launch {

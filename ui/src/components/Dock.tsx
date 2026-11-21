@@ -79,6 +79,7 @@ import { LaunchSection } from "./Launch";
 import { TasksSection } from "./Tasks";
 import { AgentsSection } from "./Registry";
 import { PreviewSection } from "./Preview";
+import { MapSection } from "./Floorplan";
 import { FinderSection } from "./Finder";
 import { GuidedPanel } from "./Guided";
 import { Tour } from "./Tour";
@@ -1397,6 +1398,8 @@ export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
       return repo.spec === undefined ? null : <SpecSection repo={repo} state={repo.spec} />;
     case "preview":
       return <PreviewSection repo={repo} />;
+    case "map":
+      return <MapSection repo={repo} />;
     case "tasks":
       return <TasksSection repo={repo} />;
     case "health":

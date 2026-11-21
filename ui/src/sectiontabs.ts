@@ -158,6 +158,9 @@ export function sectionApplies(k: SectionKey, repo: Pick<Repo, "forge" | "spec" 
       return !repo.forge && !repo.host && !isTreeCard(repo);
     case "preview":
       return !repo.host;
+    // the map is drawn and served on the checkout's own disk (FR-070)
+    case "map":
+      return !repo.host && !repo.forge;
     default:
       return true;
   }

@@ -62,6 +62,7 @@ import { apiBase, callerHeaders, helperTokenFile, setHomeBase, setTokenFlag } fr
 import { authCommand, pairFlow, pairLabel, readHelperToken, saveToken } from "./auth";
 import { landCommand } from "./land";
 import { worktreesCommand } from "./worktrees";
+import { floorplanCommand } from "./floorplan";
 import { peersRoot, type PeersAnswer } from "./peersroot";
 import { issuesCommand } from "./issues";
 import { driftCommand } from "./drift";
@@ -140,6 +141,7 @@ export const COMMANDS = new Set([
   "mcp",
   "land",
   "worktrees",
+  "floorplan",
   "queue",
   "collisions",
   "scenarios",
@@ -876,6 +878,8 @@ export async function main(argv: string[]): Promise<void> {
       return landCommand(cmd, args, { fail });
     case "worktrees":
       return worktreesCommand(args, { fail });
+    case "floorplan":
+      return floorplanCommand(args, { fail });
     case "scenarios":
       return scenariosCommand(args, { fail });
     case "workflow":

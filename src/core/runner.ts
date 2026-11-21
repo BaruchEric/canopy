@@ -142,6 +142,8 @@ export interface StartExtras {
    *  goal's files folder, for its coordinator, a card that lists them and a
    *  later run on that card's branch. The run keeps them (`Run.addDirs`). */
   addDirs?: readonly string[];
+  /** Claude plugins for this run alone (`--plugin-dir`, FR-070) */
+  pluginDirs?: readonly string[];
   /** a Claude session to resume, for a chat the sweep stopped; a branch's own
    *  `resume` wins when both are set */
   resume?: string;
@@ -498,7 +500,7 @@ export class Runner {
     const remember = stage || coordinate ? null : this.rememberHook(run, cwd);
     const resume = branch?.resume ?? extras.resume;
     const addDirs = [...(scope?.others ?? []), ...(extras.addDirs ?? [])];
-    const driveSpec = { ...spec, ...(addDirs.length > 0 ? { addDirs } : {}), ...(resume ? { resume, ...(branch?.fork ? { fork: true as const } : {}) } : {}), ...(extras.mcpConfig ? { mcpConfig: extras.mcpConfig } : {}), ...(extras.mcpConfig && extras.canopy ? { canopy: true as const } : {}), ...(extras.mcpServer ? { mcpServer: extras.mcpServer } : {}), ...(extras.settings ? { settings: extras.settings } : {}), ...(extras.servers?.length ? { servers: [...extras.servers] } : {}) };
+    const driveSpec = { ...spec, ...(addDirs.length > 0 ? { addDirs } : {}), ...(extras.pluginDirs?.length ? { pluginDirs: [...extras.pluginDirs] } : {}), ...(resume ? { resume, ...(branch?.fork ? { fork: true as const } : {}) } : {}), ...(extras.mcpConfig ? { mcpConfig: extras.mcpConfig } : {}), ...(extras.mcpConfig && extras.canopy ? { canopy: true as const } : {}), ...(extras.mcpServer ? { mcpServer: extras.mcpServer } : {}), ...(extras.settings ? { settings: extras.settings } : {}), ...(extras.servers?.length ? { servers: [...extras.servers] } : {}) };
     const env = runEnv(run, this.opts.backend, extras.env);
     // open can fail synchronously, before a context exists to receive its note.
     let ctx: RunCtx | undefined;

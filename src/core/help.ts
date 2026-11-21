@@ -176,6 +176,10 @@ usage:
   canopy worktrees start <repo> <run branch> [task]   run a task, the dev task unless named, in a run's worktree on a port of its own
   canopy worktrees stop <repo> <run branch> [task]    stop it; the worktree stays
   canopy worktrees shell-init        print the cw function: cw <branch> changes into the kept worktree for the repo the shell sits in
+  canopy floorplan <repo> [--json]   the repo's map (Floorplan): whether there is one, its size and age, what changed since, its server and the run drawing it
+  canopy floorplan <repo> make|update [-m note] [--developers]   a Claude run draws the map into floorplan/, or refreshes it; --developers writes it for developers
+  canopy floorplan <repo> open|stop  start the map's own server on the backend (the map section frames it), or stop it
+    --backend URL | --on NAME       select the backend that owns the repo
   canopy scenarios <repo>            the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
   canopy scenarios <repo> add <name> [--judge] [--run CMD]   a new scenario file under <configDir>/scenarios/<repo key>/; edit it there
   canopy scenarios <repo> run [<run>]   run the set against a branch run's worktree, else against the main checkout

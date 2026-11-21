@@ -93,6 +93,13 @@ describe("needs", () => {
     expect(needs("DELETE", "/api/repos/health")).toBe("operate");
   });
 
+  test("a map's start, its server and its read are a hand's (FR-070)", () => {
+    // make starts a Claude run, open starts a process on the backend
+    expect(needs("POST", "/api/repos/floorplan")).toBe("operate");
+    // the status names the repo's files and endpoints, read out of the checkout
+    expect(needs("GET", "/api/repos/floorplan")).toBe("operate");
+  });
+
   test("operate rows", () => {
     expect(needs("POST", "/api/runs/answer")).toBe("operate");
     expect(needs("DELETE", "/api/runs")).toBe("operate");
