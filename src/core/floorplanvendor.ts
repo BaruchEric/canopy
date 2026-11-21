@@ -70,6 +70,14 @@ export interface Release {
 /** Upstream tags its releases `floorplan--v0.11.0`; a plain `v0.11.0` counts too. */
 const RELEASE_TAG = /(?:^|--)v(\d+\.\d+\.\d+)$/;
 
+/** The tag names in `git ls-remote --tags --refs` output. */
+export function releaseTagNames(lsRemote: string): string[] {
+  return lsRemote
+    .split("\n")
+    .map((l) => /\trefs\/tags\/(.+)$/.exec(l.trim())?.[1])
+    .filter((t): t is string => Boolean(t));
+}
+
 /** The newest release among tag names, or null when none names one. */
 export function newestRelease(tags: readonly string[]): Release | null {
   let best: Release | null = null;

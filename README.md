@@ -573,4 +573,5 @@ bun run dev        # API on :7850
 bun run dev:web    # Vite dev server on :7851 (proxies /api)
 bun run typecheck && bun run lint && bun test && bun run build
 bun run floorplan:update   # pull a newer Floorplan into lib/floorplan, canopy's edits merged in (lib/floorplan/VENDOR.md)
+bun scripts/floorplan-update.ts --check   # one line on whether a newer Floorplan is out; the health check floorplan runs it every 6 h
 ```

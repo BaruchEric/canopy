@@ -25,6 +25,8 @@ The build copies `serve.mjs` and `page-safety.mjs` into each repo's `floorplan/`
 
 ## Moving to a new release
 
+canopy's health check `floorplan` (`.canopy/health.json`) runs `bun scripts/floorplan-update.ts --check` every six hours. That asks upstream for its tags without cloning, and the check goes down with the new version's number when a newer release is out.
+
 Run `bun run floorplan:update`. canopy's panel lists it as the task `floorplan-update`. It does the mechanical part:
 
 1. It clones upstream and takes its newest release tag (`floorplan--vX.Y.Z`), or what `--ref` names: a tag, a branch or a commit.

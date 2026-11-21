@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { FLOORPLAN_VERSION } from "./floorplan";
+import { parseHealthFile } from "./repohealth";
 import {
   addressesIn,
   changelogHeadlines,
@@ -12,6 +13,7 @@ import {
   newestRelease,
   planFile,
   readPin,
+  releaseTagNames,
   writePin,
   writeVersionConst,
 } from "./floorplanvendor";
@@ -42,6 +44,14 @@ describe("the pin", () => {
   });
 });
 
+test("canopy's health file checks for a newer release with the script itself", () => {
+  const { checks, errors } = parseHealthFile(readFileSync(join(ROOT, ".canopy/health.json"), "utf8"));
+  expect(errors).toEqual([]);
+  // the script, not bun run, which echoes the command on stderr: a command
+  // check shows its last line, and that would be the echo
+  expect(checks.find((c) => c.name === "floorplan")).toMatchObject({ kind: "command", run: "bun scripts/floorplan-update.ts --check", heal: "none" });
+});
+
 describe("releases", () => {
   test("compares x.y.z by number", () => {
     expect(compareVersions("0.9.0", "0.10.0")).toBeLessThan(0);
@@ -52,6 +62,10 @@ describe("releases", () => {
     expect(newestRelease(["floorplan--v0.9.0", "floorplan--v0.11.0", "floorplan--v0.10.0", "something-else", ""])).toEqual({ tag: "floorplan--v0.11.0", version: "0.11.0" });
     expect(newestRelease(["v1.2.3", "v1.10.0"])).toEqual({ tag: "v1.10.0", version: "1.10.0" });
     expect(newestRelease(["main", "nightly"])).toBeNull();
+  });
+  test("reads tag names out of git ls-remote", () => {
+    const out = "044cab95fb898b9788c4bf0d8b1c0711c226dd92\trefs/tags/floorplan--v0.8.0\nfcb2740d0063060151a35c562a55d113e7d9296c\trefs/tags/floorplan--v0.9.0\n\n";
+    expect(releaseTagNames(out)).toEqual(["floorplan--v0.8.0", "floorplan--v0.9.0"]);
   });
 });
 
@@ -208,6 +222,25 @@ describe("bun run floorplan:update", () => {
       const current = update(f.root, f.up);
       expect(current.code).toBe(0);
       expect(current.out).toContain("nothing to pull");
+      const quiet = update(f.root, f.up, "--check");
+      expect(quiet.code).toBe(0);
+      expect(quiet.out.trim()).toBe("canopy has Floorplan 1.1.0, the newest release");
+    } finally {
+      rmSync(f.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--check says in one line that a newer release is out, dirty tree or not", () => {
+    const f = fixture(canopyEdit, serve("'https://wait.example.test/join'", "4400"));
+    try {
+      writeFileSync(join(f.root, "lib/floorplan/LICENSE"), "MIT, edited\n");
+      const r = update(f.root, f.up, "--check");
+      expect(r.code).toBe(1);
+      expect(r.err).toBe("");
+      expect(r.out.trim()).toBe("Floorplan 1.1.0 is out and canopy has 1.0.0: run the task floorplan-update (bun run floorplan:update)");
+      const away = update(f.root, join(f.dir, "missing"), "--check");
+      expect(away.code).toBe(2);
+      expect(away.err).toContain("could not ask");
     } finally {
       rmSync(f.dir, { recursive: true, force: true });
     }

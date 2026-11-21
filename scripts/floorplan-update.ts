@@ -1,5 +1,6 @@
 /**
  * bun run floorplan:update [--ref TAG|BRANCH|COMMIT] [--no-test]
+ * bun scripts/floorplan-update.ts --check
  *
  * Pulls a newer Floorplan into lib/floorplan and merges canopy's own edits
  * into it. canopy's panel lists it as the task floorplan-update.
@@ -15,8 +16,15 @@
  * lib/floorplan or src/core/floorplan.ts hold uncommitted changes, so a
  * `git checkout` of those two undoes a run.
  *
+ * --check only asks upstream for its tags and says in one line whether a
+ * newer release is out, exiting 1 when one is. canopy's own health check
+ * `floorplan` (.canopy/health.json) runs it every six hours; it runs the
+ * script directly, since `bun run` echoes the command on stderr and a
+ * command check shows its last line.
+ *
  * Exit: 0 when updated or already current, 1 when a merge conflicted or the
- * tests failed, 2 when it could not run. --root and --upstream point it at
+ * tests failed (with --check, when a newer release is out), 2 when it could
+ * not run. --root and --upstream point it at
  * another checkout and another source; the tests use them.
  * Bun: spawns git, tar and bun.
  */
@@ -35,6 +43,7 @@ import {
   newestRelease,
   planFile,
   readPin,
+  releaseTagNames,
   writePin,
   writeVersionConst,
   type FileStep,
@@ -49,10 +58,11 @@ interface Args {
   upstream: string;
   ref: string | null;
   test: boolean;
+  check: boolean;
 }
 
 function parseArgs(argv: readonly string[]): Args {
-  const out: Args = { root: join(import.meta.dir, ".."), upstream: FLOORPLAN_UPSTREAM, ref: null, test: true };
+  const out: Args = { root: join(import.meta.dir, ".."), upstream: FLOORPLAN_UPSTREAM, ref: null, test: true, check: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const value = (): string => {
@@ -64,13 +74,14 @@ function parseArgs(argv: readonly string[]): Args {
     else if (a === "--root") out.root = value();
     else if (a === "--upstream") out.upstream = value();
     else if (a === "--no-test") out.test = false;
-    else throw new Stop(`unknown argument ${a}; usage: bun run floorplan:update [--ref TAG|BRANCH|COMMIT] [--no-test]`);
+    else if (a === "--check") out.check = true;
+    else throw new Stop(`unknown argument ${a}; usage: bun run floorplan:update [--ref TAG|BRANCH|COMMIT] [--no-test] | --check`);
   }
   return out;
 }
 
-function run(cmd: string[], cwd?: string): { code: number; out: string; err: string } {
-  const p = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
+function run(cmd: string[], cwd?: string, timeout?: number): { code: number; out: string; err: string } {
+  const p = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe", ...(timeout ? { timeout } : {}) });
   return { code: p.exitCode ?? -1, out: p.stdout.toString(), err: p.stderr.toString() };
 }
 
@@ -118,6 +129,20 @@ const WORDS: Record<Exclude<FileStep, "same">, string> = {
   conflict: "CONFLICT",
 };
 
+/** One line on whether upstream has a release newer than `have`; 1 when it has. */
+function check(upstream: string, have: string): number {
+  const r = run(["git", "ls-remote", "--tags", "--refs", upstream], undefined, 20_000);
+  if (r.code !== 0) throw new Stop(`could not ask ${upstream} for its releases: ${r.err.trim().split("\n").pop() || `git exited ${r.code}`}`);
+  const newest = newestRelease(releaseTagNames(r.out));
+  if (!newest) throw new Stop(`${upstream} has no release tags`);
+  if (compareVersions(newest.version, have) > 0) {
+    say(`Floorplan ${newest.version} is out and canopy has ${have}: run the task floorplan-update (bun run floorplan:update)`);
+    return 1;
+  }
+  say(`canopy has Floorplan ${have}, the newest release`);
+  return 0;
+}
+
 function main(args: Args): number {
   const lib = join(args.root, "lib/floorplan");
   const vendorPath = join(lib, "VENDOR.md");
@@ -125,6 +150,7 @@ function main(args: Args): number {
   const vendorMd = readFileSync(vendorPath, "utf8");
   const pin = readPin(vendorMd);
   if (!pin) throw new Stop("lib/floorplan/VENDOR.md has no line naming the release and commit");
+  if (args.check) return check(args.upstream, pin.version);
 
   const dirty = must(["git", "-C", args.root, "status", "--porcelain", "--", "lib/floorplan", "src/core/floorplan.ts"]).trim();
   if (dirty) throw new Stop(`lib/floorplan or src/core/floorplan.ts has uncommitted changes; commit or drop them first:\n${dirty}`);

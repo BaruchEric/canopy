@@ -1,5 +1,6 @@
 {
   "checks": [
-    { "name": "dev", "kind": "task", "task": "dev", "heal": "auto" }
+    { "name": "dev", "kind": "task", "task": "dev", "heal": "auto" },
+    { "name": "floorplan", "kind": "command", "run": "bun scripts/floorplan-update.ts --check", "every": 21600, "heal": "none" }
   ]
 }
