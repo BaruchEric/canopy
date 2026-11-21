@@ -34,7 +34,7 @@ One developer (the owner) across a laptop, an always-on Linux backend, a tablet 
 - Plain CSS in `ui/src/styles.css`; no CSS framework.
 - Instrument Sans and JetBrains Mono as bundled variable fonts (@fontsource-variable 5.3.0), so a page never fetches a font.
 - git, gh and the `claude` CLI are shelled out to, never linked.
-- Floorplan 0.11.0 (MIT, haydenschmitty/floorplan) is vendored in `lib/floorplan` for the repo map (FR-070). Its scripts and the map's server run on the machine's node, or on bun through a link named `node` where there is none.
+- Floorplan (MIT, haydenschmitty/floorplan) is vendored in `lib/floorplan` at the release its `VENDOR.md` pins, for the repo map (FR-070). `bun run floorplan:update` pulls a newer release and merges canopy's edits into it. Its scripts and the map's server run on the machine's node, or on bun through a link named `node` where there is none.
 - age-encryption 0.3.1 seals the secret store's values; @simplewebauthn/server 14.0.3 and @simplewebauthn/browser 14.0.0 are its passkey gate.
 
 ## How it is built and run

@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p ui/tsconfig.json && tsc --noEmit -p ui/tsconfig.sw.json",
     "lint": "oxlint src ui/src ui/sw.ts bin scripts",
     "test": "bun test",
+    "floorplan:update": "bun scripts/floorplan-update.ts",
     "redeploy": "bash scripts/redeploy.sh",
     "stage-token": "bun scripts/stage-token.ts"
   },
