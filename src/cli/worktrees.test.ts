@@ -2,7 +2,10 @@ import { expect, test } from "bun:test";
 import type { BranchTree, BranchTreesInfo, TasksResult, WorktreesInfo } from "../core/types";
 import { setHomeBase, setTokenFlag } from "./api";
 import { main } from "./index";
-import { ageWord, branchIdOf, SHELL_INIT, sizeWord, treeTaskLine, worktreeLines, worktreesCommand } from "./worktrees";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
+import { ageWord, branchIdOf, repoIdIn, SHELL_INIT, sizeWord, treeTaskLine, worktreeLines, worktreesCommand } from "./worktrees";
 
 const H = 3_600_000;
 const GB = 1024 ** 3;
@@ -391,4 +394,28 @@ test("a start says the task and port, a stop says the task, and an unlisted task
 test("a run's task shows under the run with its port", () => {
   const withTask: WorktreesInfo = { ...info, repos: [{ ...info.repos[0]!, runs: [{ ...info.repos[0]!.runs[0]!, task: { name: "dev", status: "running", port: 7901 } }] }] };
   expect(worktreeLines(withTask, null, 1000).join("\n")).toContain("task    dev  running  :7901");
+});
+
+test("a path names the repo at that folder, never a repo whose id ends in it", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "canopy-wt-path-")));
+  try {
+    const repos: WorktreesInfo = {
+      ...info,
+      repos: [
+        // dotclaude's id is "claude:.", whose last part is "."
+        { repoId: "claude:.", repoPath: "/home/u/.claude", want: 0, runs: [], warm: [], refilling: null, fails: [], orphans: [] },
+        { repoId: "dev-tools/canopy", repoPath: dir, want: 0, runs: [], warm: [], refilling: null, fails: [], orphans: [] },
+      ],
+    };
+    const fail = (m: string): never => {
+      throw new Error(m);
+    };
+    expect(await repoIdIn(repos, dir, fail)).toBe("dev-tools/canopy");
+    expect(await repoIdIn(repos, `./${relative(process.cwd(), dir)}`, fail)).toBe("dev-tools/canopy");
+    expect(await repoIdIn(repos, "canopy", fail)).toBe("dev-tools/canopy");
+    await expect(repoIdIn(repos, join(dir, "nope"), fail)).rejects.toThrow("no such folder");
+    await expect(repoIdIn(repos, tmpdir(), fail)).rejects.toThrow("no repo at");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -6,6 +6,7 @@ import { treeWords } from "../core/treewords";
 import type { BranchTree, BranchTreesInfo, TasksResult, WorktreesInfo, WorktreeRepoInfo } from "../core/types";
 import { apiBase } from "./api";
 import { ask, errText, has, take, Unreachable, type Target } from "./health";
+import { folderOf, isPathArgument } from "./run";
 
 export const WORKTREES_USAGE = [
   "usage: canopy worktrees [repo] [--json] [--backend URL]",
@@ -142,7 +143,17 @@ cw() {
 
 type Fail = (message: string) => never;
 
-function repoId(info: WorktreesInfo, name: string, fail: Fail): string {
+/** A repo by its id or its folder's name, or by a path ("." or one that
+ *  starts with /, ./, ../ or ~), which takes only the repo at that folder.
+ *  Taken as a name, "." matched the repo whose id ends in ":." (dotclaude,
+ *  "claude:."), and on 2026-11-21 `worktrees add . archify` made a tree
+ *  there in place of the repo the shell sat in. */
+export async function repoIdIn(info: WorktreesInfo, name: string, fail: Fail): Promise<string> {
+  if (isPathArgument(name)) {
+    const path = await folderOf(name, fail);
+    const at = info.repos.find((entry) => entry.repoPath === path);
+    return at ? at.repoId : fail(`no repo at ${path}`);
+  }
   const found = info.repos.filter((entry) => named(name, entry));
   if (found.length === 1) return found[0]!.repoId;
   if (found.length > 1) return fail(`${name} matches more than one repo: ${found.map((entry) => entry.repoId).join(", ")}; use an id`);
@@ -179,7 +190,7 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
     if (nArg !== undefined && (n === undefined || !/^\d+$/.test(nArg) || !Number.isInteger(n) || n < 0 || n > 2)) {
       return fail("warm must be a whole number from 0 to 2");
     }
-    const id = repoId(await getInfo(), repo, fail);
+    const id = await repoIdIn(await getInfo(), repo, fail);
     const result = await ask<{ repo: string; want: number }>(target, "POST", "/api/worktrees/warm", {
       repo: id,
       ...(n !== undefined ? { n } : {}),
@@ -192,7 +203,7 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
     args.shift();
     const repo = args.shift();
     if (repo?.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
-    const body = repo === undefined ? {} : { repo: repoId(await getInfo(), repo, fail) };
+    const body = repo === undefined ? {} : { repo: await repoIdIn(await getInfo(), repo, fail) };
     const result = await ask<{ removed: string[] }>(target, "POST", "/api/worktrees/prune", body).catch(requestFailed);
     for (const line of result.removed.length > 0 ? result.removed : ["nothing to prune"]) console.log(line);
     return;
@@ -208,7 +219,7 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
     const repo = args.shift();
     const branch = args.shift();
     if (!repo || !branch || branch.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
-    const id = repoId(await getInfo(), repo, fail);
+    const id = await repoIdIn(await getInfo(), repo, fail);
     const { tree } = await ask<{ tree: BranchTree }>(target, "POST", "/api/trees/add", {
       repo: id,
       branch,
@@ -226,7 +237,7 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
     const repo = args.shift();
     const branch = args.shift();
     if (!repo || !branch || branch.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
-    const id = repoId(await getInfo(), repo, fail);
+    const id = await repoIdIn(await getInfo(), repo, fail);
     // a sync that stopped answers 409 with why, which requestFailed prints
     const { tree } = await ask<{ tree: BranchTree }>(target, "POST", "/api/trees/sync", { repo: id, tree: branch }).catch(requestFailed);
     console.log(`synced ${tree.branch} onto ${tree.base}  ${treeWords(tree)}`);
@@ -239,7 +250,7 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
     const branch = args.shift();
     const on = args.shift();
     if (!repo || !branch || branch.startsWith("--") || (on !== "on" && on !== "off") || args.length > 0) return fail(WORKTREES_USAGE);
-    const id = repoId(await getInfo(), repo, fail);
+    const id = await repoIdIn(await getInfo(), repo, fail);
     const { tree } = await ask<{ tree: BranchTree }>(target, "POST", "/api/trees/auto", { repo: id, tree: branch, sync: on === "on" }).catch(requestFailed);
     console.log(tree.sync ? `${tree.branch} follows ${tree.base}` : `${tree.branch} stays where it is while ${tree.base} moves`);
     return;
@@ -253,7 +264,7 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
     const repo = args.shift();
     const branch = args.shift();
     if (!repo || !branch || branch.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
-    const id = repoId(await getInfo(), repo, fail);
+    const id = await repoIdIn(await getInfo(), repo, fail);
     const { tree } = await ask<{ tree: BranchTree }>(target, "POST", "/api/trees/merge", {
       repo: id,
       tree: branch,
@@ -283,7 +294,7 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
     args.shift();
     const repo = args.shift();
     if (repo?.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
-    const body = repo === undefined ? {} : { repo: repoId(await getInfo(), repo, fail) };
+    const body = repo === undefined ? {} : { repo: await repoIdIn(await getInfo(), repo, fail) };
     const result = await ask<{ removed: { repoId: string; slug: string; branch: string }[] }>(target, "POST", "/api/trees/clean", body).catch(requestFailed);
     if (result.removed.length === 0) console.log("nothing to clean: no tree is merged into its base with nothing changed or open in it");
     for (const t of result.removed) console.log(`removed ${t.repoId}  ${t.branch}  and its branch`);
@@ -297,7 +308,7 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
     const repo = args.shift();
     const branch = args.shift();
     if (!repo || !branch || branch.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
-    const id = repoId(await getInfo(), repo, fail);
+    const id = await repoIdIn(await getInfo(), repo, fail);
     const { removed } = await ask<{ removed: string }>(target, "POST", "/api/trees/remove", {
       repo: id,
       tree: branch,
@@ -315,7 +326,7 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
     const name = args.shift();
     if (!repo || !branch || branch.startsWith("--") || name?.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
     const info = await getInfo();
-    const id = repoId(info, repo, fail);
+    const id = await repoIdIn(info, repo, fail);
     const worktree = branchIdOf(info.repos.find((r) => r.repoId === id), branch);
     const result = await ask<TasksResult>(target, "POST", `/api/repos/tasks?id=${encodeURIComponent(id)}`, { action, worktree, ...(name ? { name } : {}) }).catch(requestFailed);
     console.log(treeTaskLine(result, worktree, name, action));
@@ -327,7 +338,7 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
     const repo = args.shift();
     const branch = args.shift();
     if (!repo || !branch || branch.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
-    const id = repoId(await getInfo(), repo, fail);
+    const id = await repoIdIn(await getInfo(), repo, fail);
     const tree = keptTrees(await getTrees(), id).find((t) => t.branch === branch || t.slug === branch);
     if (!tree) return fail(`${id} keeps no tree on ${branch}`);
     console.log(tree.dir);

@@ -224,14 +224,19 @@ export async function selectedTarget(args: Pick<RunArgs, "backend" | "on">, fail
   return found;
 }
 
-function isPathArgument(value: string): boolean {
+/** ".", or a path that starts with /, ./, ../ or ~: a folder, not a repo's name */
+export function isPathArgument(value: string): boolean {
   return value === "." || value.startsWith("/") || value.startsWith("./") || value.startsWith("../") || value.startsWith("~");
+}
+
+/** a path argument as the real folder it names; fails when there is none */
+export function folderOf(arg: string, fail: Fail): Promise<string> {
+  return realpath(resolve(arg.replace(/^~(?=$|\/)/, process.env["HOME"] ?? "~"))).catch(() => fail(`no such folder: ${arg}`));
 }
 
 export async function repoId(repoArg: string, target: Target, fail: Fail): Promise<string> {
   if (!isPathArgument(repoArg)) return repoArg;
-  const path = await realpath(resolve(repoArg.replace(/^~(?=$|\/)/, process.env["HOME"] ?? "~")))
-    .catch(() => fail(`no such folder: ${repoArg}`));
+  const path = await folderOf(repoArg, fail);
   const tree = await ask<ScanResult>(target, "GET", "/api/tree").catch(requestFailure(target, fail));
   const repo = tree.repos.find((candidate) => candidate.path === path);
   if (!repo) return fail(`${target.name} does not scan ${path}`);
