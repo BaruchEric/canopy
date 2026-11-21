@@ -588,4 +588,6 @@ bun run floorplan:update   # pull a newer Floorplan into lib/floorplan, canopy's
 bun scripts/floorplan-update.ts --check   # one line on whether a newer Floorplan is out; the health check floorplan runs it every 6 h
 bun run understand:update   # pull a newer Understand-Anything into lib/understand-anything, canopy's edits merged in (lib/understand-anything/VENDOR.md)
 bun scripts/understand-update.ts --check   # one line on whether a newer Understand-Anything is out; the health check understand runs it every 6 h
+bun run archify:update     # pull a newer Archify into lib/archify the same way (lib/archify/VENDOR.md)
+bun scripts/archify-update.ts --check     # one line on whether a newer Archify is out; the health check archify runs it every 6 h
 ```

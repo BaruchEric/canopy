@@ -4,6 +4,8 @@
  * canopy's own edits over to it with a three-way merge per file. Here: the
  * pin VENDOR.md holds, the release tags, what to do with each file, the web
  * addresses a release adds, and its changelog's headlines. No I/O.
+ * `bun run archify:update` (FR-071) uses the same pieces for lib/archify;
+ * what is Archify's own is in archifyvendor.ts.
  * Tested in floorplanvendor.test.ts.
  */
 
@@ -39,12 +41,12 @@ export function writePin(vendorMd: string, pin: VendorPin): string {
   return vendorMd.replace(PIN, `at **${pin.version}**, commit \`${pin.commit}\` (${pin.date})`);
 }
 
-const VERSION_CONST = /(export const FLOORPLAN_VERSION = ")(\d+\.\d+\.\d+)(";)/;
-
-/** src/core/floorplan.ts with FLOORPLAN_VERSION set; throws when the line is gone. */
-export function writeVersionConst(source: string, version: string): string {
-  if (!VERSION_CONST.test(source)) throw new Error("src/core/floorplan.ts has no FLOORPLAN_VERSION line");
-  return source.replace(VERSION_CONST, `$1${version}$3`);
+/** A source file with its `export const <name> = "x.y.z";` set to
+ *  `version`; throws when the line is gone. FLOORPLAN_VERSION unless named. */
+export function writeVersionConst(source: string, version: string, name = "FLOORPLAN_VERSION"): string {
+  const line = new RegExp(`(export const ${name} = ")(\\d+\\.\\d+\\.\\d+)(";)`);
+  if (!line.test(source)) throw new Error(`no ${name} line to set`);
+  return source.replace(line, `$1${version}$3`);
 }
 
 type Triple = [number, number, number];
@@ -141,22 +143,23 @@ export function newAddresses(before: Iterable<string>, after: Iterable<string>):
 
 /**
  * The changelog's releases after `from` up to and including `to`, newest
- * first, each as its heading and the bold title of each bullet. Upstream's
- * headings read `## 0.11.0 (2026-11-16)` and its bullets `- **Title:** …`.
+ * first, each as its heading and the bold title of each bullet. Floorplan's
+ * headings read `## 0.11.0 (2026-11-16)` and its bullets `- **Title:** …`;
+ * Archify's read `## [3.2.0] — 2026-10-18` and `- **Title (#993).** …`.
  */
 export function changelogHeadlines(changelog: string, from: string, to: string): string[] {
   const out: string[] = [];
   let keep = false;
   for (const line of changelog.split("\n")) {
-    const head = /^## (\d+\.\d+\.\d+)\b/.exec(line);
+    const head = /^## \[?(\d+\.\d+\.\d+)\b/.exec(line);
     if (head?.[1]) {
       keep = compareVersions(head[1], from) > 0 && compareVersions(head[1], to) <= 0;
       if (keep) out.push(line.trim());
       continue;
     }
     if (!keep) continue;
-    const title = /^- \*\*(.+?):?\*\*/.exec(line)?.[1];
-    if (title) out.push(`  - ${title.replace(/:$/, "")}`);
+    const title = /^- \*\*(.+?)\*\*/.exec(line)?.[1];
+    if (title) out.push(`  - ${title.replace(/[.:]$/, "")}`);
   }
   return out;
 }
