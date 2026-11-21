@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { backendOf, isHome } from "../registry";
 import { useStore } from "../store";
@@ -21,15 +21,16 @@ const agoIso = (iso: string): string => {
  *  and the line keep up with what the run has written */
 const RUN_EVERY = 8000;
 
-/** The head's switch: the map takes the whole panel, or gives it back. */
-function FullButton({ mode, setMode }: { mode: SurfaceMode; setMode: (m: SurfaceMode) => void }) {
+/** The head's switch: the map (or a diagram) takes the whole panel, or
+ *  gives it back. */
+export function FullButton({ mode, setMode, what = "map" }: { mode: SurfaceMode; setMode: (m: SurfaceMode) => void; what?: string }) {
   const full = mode === "full";
   return (
     <button
       type="button"
       className={`term-new term-full preview-mode-btn${full ? " on" : ""}`}
-      title={full ? "Give the panel back" : "The map takes the whole panel"}
-      aria-label={full ? "Restore the map's size" : "Maximize the map"}
+      title={full ? "Give the panel back" : `The ${what} takes the whole panel`}
+      aria-label={full ? `Restore the ${what}'s size` : `Maximize the ${what}`}
       aria-pressed={full}
       onClick={() => setMode(flipMode(mode, "full"))}
     >
@@ -43,9 +44,10 @@ function FullButton({ mode, setMode }: { mode: SurfaceMode; setMode: (m: Surface
  * Claude run into the repo's own `floorplan/` and shown here through a
  * preview slot, so its Ask bar talks to its own server on another origin.
  * The section reads the map's state, starts the run that makes or updates
- * it, and starts, frames and stops the map's server. Folded by default.
+ * it, and starts, frames and stops the map's server. `kinds` is the
+ * Floorplan | Archify switch (Map.tsx), at the top of the body.
  */
-export function MapSection({ repo }: { repo: Repo }) {
+export function FloorplanMap({ repo, kinds }: { repo: Repo; kinds: ReactNode }) {
   const closed = useSectionClosed(repo.id, "map");
   const backend = backendOf(repo.id);
   const home = isHome(repo.id);
@@ -163,6 +165,7 @@ export function MapSection({ repo }: { repo: Repo }) {
       tools={(m, setM) => (url ? <FullButton mode={m} setMode={setM} /> : null)}
     >
       <div className="map-body">
+        {kinds}
         <p className="map-line">
           <span>{line}</span>
           {going && runId && (

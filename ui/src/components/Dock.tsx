@@ -79,7 +79,7 @@ import { LaunchSection } from "./Launch";
 import { TasksSection } from "./Tasks";
 import { AgentsSection } from "./Registry";
 import { PreviewSection } from "./Preview";
-import { MapSection } from "./Floorplan";
+import { MapSection } from "./Map";
 import { FinderSection } from "./Finder";
 import { GuidedPanel } from "./Guided";
 import { Tour } from "./Tour";

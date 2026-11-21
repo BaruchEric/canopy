@@ -180,6 +180,12 @@ usage:
   canopy floorplan <repo> make|update [-m note] [--developers]   a Claude run draws the map into floorplan/, or refreshes it; --developers writes it for developers
   canopy floorplan <repo> open|stop  start the map's own server on the backend (the map section frames it), or stop it
     --backend URL | --on NAME       select the backend that owns the repo
+  canopy archify <repo> [--json]     the repo's diagrams (Archify) under .archify/: each one's folder, title, type, age and checks, and the run drawing one
+  canopy archify <repo> make [--type T] [-m note]   a Claude run draws a checked, interactive diagram (auto, architecture, workflow, sequence, dataflow, lifecycle, erd, class, tree, timeline, waterfall or explainer); no note draws the architecture
+  canopy archify <repo> revise <diagram> -m note   a Claude run changes a diagram as the note says and checks it again
+  canopy archify <repo> save <diagram> [file]   save a diagram's page here as one HTML file
+  canopy archify <repo> rm <diagram>            remove a diagram's folder; one the repo tracks is refused
+    --backend URL | --on NAME       select the backend that owns the repo
   canopy scenarios <repo>            the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
   canopy scenarios <repo> add <name> [--judge] [--run CMD]   a new scenario file under <configDir>/scenarios/<repo key>/; edit it there
   canopy scenarios <repo> run [<run>]   run the set against a branch run's worktree, else against the main checkout

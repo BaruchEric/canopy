@@ -100,6 +100,13 @@ describe("needs", () => {
     expect(needs("GET", "/api/repos/floorplan")).toBe("operate");
   });
 
+  test("diagrams' starts, removals and reads are a hand's (FR-071)", () => {
+    // make and revise start a Claude run, remove deletes a folder
+    expect(needs("POST", "/api/repos/archify")).toBe("operate");
+    // the list and a page are read out of the checkout
+    expect(needs("GET", "/api/repos/archify")).toBe("operate");
+  });
+
   test("operate rows", () => {
     expect(needs("POST", "/api/runs/answer")).toBe("operate");
     expect(needs("DELETE", "/api/runs")).toBe("operate");

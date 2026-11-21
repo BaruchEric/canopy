@@ -4,6 +4,7 @@ import type { Clip, ClipDevice, ClipIn, ClipSource, ClipsInfo } from "../../src/
 import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
 import type { CostReport } from "../../src/core/costs";
 import type { FloorplanInfo } from "../../src/core/floorplan";
+import type { ArchifyInfo, ArchifyPick } from "../../src/core/archify";
 import type { CapacitySettings } from "../../src/core/capacity";
 import type { PushEntryView, PushKeyInfo, PushListInfo, PushTestResult } from "../../src/core/push";
 import type { VoiceEngine } from "./voicelive";
@@ -1501,6 +1502,29 @@ export const api = {
   floorplanOpen: (id: string) => repoReq<{ port: number }>(id, (p) => `/api/repos/floorplan?${rq(p)}`, { method: "POST", body: JSON.stringify({ act: "open" }) }),
   /** stops the map's server */
   floorplanStop: (id: string) => repoReq<{ stopped: boolean }>(id, (p) => `/api/repos/floorplan?${rq(p)}`, { method: "POST", body: JSON.stringify({ act: "stop" }) }),
+  /** a checkout's diagrams (FR-071), newest first, and the run drawing
+   *  one, that run's id under the backend's name */
+  archify: async (id: string): Promise<ArchifyInfo> => {
+    const [b, plain] = on(id);
+    const got = await req<ArchifyInfo>(b, `/api/repos/archify?${rq(plain)}`);
+    return got.run ? { ...got, run: qual(b, got.run) } : got;
+  },
+  /** one diagram's page as text, for a sandboxed frame's srcdoc */
+  archifyPage: (id: string, diagram: string) => {
+    const [b, plain] = on(id);
+    return blobReq(b, `/api/repos/archify?${rq(plain, { diagram })}`).then((blob) => blob.text());
+  },
+  /** draws a new diagram (a Claude run in the checkout), or revises one
+   *  when `diagram` names it */
+  archifyStart: async (id: string, start: { type: ArchifyPick; note: string } | { diagram: string; note: string }) => {
+    const [b, plain] = on(id);
+    const body = "diagram" in start ? { act: "revise", diagram: start.diagram, note: start.note } : { act: "make", type: start.type, note: start.note };
+    const got = await req<Run>(b, `/api/repos/archify?${rq(plain)}`, { method: "POST", body: JSON.stringify({ ...body, client: clientId() }) });
+    return from(b, got, qRun);
+  },
+  /** removes a diagram's folder */
+  archifyRemove: (id: string, diagram: string) =>
+    repoReq<{ removed: string }>(id, (p) => `/api/repos/archify?${rq(p)}`, { method: "POST", body: JSON.stringify({ act: "remove", diagram }) }),
   /** archives a repo in canopy, or takes the mark off; answers the repo */
   archive: async (id: string, archived: boolean) => {
     const [b, plain] = on(id);

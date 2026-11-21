@@ -2,6 +2,8 @@ import { parseAnswer } from "./answers";
 import { ACTIONS, branchLine, branchPrompt, busyWith, splitMembers, type ActionSpec } from "../core/actions";
 import { FLOORPLAN_ACTION, floorplanSpec, isUpdate } from "../core/floorplan";
 import { FLOORPLAN_PLUGIN, FLOORPLAN_SKILL, FloorplanError, floorplanEnv, floorplanInfo, openFloorplan, readFloorplanStatus, realRoot, stopFloorplan } from "./floorplan";
+import { ARCHIFY_ACTION, archifyFolder, archifySpec, isArchifyPick, type ArchifyStart } from "../core/archify";
+import { ARCHIFY_PLUGIN, ARCHIFY_SKILL, ArchifyError, archifyEnv, diagramPage, hasOrigin, keepOutOfGit, listDiagrams, removeDiagram } from "./archify";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { coordApiHost, Library, libraryCall, libraryOriginAllowed, libraryStateDir, openBind, returnLeg, tailnetHost } from "../core/library";
 import { LibrarySync } from "./libsync";
@@ -1365,6 +1367,75 @@ async function floorplanRoute(state: ServerState, repo: Repo, method: string, re
     return json(run, 201);
   } catch (err) {
     if (err instanceof FloorplanError) throw new HttpError(400, err.message);
+    throw err;
+  }
+}
+
+/** A checkout's diagrams (FR-071). GET lists them with the run drawing
+ *  one; GET `?diagram=<folder>` answers that diagram's page as text, for
+ *  the page to frame in a sandboxed iframe. POST `{act}` draws a new one
+ *  (`make`, with `type` and an optional `note`), revises one (`revise`,
+ *  with `diagram` and the `note` that says what to change), each a Claude
+ *  run in the checkout with canopy's copy of Archify loaded, or removes one
+ *  (`remove`, with `diagram`). The diagrams live in the checkout, so a repo
+ *  on another host and an incubator seed are refused, as for the map. */
+async function archifyRoute(state: ServerState, repo: Repo, method: string, req: Request): Promise<Response> {
+  if (repo.host) throw new HttpError(400, `diagrams are drawn on the checkout's own machine; ${repo.name} is on ${repo.host}`);
+  if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
+  const liveRun = (): string | null => {
+    const r = state.runner.activeFor(repo.id);
+    return r?.action === ARCHIFY_ACTION ? r.id : null;
+  };
+  try {
+    if (method === "GET") {
+      const diagram = new URL(req.url).searchParams.get("diagram");
+      if (diagram === null) return json({ diagrams: await listDiagrams(repo.path), run: liveRun() });
+      const page = diagramPage(repo.path, diagram);
+      return new Response(Bun.file(page.path), {
+        headers: {
+          // text, not a page: the browser frames it through srcdoc in a
+          // sandbox, and this address must never run it at canopy's origin
+          "content-type": "text/plain; charset=utf-8",
+          "content-length": String(page.bytes),
+          "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(page.file)}`,
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "sandbox; default-src 'none'",
+        },
+      });
+    }
+    if (method !== "POST") throw new HttpError(405, "GET or POST");
+    const b = await objectBody(req);
+    if (b.note !== undefined && typeof b.note !== "string") throw new HttpError(400, "note must be text");
+    const note = typeof b.note === "string" ? b.note : "";
+    if (b.act === "remove") {
+      if (typeof b.diagram !== "string") throw new HttpError(400, "diagram names a folder under .archify");
+      if (liveRun()) throw new HttpError(409, "a diagram run is going on this repo; remove it once the run ends");
+      await removeDiagram(repo.path, b.diagram);
+      return json({ removed: b.diagram });
+    }
+    if (b.act !== "make" && b.act !== "revise") throw new HttpError(400, "act is make, revise or remove");
+    const root = realRoot(repo.path);
+    const where = { skillDir: ARCHIFY_SKILL, root, origin: await hasOrigin(root) };
+    let start: ArchifyStart;
+    if (b.act === "revise") {
+      if (typeof b.diagram !== "string") throw new HttpError(400, "diagram names a folder under .archify");
+      if (!note.trim()) throw new HttpError(400, "say what to change in the note");
+      start = { ...where, folder: b.diagram, revise: diagramPage(repo.path, b.diagram).file };
+    } else {
+      const type = b.type ?? "auto";
+      if (!isArchifyPick(type)) throw new HttpError(400, "type is auto or one of Archify's diagram types");
+      start = { ...where, folder: archifyFolder(type, note, repo.name, new Date()), type };
+    }
+    await keepOutOfGit(repo.path);
+    const run = await startRepoRun(state, repo, "ask", note, b.client, undefined, false, false, "interactive", {
+      loadout: NO_LOADOUT,
+      tools: false,
+      custom: { action: ARCHIFY_ACTION, spec: archifySpec(start), extras: { pluginDirs: [ARCHIFY_PLUGIN], env: archifyEnv() }, claudeOnly: "diagrams are drawn by Claude Code" },
+    });
+    return json(run, 201);
+  } catch (err) {
+    if (err instanceof ArchifyError) throw new HttpError(400, err.message);
     throw err;
   }
 }
@@ -6011,6 +6082,7 @@ async function handleApi(
     }
 
     if (action === "floorplan") return floorplanRoute(state, repo, method, req);
+    if (action === "archify") return archifyRoute(state, repo, method, req);
     if (method === "GET" && action === "log") {
       return json(await getLog(repo.path));
     }
