@@ -1,2 +1,4 @@
 [test]
 preload = ["./src/test-env.ts"]
+# lib/ holds vendored upstream code whose own tests are not bun tests
+pathIgnorePatterns = ["lib/**"]
