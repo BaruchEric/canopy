@@ -4,10 +4,14 @@
 // menu with two runs going, a shell that answers, the two load failures
 // (a view's chunk and xterm's refused), a phone: the top bar's first row
 // on the screen, an open panel's section tabs, and no field small enough for
-// iOS to zoom the page onto, and the manager's top view: a goal that ended,
-// a goal going on a desktop, a tablet and a phone with its equip sheet, and
-// the new goal's box at 1440 and 390px, opened from its address and from the
-// top bar.
+// iOS to zoom the page onto, and the manager: a goal kept in the run log
+// opening as ended; a live goal with five cards at 1440, 900 and 390px, its
+// equip sheet on a phone, a card's files chip cut inside its lane, and a
+// tree card's lane and a project card's lane whose project opens the sheet
+// over the goal; the overview with one goal and a project; and the new box at
+// 1440 and 390px on a goal (its @ menu, a file's chip) and on a project (the
+// words and chip kept, and at 1440 start project sending the form), opened
+// from its address, the command line's new and the top bar's + new.
 // check.sh starts a scratch server and runs this; it copies the file into
 // the browser folder first, where "playwright" resolves.
 //   check.ts <base url> <screenshot folder>
