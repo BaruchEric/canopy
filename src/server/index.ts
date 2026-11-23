@@ -1044,7 +1044,6 @@ async function sweepFacts(state: ServerState, serverStart: number): Promise<Omit
 async function startSweptChat(state: ServerState, c: SweptChat): Promise<Run> {
   const repo = state.result.repos.find((r) => r.id === c.repoId);
   if (!repo) throw new HttpError(404, `${c.repoId} is not here any more`);
-  if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
   const full = state.runner.checkoutRefusal(repo);
   if (full) throw new HttpError(409, full);
   const routed = agentFor(await loadConfig(), repo.path, "chat", { harness: c.harness });
@@ -1288,11 +1287,10 @@ async function startRepoRun(
     const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
     if (going >= BRANCH_RUNS_PER_REPO) throw new HttpError(409, `${repo.name} has ${going} branch runs going; wait for one to end`);
   } else {
-    // A workflow keeps new runs out while it runs, gate included: one
-    // starting here could move the checkout under its next gate. Other
-    // runs share the checkout up to the runner's cap (FR-073). A branch
-    // run shares nothing with the checkout, so neither stops one.
-    if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
+    // Runs share the checkout up to the runner's cap, beside a workflow
+    // going there too (FR-073): the run is told of it, and the workflow's
+    // failed check says which runs were at work. A branch run shares
+    // nothing with the checkout, so the cap does not stop one.
     const full = state.runner.checkoutRefusal(repo);
     if (full) throw new HttpError(409, full);
   }
@@ -3244,7 +3242,6 @@ async function acceptAdvice(state: ServerState, entry: AdviceEntry): Promise<Adv
   }
   const repo = await canopyRepoOf(state.result.repos, CANOPY_DIR, readPkg().homepage, realpath);
   if (!repo) throw new IncubatorError(409, "canopy's own checkout is not in this backend's scan, so there is no repo to open the chat on");
-  if (state.flows.activeFor(repo.id)) throw new IncubatorError(409, `${repo.name} has a workflow going; accept this once it ends`);
   const full = state.runner.checkoutRefusal(repo);
   if (full) throw new IncubatorError(409, full);
   const agent = { ...agentFor(await loadConfig(), repo.path, "chat"), yolo: false, extra: "" };
@@ -4087,13 +4084,19 @@ async function refreshHeld(state: ServerState, id: string): Promise<{ repo: Repo
     return { repo, held: true };
   }
   // Re-find after the await: a concurrent rescan may have replaced the array,
-  // and writing back a pre-await index would land in the wrong slot.
+  // and writing back a pre-await index would land in the wrong slot. The card
+  // there may also be newer than the one this read started from: a peer pass
+  // that ended meanwhile set its peers, and writing the old copy back dropped
+  // them until the next rescan, since an unchanged pass applies nothing. So
+  // only what was read, the status and the error, goes onto the card.
   const idx = state.result.repos.findIndex((r) => r.id === id);
-  if (idx !== -1) state.result.repos[idx] = fresh;
-  broadcast(state, { type: "repo", repo: fresh });
-  state.collisions.onRepo(fresh);
-  if (goneRepo(fresh)) healGone(state, fresh);
-  return { repo: fresh, held: false };
+  const now = state.result.repos[idx];
+  const next: Repo = now ? (fresh === repo ? now : { ...now, status: fresh.status, error: fresh.error }) : fresh;
+  if (idx !== -1) state.result.repos[idx] = next;
+  broadcast(state, { type: "repo", repo: next });
+  state.collisions.onRepo(next);
+  if (goneRepo(next)) healGone(state, next);
+  return { repo: next, held: false };
 }
 
 const GONE_CHECK = "canopy:gone";
@@ -6084,9 +6087,10 @@ async function handleApi(
     return json(workspaces);
   }
   // One run on the primary, the other local members added as folders. A
-  // workflow going on any local member refuses it, and so does a member
-  // whose checkout has no room for another run (FR-073). While it runs it
-  // counts as a run on the primary alone. A seed's agents run only through the incubator, behind
+  // member whose checkout has no room for another run refuses it (FR-073),
+  // and so does a workflow going in a member other than the primary: the
+  // run counts on the primary alone, so neither it nor that workflow could
+  // be told of the other, as a run and a workflow in one checkout are. A seed's agents run only through the incubator, behind
   // its git guards and in its stage, so a seed primary refuses the run and a
   // seed member is left out like one on another host.
   if (path === "/api/workspaces/run" && method === "POST") {
@@ -7163,6 +7167,8 @@ export async function startServer(opts: {
     ...(runNamer ? { namer: runNamer } : {}),
     // the capacity governor (FR-036); the hub exists by the first start
     may: (harness: Harness, priority: Priority) => state.capacity.may(harness, priority),
+    // the workflow a run starting in a checkout is told it shares it with
+    workflow: (repoId: string) => state.flows.activeFor(repoId)?.verb,
   };
   /** seeds with a check running, by the seed's path */
   const seedChecks = new Map<string, number>();
@@ -7709,13 +7715,13 @@ export async function startServer(opts: {
       },
       repo: id => state.result.repos.find(repo => repo.id === id),
       run: id => state.runner.get(id),
-      // the reviewer is one more run in the checkout (FR-073), so only a
-      // checkout with no room for it makes the review wait
+      // the reviewer is one more run in the checkout, beside the runs and
+      // the workflow going there (FR-073), so only a checkout with no room
+      // for it makes the review wait
       activeFor: id => {
         const repo = state.result.repos.find(r => r.id === id);
         return repo && state.runner.checkoutRefusal(repo) ? state.runner.activeFor(id) : undefined;
       },
-      checkoutBusy: id => state.flows.activeFor(id) !== undefined,
       dryGates: id => state.landing.dryGates(id),
       landingInfo: () => state.landing.info(),
       dropMember: (id, why) => state.landing.drop(id, why),
@@ -7729,7 +7735,6 @@ export async function startServer(opts: {
         await needHarness(state, agent.harness, repo.path);
         await opts.groups?.reviewerPreflight?.(group);
         if (!current()) return null;
-        if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow owns this checkout");
         return state.runner.start(repo, "compare", { ...ACTIONS.compare, message: prompt }, group.note, agent, undefined, undefined, undefined, { group: group.id, priority: "low" });
       },
     }),

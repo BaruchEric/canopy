@@ -41,9 +41,9 @@ export interface GroupDeps {
   broadcast: (ev: ServerEvent) => void;
   repo: (id: string) => Repo | undefined;
   run: (id: string) => Run | undefined;
+  /** the run that keeps a reviewer out of the repo's checkout: one in a
+   *  checkout with no room for another (FR-073), none otherwise */
   activeFor: (repoId: string) => Run | undefined;
-  /** a workflow can own its checkout between runner steps */
-  checkoutBusy?: (repoId: string) => boolean;
   dryGates: (origin: string) => Promise<GroupDry>;
   /** current must be rechecked after async preflight, immediately before start */
   startReviewer: (
@@ -759,11 +759,7 @@ export class GroupHub {
     const held = group[slot];
     let review = held ? this.run(held.run) : this.startingReview.get(key);
     if (!review) {
-      if (
-        this.deps.activeFor(group.repoId) ||
-        this.deps.checkoutBusy?.(group.repoId)
-      )
-        return;
+      if (this.deps.activeFor(group.repoId)) return;
       const dry: Record<string, GroupDry> = {};
       for (const m of group.members) {
         const s = group.scores?.[m.origin];
@@ -805,14 +801,9 @@ export class GroupHub {
         if (!started) return;
         review = started;
       } catch (error: unknown) {
-        // A checkout owner may arrive during the server's async preflight.
-        // Its next run/flow event wakes this review; real failures still surface.
-        if (
-          this.current(id, epoch, "reviewing") === reviewGroup &&
-          (this.deps.activeFor(group.repoId) ||
-            this.deps.checkoutBusy?.(group.repoId))
-        )
-          return;
+        // The checkout may fill during the server's async preflight. Its
+        // next run event wakes this review; real failures still surface.
+        if (this.current(id, epoch, "reviewing") === reviewGroup && this.deps.activeFor(group.repoId)) return;
         throw error;
       }
       if (!current()) {

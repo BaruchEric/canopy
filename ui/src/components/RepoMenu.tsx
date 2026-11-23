@@ -8,7 +8,7 @@ import { ACTIONS, checkWhen } from "../../../src/core/actions";
 import { describeAgent } from "../../../src/core/agent";
 import { HARNESS } from "../../../src/core/harness";
 import { harnessesOf, profileNames, startHarnesses } from "../agents";
-import { AGENT_NAME, RUN_DOT, menuRun, runAtWork } from "../runs";
+import { AGENT_NAME, RUN_DOT, menuRun } from "../runs";
 import { describeLaunch } from "../../../src/core/launch";
 import { flowWord } from "../flows";
 import { useShallow } from "zustand/react/shallow";
@@ -429,12 +429,12 @@ export function RepoMenuItems({
           </button>
         )}
         {!repo.host && (() => {
-          // a chat starts beside the runs going, each listed above; a seed
-          // takes one run at a time, and a chat needs its harness on the
-          // repo's backend
+          // a chat starts beside the runs and the workflow going, each
+          // listed above; a seed takes one run at a time, and a chat needs
+          // its harness on the repo's backend
           const missing = !has.includes(chatAgent.harness);
           const another = live.some((r) => r.chat);
-          const off = !!activeFlow || missing || seedBusy;
+          const off = missing || seedBusy;
           return (
             <button
               type="button"
@@ -443,15 +443,13 @@ export function RepoMenuItems({
               aria-disabled={off}
               tabIndex={off ? -1 : 0}
               title={
-                activeFlow
-                  ? "workflow running"
-                  : seedBusy
-                    ? "a seed takes one run at a time"
-                    : missing
-                      ? `${HARNESS[chatAgent.harness].label} is not installed on ${backendOf(repo.id)}`
-                      : another
-                        ? `Start another chat with ${AGENT_NAME[chatAgent.harness]} beside the ones going here`
-                        : `Talk with ${AGENT_NAME[chatAgent.harness]} about this repo, here in canopy (the repo's chat route)`
+                seedBusy
+                  ? "a seed takes one run at a time"
+                  : missing
+                    ? `${HARNESS[chatAgent.harness].label} is not installed on ${backendOf(repo.id)}`
+                    : another
+                      ? `Start another chat with ${AGENT_NAME[chatAgent.harness]} beside the ones going here`
+                      : `Talk with ${AGENT_NAME[chatAgent.harness]} about this repo, here in canopy (the repo's chat route)`
               }
               onClick={() => {
                 if (!off) void chat(another);
@@ -464,7 +462,7 @@ export function RepoMenuItems({
                 {another ? `new ${ACTIONS.chat.label}` : ACTIONS.chat.label}
               </span>
               <span className="menu-fact">
-                {activeFlow ? "workflow running" : seedBusy ? "one run at a time" : missing ? "not installed" : "in canopy"}
+                {seedBusy ? "one run at a time" : missing ? "not installed" : "in canopy"}
               </span>
             </button>
           );
@@ -515,15 +513,14 @@ export function RepoMenuItems({
           );
         })()}
         {JOBS.map((action) => {
-          const check = activeFlow
-            ? { ok: false as const, why: "workflow running" }
-            : seedBusy
-              ? { ok: false as const, why: "wait for the current run" }
-              : action === "propose" && jobAgent.harness !== "claude"
-                ? { ok: false as const, why: "plan, then build needs Claude Code" }
-                : !has.includes(jobAgent.harness)
-                  ? { ok: false as const, why: `${HARNESS[jobAgent.harness].label} not installed` }
-                  : checkWhen(repo, "any");
+          // a job starts beside the runs and the workflow going here (FR-073)
+          const check = seedBusy
+            ? { ok: false as const, why: "wait for the current run" }
+            : action === "propose" && jobAgent.harness !== "claude"
+              ? { ok: false as const, why: "plan, then build needs Claude Code" }
+              : !has.includes(jobAgent.harness)
+                ? { ok: false as const, why: `${HARNESS[jobAgent.harness].label} not installed` }
+                : checkWhen(repo, "any");
           return (
             <button
               key={action}
@@ -557,9 +554,13 @@ export function RepoMenuItems({
             );
           }
           const w = e.workflow;
-          // a workflow starts beside chats between turns; a run at work in
-          // the checkout is what it waits for
-          const check = seedBusy || runAtWork(live) || activeFlow ? { ok: false as const, why: "wait for the current run" } : checkWhen(repo, w.when);
+          // a workflow starts beside the runs going here, one workflow at
+          // a time in a checkout; a seed's waits for its run
+          const check = activeFlow
+            ? { ok: false as const, why: "one workflow at a time" }
+            : seedBusy
+              ? { ok: false as const, why: "wait for the current run" }
+              : checkWhen(repo, w.when);
           return (
             <button
               key={`wf-${w.name}`}

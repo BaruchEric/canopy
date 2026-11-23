@@ -8,10 +8,11 @@ import { isFlowActive, type Fleet, type Flow, type FlowChoice, type FlowStep, ty
 import { budgetWord, fleetCounts, flowWord, gateButtons, gateWords, oldestParked, rewindLines, stepWord } from "../flows";
 import { fit, flowGraphSteps, picture, stateWord } from "../flowgraph";
 import { PHONE, useMedia } from "../media";
-import { agentFor, idText, pickedIds, useStore } from "../store";
+import { agentFor, idText, pickedIds, runsFor, useStore } from "../store";
 import { termId } from "../term";
 import { BackendWord } from "./IdLabel";
-import { AGENT_NAME, harnessOf } from "../runs";
+import { AGENT_NAME, flowBesideRuns, harnessOf, runsAtWork } from "../runs";
+import { runTitle } from "../../../src/core/runname";
 import { useMentions } from "./Mentions";
 import { Timeline } from "./RunSheet";
 import { PopGear } from "./PopGrip";
@@ -32,6 +33,8 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
   const name = AGENT_NAME[agent.harness];
   const verdictReady = useStore((s) => s.verdictReady);
   const entry = useStore((s) => s.workflows[repo.id]?.find((e) => e.ok && e.workflow.name === workflow));
+  // the runs at work in the checkout the workflow will share (FR-073)
+  const beside = useStore((s) => flowBesideRuns(runsAtWork(runsFor(s, repo.id)).map(runTitle)));
   // one id for every try from this sheet: a retry after a lost answer finds
   // the flow the first try started (the sheet is keyed by repo and workflow)
   const [request] = useState(termId);
@@ -100,6 +103,7 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
             );
           })}
         </ol>
+        {beside && <p className="note">{beside}</p>}
         {refused && <p className="note err">{refused}: this repo starts no workflow until the file is fixed.</p>}
         {(entry.graph?.warnings ?? []).map((warning) => <p key={warning} className="note">{warning}</p>)}
         <textarea

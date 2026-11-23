@@ -43,7 +43,7 @@ import { TreeRows, TreesChip } from "./Trees";
 import { AgentChip } from "./Registry";
 import { CardLive } from "./CardLive";
 import { liveEdge } from "../cardlive";
-import { historyFor, type Repo } from "../../../src/core/types";
+import { historyFor, isRunActive, type Repo } from "../../../src/core/types";
 import { onBox } from "../front";
 import { kbKey } from "../kbfocus";
 import { useKb } from "../kbring";
@@ -139,6 +139,8 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
   const moreRuns = useStore(useShallow((s) => runsFor(s, repo.id).filter((r) => r.id !== runFor(s, repo.id)?.id)));
   const flow = useStore((s) => flowFor(s, repo.id));
   const activeFlow = useStore((s) => activeFlowFor(s, repo.id));
+  // a run going beside the workflow has its chip next to the workflow's (FR-073)
+  const beside = activeFlow && run && isRunActive(run) ? run : undefined;
   // what the leaf edge does about the agents here, with no run of canopy's to say
   const agentEdge = useStore((s) => liveEdge(agentsOn(s, repo.id), statusOf(s)));
   const overview = useStore((s) => s.history);
@@ -185,7 +187,7 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
   // tooltip says which kind when it is not the commit.
   const title = forge ? "last push to the forge" : whenTitle(st, newestEdit(repo));
   const live = activeFlow
-    ? activeFlow.status === "working"
+    ? activeFlow.status === "working" && beside?.status !== "waiting"
       ? " run-working"
       : " run-waiting"
     : run?.status === "working" || run?.status === "waiting"
@@ -322,7 +324,16 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
           </span>
         )}
         <span className="card-state">
-          {activeFlow ? <FlowChip flow={activeFlow} /> : run ? <RunChip run={run} more={moreRuns} /> : flow && <FlowChip flow={flow} />}
+          {activeFlow ? (
+            <>
+              <FlowChip flow={activeFlow} named={beside !== undefined} />
+              {beside && <RunChip run={beside} more={moreRuns} />}
+            </>
+          ) : run ? (
+            <RunChip run={run} more={moreRuns} />
+          ) : (
+            flow && <FlowChip flow={flow} />
+          )}
           <TaskChip repoId={repo.id} />
           <NoteChip repoId={repo.id} />
           <RepoHealthChip repoId={repo.id} />

@@ -11,7 +11,7 @@
  *  (`driver.ts`), and the server broadcasts the `Run` whole on every change.
  *  With a logger, each run keeps its wire on disk (`runlog.ts`). */
 
-import { branchPrompt, buildPrompt, busyWith, checkoutFull, type ActionSpec } from "./actions";
+import { branchPrompt, buildPrompt, busyWith, checkoutFull, sharingNote, type ActionSpec } from "./actions";
 import { normalizeAgent } from "./agent";
 import { CapacityHeldError, type Decision } from "./capacity";
 import { ClaudeDriver, cliArgs } from "./claudedrive";
@@ -225,6 +225,10 @@ export interface RunnerOptions {
    *  back while the run is still going and nobody has renamed it. Null
    *  keeps the words' name. Absent, runs keep their words' names. */
   namer?: (text: string) => Promise<string | null>;
+  /** The verb of the workflow going in a repo's checkout, if one is: a run
+   *  that starts beside it is told so, since the workflow's steps change
+   *  the tree and its checks read it. */
+  workflow?: (repoId: string) => string | undefined;
 }
 
 /** Why a stage run cannot start through the stage runner, in the words the
@@ -353,8 +357,7 @@ export class Runner {
   }
 
   /** The run at work in the repo's checkout: one mid-turn or waiting on a
-   *  prompt. A chat between turns edits nothing, so a workflow may start
-   *  beside it where it may not beside this. */
+   *  prompt, never a chat between turns. A seed's workflow waits for it. */
   busyFor(repoId: string): Run | undefined {
     return this.activeRunsFor(repoId).find((r) => r.status !== "idle");
   }
@@ -367,19 +370,18 @@ export class Runner {
   }
 
   /** Why another run cannot start in the repo's checkout now, or null.
-   *  Plain runs share a checkout up to `CHECKOUT_RUNS_PER_REPO`. An
-   *  incubator seed keeps one run at a time, since a stage's gates read the
-   *  seed as its step left it. A workflow's step at work keeps other starts
-   *  out; its own steps (`flowOwner`) pass, and so does a step beside runs
-   *  that were there before it, which the flow weighed at its start. */
+   *  Runs share a checkout up to `CHECKOUT_RUNS_PER_REPO`, a workflow's
+   *  steps counted among them: a plain run starts beside a workflow as it
+   *  does beside any run. An incubator seed keeps one run at a time, since
+   *  a stage's gates read the seed as its step left it. A workflow's own
+   *  steps (`flowOwner`) always pass elsewhere: the flow is one piece of
+   *  work, and a step the cap turned away would fail it part way. */
   checkoutRefusal(repo: Repo, flowOwner?: symbol): string | null {
     const others = this.checkoutLives(repo.id).filter((l) => flowOwner === undefined || l.flowOwner !== flowOwner);
     const first = others[0];
     if (!first) return null;
     if (this.opts.stage?.(repo)) return busyWith(repo.name, first.ctx.run.verb);
     if (flowOwner !== undefined) return null;
-    const step = others.find((l) => l.flowOwner !== undefined);
-    if (step) return busyWith(repo.name, step.ctx.run.verb);
     return others.length >= CHECKOUT_RUNS_PER_REPO ? checkoutFull(repo.name, CHECKOUT_RUNS_PER_REPO) : null;
   }
 
@@ -653,14 +655,23 @@ export class Runner {
     return childRefusal(parent === undefined ? undefined : this.get(parent), live);
   }
 
-  /** Says on a run's timeline which runs it shares the checkout with, as
-   *  its first turn begins. A branch run has a worktree of its own and a
-   *  coordinator no checkout, so neither is told. */
+  /** The workflow going in the checkout beside `live`, by its verb. A
+   *  flow's own step is not beside its flow. */
+  private workflowBeside(live: Live): string | undefined {
+    return live.flowOwner === undefined ? this.opts.workflow?.(live.repo.id) : undefined;
+  }
+
+  /** Says on a run's timeline what it shares the checkout with, as its
+   *  first turn begins: the workflow going there, by its verb and not step
+   *  by step, and the other runs by name. A branch run has a worktree of
+   *  its own and a coordinator no checkout, so neither is told. */
   private noteBeside(live: Live): void {
     const run = live.ctx.run;
     if (run.branch || isCoordinate(run)) return;
-    const beside = this.activeRunsFor(live.repo.id).filter((r) => r.id !== run.id);
-    if (beside.length) live.ctx.step({ kind: "note", text: `sharing the checkout with ${beside.length === 1 ? "another run" : `${beside.length} other runs`}: ${beside.map(runTitle).join(", ")}` });
+    const flow = this.workflowBeside(live);
+    const beside = this.activeRunsFor(live.repo.id).filter((r) => r.id !== run.id && !(flow && r.flowStep));
+    const text = sharingNote(flow, beside.map(runTitle));
+    if (text) live.ctx.step({ kind: "note", text });
   }
 
   /** The prompt a run's first message is wrapped in: the repo's framing, or
@@ -668,9 +679,10 @@ export class Runner {
   private firstMessage(live: Live, note: string): string {
     const b = live.ctx.run.branch;
     if (b) return branchPrompt(live.repo, live.spec, note, b);
-    // told only when others are in the checkout as it begins: the rule
-    // would be noise to a run that has the checkout to itself
-    const shared = this.activeRunsFor(live.repo.id).some((r) => r.id !== live.ctx.run.id);
+    // told only when others are in the checkout as it begins, a workflow
+    // between two of its steps among them: the rule would be noise to a
+    // run that has the checkout to itself
+    const shared = this.workflowBeside(live) !== undefined || this.activeRunsFor(live.repo.id).some((r) => r.id !== live.ctx.run.id);
     return buildPrompt(live.repo, live.spec, note, live.scope, this.opts.stage?.(live.repo) ?? false, shared);
   }
 

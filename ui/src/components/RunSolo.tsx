@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { runPanel } from "../itempanel";
 import { tellPanes } from "../panes";
-import { groveUrl } from "../routes";
+import { groveUrl, runUrl } from "../routes";
 import { useStore } from "../store";
 import { setTitleBase } from "../title";
 import { Console } from "./RunSheet";
@@ -17,6 +17,12 @@ import { runPanelLabel } from "../runs";
  * to the dock" or when the window goes. The console's ✕ in a pop-out
  * closes the window and has the dock forget the panel's slot, as a popped
  * repo panel's close does. A run the server no longer has says so.
+ *
+ * The console's tab row lists the repo's other runs (FR-073). A press on
+ * one takes this window to that run, and "+ chat" to the chat it starts:
+ * the window loads the other run's address, plain and never `popped`, so a
+ * popped-out chat it leaves goes back to the dock (the window said bye for
+ * it) and the dock keeps whatever panel the other run has.
  */
 export function RunSolo({ id, popped }: { id: string; popped: boolean }) {
   const run = useStore((s) => s.runs[id]);
@@ -65,7 +71,7 @@ export function RunSolo({ id, popped }: { id: string; popped: boolean }) {
       <div className="run-solo-main">
         {run ? (
           <div className="sheet run-tab">
-            <Console run={run} repo={repo} onClose={popped ? closePopped : close} solo />
+            <Console run={run} repo={repo} onClose={popped ? closePopped : close} go={(runId) => window.location.assign(runUrl(runId))} />
           </div>
         ) : (
           <p className="empty">

@@ -42,7 +42,8 @@ export function PageTabView({ tab }: { tab: PageTab }) {
   }
 }
 
-/** a run as the run sheet has it, its ✕ closing the tab */
+/** a run as the run sheet has it, its ✕ closing the tab; another run of
+ *  the repo, picked in its tab row, shows where the page shows one */
 function RunTabView({ tab }: { tab: ItemTab }) {
   const run = useStore((s) => s.runs[tab.ref]);
   const repo = useStore((s) => (run ? s.repos.find((r) => r.id === run.repoId) : undefined));
@@ -50,7 +51,7 @@ function RunTabView({ tab }: { tab: ItemTab }) {
   if (!run) return <p className="panel-clean sec-tab-gone">That run is not on the server now.</p>;
   return (
     <div className="sheet run-tab">
-      <Console run={run} repo={repo} onClose={() => untab(tab.id)} solo />
+      <Console run={run} repo={repo} onClose={() => untab(tab.id)} />
     </div>
   );
 }

@@ -2,16 +2,18 @@
  * Several runs in one checkout over the API (FR-073): a second and a third
  * run start beside the first, each goes by a name (cut from its words, then
  * the namer's, or the one the start or a person gives), POST /api/runs/name
- * renames a live run, and the checkout is full at the runner's cap.
+ * renames a live run, and the checkout is full at the runner's cap. A
+ * workflow starts beside a run at work, and runs start beside the workflow,
+ * each told of the other.
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkoutFull } from "../core/actions";
 import type { DriveCtx, RunDriver } from "../core/driver";
 import { CHECKOUT_RUNS_PER_REPO } from "../core/runner";
-import { isRunActive, type Harness, type Run } from "../core/types";
+import { isFlowActive, isRunActive, type Flow, type Harness, type Run } from "../core/types";
 import { startServer } from "./index";
 
 /** holds the run open, doing nothing, until it is stopped */
@@ -73,6 +75,9 @@ beforeAll(async () => {
   process.env["CANOPY_CONFIG_DIR"] = join(scratch, "config");
   const root = join(scratch, "root");
   for (const name of ["app", "lib"]) await Bun.$`mkdir -p ${join(root, name)} && git -C ${join(root, name)} init -q`.quiet();
+  // the user's own workflow, two steps, for the test of a workflow beside runs
+  await mkdir(join(scratch, "config", "workflows"), { recursive: true });
+  await writeFile(join(scratch, "config", "workflows", "tidy.md"), "---\nverb: tidy\nblurb: test\n---\n\n## Sweep\n\nSweep.\n\n## Sort\n\nSort.\n");
   server = await startServer({
     root,
     port: 0,
@@ -152,6 +157,31 @@ test("POST /api/runs/name renames a live run and refuses the rest", async () => 
   const ended = await call("POST", "/api/runs/name", { id: run.id, name: "later" });
   expect(ended.status).toBe(409);
   expect(await errorOf(ended)).toBe("the run has ended");
+});
+
+test("a workflow starts beside a run at work, and runs start beside the workflow, each told of the other", async () => {
+  const job = await start("app", { action: "ask", note: "first task", name: "first task" });
+  const started = await call("POST", "/api/repos/flow?id=app", { workflow: "tidy" });
+  expect(started.status).toBe(201);
+  const flow = (await started.json()) as Flow;
+  expect(flow.steps[0]?.status).toBe("running");
+  const step = await runOf(flow.steps[0]?.runId ?? "");
+  expect(step?.steps[0]).toMatchObject({ kind: "note", text: "sharing the checkout with another run: first task" });
+  // a job and a chat start while the workflow's step is at work
+  const late = await start("app", { action: "ask", note: "second task", name: "second task" });
+  expect(late.steps[0]).toMatchObject({ kind: "note", text: "sharing the checkout with the tidy workflow and another run: first task" });
+  const chat = await start("app", { action: "chat", note: "what is the workflow doing", name: "a question" });
+  expect(chat.steps[0]?.text).toBe("sharing the checkout with the tidy workflow and 2 other runs: first task, second task");
+  // one workflow at a time in a checkout
+  const second = await call("POST", "/api/repos/flow?id=app", { workflow: "tidy" });
+  expect(second.status).toBe(400);
+  expect(await errorOf(second)).toBe("app already has tidy going");
+  expect((await call("POST", "/api/flows/stop", { id: flow.id })).status).toBe(200);
+  await until(async () => !((await (await fetch(url("/api/flows"))).json()) as Flow[]).some(isFlowActive), "the workflow to end");
+  // the runs beside it go on
+  expect((await runOf(job.id))?.status).toBe("working");
+  expect((await runOf(late.id))?.status).toBe("working");
+  await stopAll();
 });
 
 test("the checkout is full at the cap, and another repo's is not", async () => {

@@ -5,7 +5,7 @@ import { ACTIONS, planWords, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
 import { parseIssueRef } from "../../../src/core/issue";
-import { agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, tasksOf, treeTasksOf, useStore, type Sheet } from "../store";
+import { activeFlowFor, agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, tasksOf, treeTasksOf, useStore, type Sheet } from "../store";
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
 import { branchByDefault, runLanding, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
@@ -53,7 +53,7 @@ import {
 } from "../../../src/core/types";
 import { forkLine, stepWords } from "../../../src/core/handoff";
 import { branchTask, branchTaskWords, devTask as devTaskOf, renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
-import { AGENT_NAME, harnessOf, hideTodoSteps, nestSteps, resultLine, runPanelLabel, settledProposal, tokenTitle, type SettledProposal } from "../runs";
+import { AGENT_NAME, harnessOf, hideTodoSteps, nestSteps, resultLine, runBesideFlow, runPanelLabel, settledProposal, tokenTitle, type SettledProposal } from "../runs";
 import { RunTabs } from "./RunTabs";
 import { HARNESS } from "../../../src/core/harness";
 import { CENTERED } from "../pop";
@@ -352,6 +352,10 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   }, [branchable, repo.id, loadTasks]);
   const [devTask, setDevTask] = useState(false);
   const startDev = branchable && onBranch && times === 1 && hasDev && devTask;
+  // the workflow going in the checkout this run will share (FR-073); a run
+  // on a branch of its own and a coordinator share nothing with it
+  const flowVerb = useStore((s) => activeFlowFor(s, repo.id)?.verb);
+  const besideFlow = flowVerb && !coordinate && !(branchable && onBranch) ? runBesideFlow(flowVerb) : null;
   const ready = noteReady && (!branchable || !onBranch || times <= free);
   // a branch run whose note opens with #123 or an issue URL starts from
   // that GitHub issue; the backend reads it with gh (core/issue)
@@ -406,6 +410,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
           )}
         </div>
         <p className="blurb">{words.blurb}</p>
+        {besideFlow && <p className="note">{besideFlow}</p>}
         <div className="mention-host">
           <textarea
             ref={noteBox}
@@ -684,7 +689,7 @@ export function useSecondPress(go: () => void): { armed: boolean; press: () => v
   return { armed: armedAt !== null, press, disarm: () => set(null) };
 }
 
-export function Console({ run, repo, onClose, solo }: { run: Run; repo: Repo | undefined; onClose?: () => void; /** a window of its own, with nowhere to show the repo's other runs */ solo?: boolean }) {
+export function Console({ run, repo, onClose, go }: { run: Run; repo: Repo | undefined; onClose?: () => void; /** a window of its own: how it moves to another of the repo's runs */ go?: (runId: string) => void }) {
   // in a shell window's tab (FR-030) the ✕ closes the tab, not the sheet
   const closeSheet = useStore((s) => s.closeSheet);
   const close = onClose ?? closeSheet;
@@ -756,7 +761,7 @@ export function Console({ run, repo, onClose, solo }: { run: Run; repo: Repo | u
         </button>
       </header>
 
-      <RunTabs run={run} repo={repo} {...(solo ? { solo } : {})} />
+      <RunTabs run={run} repo={repo} go={go} />
       {(run.parent || run.group || run.branch?.group) && <ParentLine run={run} />}
       {run.forkOf && <ForkLine run={run} />}
       {run.branch && <BranchBlock run={run} act={act} />}

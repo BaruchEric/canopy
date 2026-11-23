@@ -3279,7 +3279,13 @@ export function RepoPanel({
             {(repoFlow || repoRun) && (
               <div className="panel-run">
                 {repoActiveFlow ? (
-                  <FlowChip flow={repoActiveFlow} long />
+                  // the runs going beside the workflow keep their chips (FR-073)
+                  <>
+                    <FlowChip flow={repoActiveFlow} long />
+                    {repoLive.map((r) => (
+                      <RunChip key={r.id} run={r} named />
+                    ))}
+                  </>
                 ) : repoLive.length > 1 ? (
                   repoLive.map((r) => <RunChip key={r.id} run={r} named />)
                 ) : repoRun ? (

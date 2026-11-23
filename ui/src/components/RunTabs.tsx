@@ -29,16 +29,16 @@ const tabTitle = (run: Run): string => `${run.verb}: ${runWord(run, true)}${run.
  * This run's tab holds the name it goes by: the one canopy cut from its
  * first message, the one a small model wrote for it, or the user's own. A
  * press on it opens a field to rename the run while the run is live. Every
- * other tab shows that run, and "+ chat" starts another chat on the repo.
- * `solo` is a console in a window of its own (a popped-out chat, a shell
- * window's tab), which has nowhere to show another run: it keeps this
- * run's tab alone.
+ * other tab shows that run, and "+ chat" starts another chat on the repo
+ * and shows it. On the page a run is shown where the store shows one (its
+ * docked panel, else the sheet over the page). A window of its own
+ * (`?view=run`) has no sheet, so it passes `go`, its own way to another run.
  *
  * Nothing shows for a coordinator (it holds no repo and takes no name), a
  * flow's step (its flow names it), or an ended run with no name and no
  * run going beside it.
  */
-export function RunTabs({ run, repo, solo = false }: { run: Run; repo: Repo | undefined; solo?: boolean }) {
+export function RunTabs({ run, repo, go }: { run: Run; repo: Repo | undefined; go?: ((runId: string) => void) | undefined }) {
   const live = useStore(useShallow((s) => runsFor(s, run.repoId)));
   const own = useStore((s) => ownRun(s.flowRuns, run));
   const showRun = useStore((s) => s.showRun);
@@ -49,9 +49,10 @@ export function RunTabs({ run, repo, solo = false }: { run: Run; repo: Repo | un
   if (isCoordinator(run) || !own) return null;
   const mine = live.some((r) => r.id === run.id);
   const canName = mine && !run.kept;
-  const others = solo ? [] : live.filter((r) => r.id !== run.id);
+  const others = live.filter((r) => r.id !== run.id);
+  const show = go ?? showRun;
   // another chat starts where a chat can: a local repo that is no seed
-  const canChat = !solo && repo !== undefined && !repo.host && !repo.forge && !repo.archived && !isSeedId(run.repoId);
+  const canChat = repo !== undefined && !repo.host && !repo.forge && !repo.archived && !isSeedId(run.repoId);
   if (others.length === 0 && !canName && !run.name) return null;
 
   const words = (e: unknown): string => String(e instanceof Error ? e.message : e);
@@ -69,7 +70,11 @@ export function RunTabs({ run, repo, solo = false }: { run: Run; repo: Repo | un
   const another = () => {
     setMode({ kind: "starting" });
     openChat(run.repoId, "", true).then(
-      () => setMode(TABS),
+      (id) => {
+        setMode(TABS);
+        // the page shows a chat it starts; a window of its own goes to it
+        go?.(id);
+      },
       (err: unknown) => setMode({ kind: "tabs", error: words(err) }),
     );
   };
@@ -130,7 +135,7 @@ export function RunTabs({ run, repo, solo = false }: { run: Run; repo: Repo | un
         </span>
       )}
       {others.map((r) => (
-        <button key={r.id} type="button" className={`rtab st-${r.status}`} title={`Show this run\n${tabTitle(r)}`} onClick={() => showRun(r.id)}>
+        <button key={r.id} type="button" className={`rtab st-${r.status}`} title={`Show this run\n${tabTitle(r)}`} onClick={() => show(r.id)}>
           {face(r)}
         </button>
       ))}

@@ -6,6 +6,7 @@ import { chained, readOnlyStep, unattendedRefusal, type RecordedWorkflow } from 
 import { busyWith, checkWhen, type ActionSpec } from "./actions";
 import { laterPriority, limitedWords } from "./capacity";
 import type { BranchStart, StartExtras } from "./runner";
+import { runTitle } from "./runname";
 import { isSeedId } from "./sprout";
 import { STAGE_AWAY } from "./stagewire";
 import { decide, decideJudge, judgeState, verdictState } from "./verdict";
@@ -203,6 +204,12 @@ export const FLOW_ID = /^[0-9a-f]{8}$/;
 /** what the browser mints for a flow or fleet start: 32 hex digits */
 export const isRequestId = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{32}$/.test(v);
 
+/** What a failed check's retry is told when other runs were at work in the
+ *  checkout while it ran (FR-073): the failure may be theirs, and their
+ *  files are not this workflow's to fix. */
+export const checkBeside = (names: readonly string[]): string =>
+  `${names.length === 1 ? "Another run was" : `${names.length} other runs were`} at work in this checkout while the check ran (${names.join(", ")}), so the failure may come from changes of theirs that are not finished. Fix only what this workflow changed and leave their files as they are.`;
+
 /** how long a stop waits for an aborted check to exit before the flow ends anyway */
 export const STOP_GRACE = 10_000;
 
@@ -219,6 +226,8 @@ export interface FlowRunner {
   /** the run at work in the repo's checkout: mid-turn or waiting on a
    *  prompt, never a chat between turns */
   busyFor(repoId: string): Run | undefined;
+  /** every run going in the repo's checkout, this flow's steps among them */
+  activeRunsFor(repoId: string): Run[];
   stop(id: string): Run;
   dismiss(id: string): void;
   /** Setup, actual driver exit and owned drains; never stops the run. */
@@ -460,7 +469,8 @@ export class Flows {
    *  find the flow the first one made. A `branch` (cut by the caller, its
    *  worktree made) runs every step there instead of the repo's checkout,
    *  so the checkout's own run or flow does not stand in the way. In the
-   *  checkout it waits for a run at work there to end or go idle. An `id`
+   *  checkout it starts beside the runs going there (FR-073), one workflow
+   *  at a time; a seed's waits for the run at work in it. An `id`
    *  chosen by the caller (8 hex digits, as a minted one) lets it write what
    *  the flow's steps need under that id first; `equip` is kept on the flow. */
   start(
@@ -481,9 +491,11 @@ export class Flows {
     if (branch && fleetId) throw new Error("a fleet's flows run in each repo's checkout, not on a branch");
     const busyFlow = branch ? undefined : this.activeFor(repo.id);
     if (busyFlow) throw new Error(`${repo.name} already has ${busyFlow.verb} going`);
-    // a chat between turns edits nothing, so a workflow starts beside it
-    // (FR-073); a run mid-turn would move the checkout under the gates
-    const busyRun = branch ? undefined : this.runner.busyFor(repo.id);
+    // a workflow starts beside the runs going in the checkout (FR-073):
+    // each side is told of the other, and a check that fails beside a run
+    // at work says so. A seed keeps one run at a time, so its workflow
+    // waits for the one at work there.
+    const busyRun = !branch && isSeedId(repo.id) ? this.runner.busyFor(repo.id) : undefined;
     if (busyRun) throw new Error(busyWith(repo.name, busyRun.verb));
     if (workflow.noteRequired && !note.trim()) throw new Error("write what the agent should do first");
     if (id !== undefined && !FLOW_ID.test(id)) throw new Error(`${id} is not a flow id`);
@@ -1491,6 +1503,7 @@ export class Flows {
     this.emit(live);
     const ctl = new AbortController();
     live.checking.set(i, ctl);
+    const besideAtStart = this.atWorkBeside(live);
     let r: CheckResult;
     try {
       r = await this.hooks.check(workRepo(live), def.check, ctl.signal, def.checkMinutes === undefined ? undefined : def.checkMinutes * 60_000);
@@ -1513,8 +1526,12 @@ export class Flows {
     }
     step.check = { command: def.check, exit: r.exit, output: r.output };
     if (r.exit !== 0) {
-      const reason = `check failed with exit ${r.exit}`;
-      this.refuse(live, i, `${reason}:\n${tailOf(r.output)}`, () => {
+      // runs at work in the checkout when the check began or ended: it may
+      // have read their unfinished changes, so the retry and the reader hear it
+      const beside = [...new Set([...besideAtStart, ...this.atWorkBeside(live)])];
+      const failed = `check failed with exit ${r.exit}`;
+      const reason = beside.length ? `${failed}, with ${beside.length === 1 ? "another run" : `${beside.length} other runs`} at work in the checkout` : failed;
+      this.refuse(live, i, `${failed}:\n${tailOf(r.output)}${beside.length ? `\n\n${checkBeside(beside)}` : ""}`, () => {
         // out of retries parks, so the sheet can show the output; no retries fails as it always did
         if (routesCheckFailure(live.workflow, def.name)) {
           step.status = "failed";
@@ -1530,6 +1547,14 @@ export class Flows {
       return;
     }
     await this.gate(live, i, attempt);
+  }
+
+  /** The names of the runs at work in the flow's checkout that are not its
+   *  own steps. None for a flow on a branch, whose worktree is its own. */
+  private atWorkBeside(live: LiveFlow): string[] {
+    if (live.flow.branch) return [];
+    const own = new Set(live.flow.steps.map((s) => s.runId));
+    return this.runner.activeRunsFor(live.repo.id).filter((r) => r.status !== "idle" && !own.has(r.id)).map(runTitle);
   }
 
   private async gate(live: LiveFlow, i: number, attempt: symbol): Promise<void> {

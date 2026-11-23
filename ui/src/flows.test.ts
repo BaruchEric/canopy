@@ -1,11 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { budgetWord, continueWord, fleetCounts, flowWord, gateButtons, gateWords, oldestParked, ownRun, rewindLines, selectable, stepWord } from "./flows";
+import { budgetWord, continueWord, fleetCounts, flowWord, gateButtons, gateWords, namedFlowWord, oldestParked, ownRun, rewindLines, selectable, stepWord } from "./flows";
 import type { Fleet, Flow, FlowStep, Repo, Run } from "../../src/core/types";
 
 const flow = (o: Partial<Flow> = {}): Flow => ({
   id: "f", repoId: "r", workflow: "ship", verb: "ship", note: "", status: "working",
   steps: [{ name: "Gates", status: "passed" }, { name: "Commit", status: "running" }, { name: "Push", status: "pending" }],
   current: 1, startedAt: 0, ...o,
+});
+
+describe("namedFlowWord", () => {
+  test("puts the verb before a word that does not say it, so a run's chip beside it reads apart", () => {
+    expect(namedFlowWord(flow({ status: "gated" }))).toBe("ship · needs you");
+    expect(namedFlowWord(flow({ status: "waiting" }))).toBe("ship · needs you");
+    expect(namedFlowWord(flow())).toBe("ship: Commit…");
+  });
 });
 
 describe("flowWord", () => {

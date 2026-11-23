@@ -50,13 +50,14 @@ function setup() {
 const activeDrivers = (drivers: Driver[]) => drivers.filter((driver) => driver.ctx?.status() === "working");
 
 describe("real Runner graph ownership", () => {
-  test("checkout siblings coexist, unrelated runs stay busy, and held Ship starts only on continue", async () => {
+  test("checkout siblings coexist, the checkout stays open to other runs, and held Ship starts only on continue", async () => {
     const { flows, runner, drivers } = setup();
     const flow = flows.start(repo, FAN, "", DEFAULT_AGENT);
     drivers[0]?.end(); await flush();
     expect(flow.steps.map((step) => step.status)).toEqual(["passed", "running", "running", "pending"]);
     expect(activeDrivers(drivers)).toHaveLength(2);
-    expect(() => runner.start(repo, FAN.name, ACTIONS.ask, "unrelated", DEFAULT_AGENT)).toThrow("already has");
+    // a plain run may start beside the steps (FR-073); a second workflow may not
+    expect(runner.checkoutRefusal(repo)).toBeNull();
     expect(() => flows.start(repo, FAN, "another flow", DEFAULT_AGENT)).toThrow("already has");
     drivers[1]?.end(); await flush();
     expect(flow.steps[3]?.status).toBe("pending");
@@ -69,17 +70,20 @@ describe("real Runner graph ownership", () => {
     expect(flow.status).toBe("done");
   });
 
-  test("a workflow starts beside a chat between turns, and waits for a run at work (FR-073)", async () => {
+  test("a workflow starts beside a run at work and a chat between turns, and runs start beside it (FR-073)", async () => {
     const { flows, runner, drivers } = setup();
     const job = runner.start(repo, "ask", ACTIONS.ask, "look around", DEFAULT_AGENT);
-    expect(() => flows.start(repo, FAN, "", DEFAULT_AGENT)).toThrow(`graph already has a run going (${job.verb})`);
-    drivers[0]?.end(); await flush();
     const chat = runner.start(repo, "chat", ACTIONS.chat, "", DEFAULT_AGENT);
     const flow = flows.start(repo, FAN, "", DEFAULT_AGENT);
     expect(flow.steps[0]?.status).toBe("running");
-    expect(runner.activeRunsFor(repo.id).map((run) => run.id)).toContain(chat.id);
+    expect(runner.activeRunsFor(repo.id).map((run) => run.id)).toEqual(expect.arrayContaining([job.id, chat.id]));
+    // one workflow at a time in a checkout
+    expect(() => flows.start(repo, FAN, "another flow", DEFAULT_AGENT)).toThrow("already has");
     // a message into the chat mid-flow does not stop the flow's next steps
     runner.say(chat.id, "what is this workflow doing?");
+    // and another job starts while the flow's step is at work
+    const late = runner.start(repo, "ask", ACTIONS.ask, "one more look", DEFAULT_AGENT);
+    expect(late.status).toBe("working");
     drivers.find((driver) => driver.ctx?.env["CANOPY_RUN"] === flow.steps[0]?.runId)?.end(); await flush();
     expect(flow.steps.map((step) => step.status)).toEqual(["passed", "running", "running", "pending"]);
     flows.stop(flow.id);
@@ -126,7 +130,7 @@ describe("real Runner graph ownership", () => {
     runner.stopAll();
   });
 
-  test("restored interrupted checkout siblings regain one private owner and still exclude unrelated work", async () => {
+  test("restored interrupted checkout siblings regain one private owner, apart from unrelated work beside them", async () => {
     const a = setup();
     const flow = a.flows.start(repo, FAN, "", DEFAULT_AGENT);
     a.drivers[0]?.end(); await flush();
@@ -136,9 +140,13 @@ describe("real Runner graph ownership", () => {
     b.flows.restore([structuredClone(record)], () => repo, () => () => DEFAULT_AGENT);
     expect(b.flows.get(flow.id)?.steps.map((step) => step.status)).toEqual(["passed", "running", "running", "pending"]);
     expect(activeDrivers(b.drivers)).toHaveLength(2);
-    expect(() => b.runner.start(repo, FAN.name, ACTIONS.ask, "unrelated", DEFAULT_AGENT)).toThrow("already has");
+    // unrelated work starts beside the restored steps (FR-073) and is not
+    // the flow's: stopping the flow ends its steps and leaves that run going
+    const other = b.runner.start(repo, "ask", ACTIONS.ask, "unrelated", DEFAULT_AGENT);
     b.flows.stop(flow.id); a.flows.stop(flow.id);
-    expect(activeDrivers(b.drivers)).toHaveLength(0);
+    expect(activeDrivers(b.drivers)).toHaveLength(1);
+    expect(b.runner.get(other.id)?.status).toBe("working");
+    b.runner.stopAll();
   });
 
   test("a real branch limit drains its sibling and retries on the same worktree and work item", async () => {

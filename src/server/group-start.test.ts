@@ -954,7 +954,7 @@ test("a grouped landing fix preserves both group ids and stays out of the queue 
   ]);
 });
 
-test("a workflow gate owns the checkout between runs and the reviewer starts once after it finishes", async () => {
+test("the reviewer starts beside a workflow parked at its gate, once", async () => {
   const w = await world({ flow: true });
   const response = await w.post("/api/repos/flow?id=app", { workflow: "hold" });
   expect(response.status).toBe(201);
@@ -981,17 +981,18 @@ test("a workflow gate owns the checkout between runs and the reviewer starts onc
   await until(
     async () =>
       (await w.groups()).find((g) => g.id === group.id)?.state === "reviewing",
-    "waiting comparison",
+    "the comparison",
   );
-  expect(w.starts).toHaveLength(3);
+  // the reviewer is one more run in the checkout (FR-073): the workflow
+  // going there does not hold it, parked or at work
+  await until(() => w.starts.length === 4, "reviewer beside the gated workflow");
+  expect(w.starts[3]?.ctx.spec.maxTurns).toBe(40);
   expect(
     (await w.post("/api/flows/resume", { id, choice: "continue" })).status,
   ).toBe(200);
-  await until(() => w.starts.length === 4, "flow second step");
-  expect(w.starts[3]?.ctx.spec.maxTurns).not.toBe(40);
-  await w.finish(3);
-  await until(() => w.starts.length === 5, "reviewer after flow");
-  expect(w.starts[4]?.ctx.spec.maxTurns).toBe(40);
+  await until(() => w.starts.length === 5, "flow second step");
+  expect(w.starts[4]?.ctx.spec.maxTurns).not.toBe(40);
+  await w.finish(4);
   expect(
     (await w.readRuns()).filter((run) => run.action === "compare"),
   ).toHaveLength(1);

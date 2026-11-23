@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { settleNote } from "../../src/core/driver";
 import type { Run, RunStep } from "../../src/core/types";
-import { AGENT_NAME, agentWord, chatToSay, chatToShow, chipName, clock, harnessOf, hideTodoSteps, menuRun, moreTitle, needsMore, nestSteps, pillLine, pillRuns, pillText, progressWord, ranUnchanged, resultLine, reviseAnswer, runAtWork, runPanelLabel, runWord, settledProposal, tokenCount, tokenTitle } from "./runs";
+import { AGENT_NAME, agentWord, chatToSay, chatToShow, chipName, clock, harnessOf, hideTodoSteps, menuRun, moreTitle, needsMore, nestSteps, pillLine, pillRuns, pillText, progressWord, ranUnchanged, resultLine, reviseAnswer, flowBesideRuns, runBesideFlow, runsAtWork, runPanelLabel, runWord, settledProposal, tokenCount, tokenTitle } from "./runs";
 
 describe("a run's words", () => {
   test("its harness, and a run from before harnesses was Claude's", () => {
@@ -153,9 +153,16 @@ describe("several runs on one repo (FR-073)", () => {
     expect(chatToShow([live("job", "working", 9)])).toBeUndefined();
   });
 
-  test("a workflow waits only for a run at work in the checkout", () => {
-    expect(runAtWork([live("c", "idle", 1, { chat: true }), live("b", "working", 2, { branch })])).toBeUndefined();
-    expect(runAtWork([live("c", "idle", 1, { chat: true }), live("j", "waiting", 2)])?.id).toBe("j");
+  test("the runs a workflow would share the checkout with are the ones at work in it", () => {
+    expect(runsAtWork([live("c", "idle", 1, { chat: true }), live("b", "working", 2, { branch })])).toEqual([]);
+    expect(runsAtWork([live("c", "idle", 1, { chat: true }), live("j", "waiting", 2), live("k", "working", 3)]).map((r) => r.id)).toEqual(["j", "k"]);
+  });
+
+  test("a plan sheet says what the start will share the checkout with", () => {
+    expect(flowBesideRuns([])).toBeNull();
+    expect(flowBesideRuns(["peer sync"])).toBe("A run is at work in this checkout (peer sync). The workflow starts beside it, and its steps and checks see that run's changes, finished or not.");
+    expect(flowBesideRuns(["peer sync", "chat"])).toStartWith("2 runs are at work in this checkout (peer sync, chat). The workflow starts beside them");
+    expect(runBesideFlow("deploy")).toBe("The deploy workflow is going in this checkout. This run starts beside it, and the workflow's checks see what the run changes.");
   });
 
   test("a menu row says the name with the verb and state beside it, or the old words without one", () => {

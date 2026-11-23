@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { CapacityHeldError } from "./capacity";
-import { CAPACITY_NOTE, FAILED_RUN_NOTE, Flows, FLOW_PARALLEL, whenHolds, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner, type StepExtras } from "./flow";
+import { CAPACITY_NOTE, checkBeside, FAILED_RUN_NOTE, Flows, FLOW_PARALLEL, whenHolds, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner, type StepExtras } from "./flow";
 import { STAGE_AWAY, StageAwayError } from "./stagewire";
 import { parseWorkflow, unattendedRefusal, type RecordedWorkflow } from "./workflow";
 import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type RunEquip, type VerdictAnswers, type Workflow } from "./types";
@@ -80,6 +80,11 @@ class FakeRunner implements FlowRunner {
   get(id: string) { return this.runs.get(id); }
   busyFor(repoId: string) {
     return [...this.runs.values()].find((r) => r.repoId === repoId && r.status === "working");
+  }
+  /** runs a test puts in the checkout beside the flow's own steps */
+  beside: Run[] = [];
+  activeRunsFor(repoId: string) {
+    return [...[...this.runs.values()].filter((r) => r.status === "working" || r.status === "waiting"), ...this.beside].filter((r) => r.repoId === repoId);
   }
   stop(id: string): Run {
     this.stopped.push(id);
@@ -871,6 +876,43 @@ describe("retries", () => {
     expect(flows.get(flow.id)?.tries).toEqual({ Test: 2 });
   });
 
+  test("a check that fails beside a run at work says so to the retry and to the reader", async () => {
+    const { runner, flows } = setup({ check: () => ({ exit: 1, output: "2 fail" }) });
+    const other = (id: string, status: Run["status"], name: string): Run => ({
+      id, repoId: "r", action: "ask", verb: "ask", progress: "", expectsChange: false, chat: status === "idle", harness: "claude", note: "", name,
+      status, startedAt: 0, steps: [], prompt: null,
+    });
+    // a job mid-turn and a chat between turns share the checkout: only the job is at work
+    runner.beside = [other("job1", "working", "tidy the imports"), other("chat1", "idle", "peer sync")];
+    const flow = flows.start(repo(), CHECKED_RETRY, "", DEFAULT_AGENT);
+    runner.end("run1", "done", "built");
+    await flush();
+    const told = runner.specs[1]?.task ?? "";
+    expect(told).toContain("check failed with exit 1:\n2 fail\n\n" + checkBeside(["tidy the imports"]));
+    expect(told).not.toContain("peer sync");
+    runner.end("run2", "done", "built again");
+    await flush();
+    // the job has ended by the last try: the check that began beside nothing says nothing of it
+    runner.beside = [];
+    runner.end("run3", "done", "built a third time");
+    await flush();
+    expect(flows.get(flow.id)?.steps[1]?.reason).toBe("check failed with exit 1");
+    expect(checkBeside(["a"])).toStartWith("Another run was at work in this checkout while the check ran (a)");
+    expect(checkBeside(["a", "b"])).toStartWith("2 other runs were at work in this checkout while the check ran (a, b)");
+  });
+
+  test("out of retries beside a run at work, the parked step's reason counts it", async () => {
+    const { runner, flows } = setup({ check: () => ({ exit: 1, output: "fail" }) });
+    runner.beside = [{ id: "job1", repoId: "r", action: "ask", verb: "ask", progress: "", expectsChange: false, chat: false, harness: "claude", note: "", status: "waiting", startedAt: 0, steps: [], prompt: null }];
+    const flow = flows.start(repo(), CHECKED_RETRY, "", DEFAULT_AGENT);
+    for (const id of ["run1", "run2", "run3"]) {
+      runner.end(id, "done", "x");
+      await flush();
+    }
+    expect(flows.get(flow.id)?.status).toBe("gated");
+    expect(flows.get(flow.id)?.steps[1]?.reason).toBe("check failed with exit 1, with another run at work in the checkout");
+  });
+
   test("out of retries, a failing check parks the flow", async () => {
     const { runner, flows } = setup({ check: () => ({ exit: 1, output: "fail" }) });
     const flow = flows.start(repo(), CHECKED_RETRY, "", DEFAULT_AGENT);
@@ -1276,6 +1318,14 @@ describe("the stage runner away", () => {
   });
 
   const seedRepo = (): Repo => ({ ...repo(), id: "_incubator/coin", name: "coin", path: "/tmp/_incubator/coin" });
+
+  test("a seed's workflow waits for the run at work in the seed, where any other checkout takes one beside it", () => {
+    const { runner, flows } = setup();
+    runner.start(seedRepo(), "ask", { verb: "ask" } as ActionSpec, "busy", DEFAULT_AGENT);
+    expect(() => flows.start(seedRepo(), TWO, "", DEFAULT_AGENT)).toThrow("coin already has a run going (ask)");
+    runner.start(repo(), "ask", { verb: "ask" } as ActionSpec, "busy", DEFAULT_AGENT);
+    expect(flows.start(repo(), TWO, "", DEFAULT_AGENT).status).toBe("working");
+  });
 
   test("a seed run whose error names the stage runner, while the runner answered, is a failed run and never a stage park", async () => {
     const { runner, flows } = setup();
@@ -1766,7 +1816,11 @@ Fix it.
     const flow = flows.start(repo(), CHECKED, "an issue", DEFAULT_AGENT, { branch: cut() });
     expect(flow.status).toBe("working");
     expect(flows.activeFor("r")).toBeUndefined();
-    expect(() => flows.start(repo(), CHECKED, "plain", DEFAULT_AGENT)).toThrow();
+    // a workflow in the checkout starts beside the run at work there
+    // (FR-073), and is the one workflow the checkout takes
+    const plain = flows.start(repo(), CHECKED, "plain", DEFAULT_AGENT);
+    expect(flows.activeFor("r")?.id).toBe(plain.id);
+    expect(() => flows.start(repo(), CHECKED, "one more", DEFAULT_AGENT)).toThrow("r already has");
   });
 
   test("a stopped flow is picked up at its step, resuming that step's session, and the steps after it follow", async () => {

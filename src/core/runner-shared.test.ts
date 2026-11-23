@@ -103,17 +103,27 @@ describe("runs sharing a checkout", () => {
     expect(() => ask("seed", "step two")).toThrow(busyWith("seed", first.verb));
   });
 
-  test("a workflow's step at work keeps other starts out, and its own steps in", () => {
+  test("a plain run starts beside a workflow's step at work, which counts toward the cap", () => {
     const { runner, ask, chat } = setup();
     const flow = Symbol("flow");
     const step: ActionSpec = { ...ACTIONS.ask, verb: "ship · build", flowStep: { workflow: "ship", step: "build", source: "bundled" } };
-    const one = ask("r", "build it", { flowOwner: flow }, step);
-    expect(runner.checkoutRefusal(repo("r"))).toBe(busyWith("r", one.verb));
-    expect(() => chat("r")).toThrow(busyWith("r", one.verb));
+    ask("r", "build it", { flowOwner: flow }, step);
+    expect(runner.checkoutRefusal(repo("r"))).toBeNull();
+    expect(() => chat("r")).not.toThrow();
     expect(() => ask("r", "test it", { flowOwner: flow }, step)).not.toThrow();
-    // another workflow's step is refused nothing here: its flow weighed the
-    // checkout when it started, which `Flows.start` does
-    expect(runner.checkoutRefusal(repo("r"), Symbol("other"))).toBeNull();
+    for (let i = runner.activeRunsFor("r").length; i < CHECKOUT_RUNS_PER_REPO; i += 1) ask("r", `task ${i}`);
+    expect(() => chat("r")).toThrow(checkoutFull("r", CHECKOUT_RUNS_PER_REPO));
+    // the flow's own steps pass a full checkout: the cap would fail the flow part way
+    expect(runner.checkoutRefusal(repo("r"), flow)).toBeNull();
+    expect(() => ask("r", "ship it", { flowOwner: flow }, step)).not.toThrow();
+  });
+
+  test("a seed's workflow step still keeps other starts out", () => {
+    const { runner, ask } = setup({ stage: (r) => r.id === "seed" });
+    const flow = Symbol("flow");
+    const one = ask("seed", "build it", { flowOwner: flow }, { ...ACTIONS.ask, verb: "grow · build", flowStep: { workflow: "grow", step: "build", source: "bundled" } });
+    expect(runner.checkoutRefusal(repo("seed"))).toBe(busyWith("seed", one.verb));
+    expect(() => ask("seed", "step two")).toThrow(busyWith("seed", one.verb));
   });
 
   test("a workflow's step starts beside a chat that was there before it", () => {
@@ -159,6 +169,35 @@ describe("what a run is told about the others", () => {
     const said = runner.say(only.id, "hello");
     expect(made[0]?.started[0]).not.toContain(SHARED_CHECKOUT);
     expect(said.steps.filter((s) => s.kind === "note")).toEqual([]);
+  });
+
+  test("a run that starts beside a workflow is told of the workflow by its verb, not step by step", () => {
+    let going: string | undefined = "ship";
+    const { made, ask, chat, runner } = setup({ workflow: (id) => (id === "r" ? going : undefined) });
+    const flow = Symbol("flow");
+    const step: ActionSpec = { ...ACTIONS.ask, verb: "ship · build", flowStep: { workflow: "ship", step: "build", source: "bundled" } };
+    // the flow's own step is not beside its flow
+    const first = ask("r", "build it", { flowOwner: flow }, step);
+    expect(first.steps.filter((s) => s.kind === "note")).toEqual([]);
+    expect(made[0]?.started[0]).not.toContain(SHARED_CHECKOUT);
+    // a job beside the step at work
+    const job = ask("r", "tidy the imports");
+    expect(job.steps[0]).toMatchObject({ kind: "note", text: "sharing the checkout with the ship workflow" });
+    expect(made[1]?.started[0]).toContain(SHARED_CHECKOUT);
+    // a chat hears of the workflow and of the job, at its first message
+    const talk = chat("r");
+    expect(runner.say(talk.id, "what is going on here").steps[0]?.text).toBe("sharing the checkout with the ship workflow and another run: tidy the imports");
+    // the flow's next step is told of the runs beside it
+    const next = ask("r", "test it", { flowOwner: flow }, { ...step, verb: "ship · test" });
+    expect(next.steps[0]?.text).toStartWith("sharing the checkout with 3 other runs: ");
+    // between two steps no step is live, and a new run still hears of the workflow
+    const { made: quiet, ask: askQuiet } = setup({ workflow: () => going });
+    expect(askQuiet("r", "look around").steps[0]?.text).toBe("sharing the checkout with the ship workflow");
+    expect(quiet[0]?.started[0]).toContain(SHARED_CHECKOUT);
+    going = undefined;
+    const { made: alone, ask: askAlone } = setup({ workflow: () => going });
+    expect(askAlone("r", "look around").steps).toEqual([]);
+    expect(alone[0]?.started[0]).not.toContain(SHARED_CHECKOUT);
   });
 
   test("the note counts the runs it shares with", () => {

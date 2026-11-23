@@ -40,6 +40,14 @@ export function flowWord(flow: Flow, long: boolean): string {
   }
 }
 
+/** `flowWord`'s short form with the workflow's verb in front, for a card
+ *  where a run's chip sits beside the workflow's (FR-073): a parked
+ *  workflow and a parked run would both read "needs you". */
+export function namedFlowWord(flow: Flow): string {
+  const word = flowWord(flow, false);
+  return word.startsWith(`${flow.verb}:`) ? word : `${flow.verb} · ${word}`;
+}
+
 /** A gate's ways on, as its buttons word them: what each will do. */
 export interface GateWords {
   /** the continue button */

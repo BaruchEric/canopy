@@ -1354,9 +1354,9 @@ for (const state of ["waiting", "judge"] as const)
     expect(w.landing.entries[0]?.state).toBe(state);
   });
 
-test("checkout ownership between runs holds one reviewer until explicitly rechecked", async () => {
+test("a checkout with no room holds one reviewer until explicitly rechecked", async () => {
   let busy = true;
-  const w = await world({ checkoutBusy: () => busy });
+  const w = await world({ activeFor: () => (busy ? runOf("in-the-way", "working") : undefined) });
   const id = await w.create();
   expect(w.current(id).state).toBe("reviewing");
   expect(w.reviewers).toEqual([]);
@@ -1370,7 +1370,7 @@ test("checkout ownership between runs holds one reviewer until explicitly rechec
 for (const supersede of ["drop", "remove", "detach"] as const)
   test(`checkout-waiting work cannot start after ${supersede}`, async () => {
     let busy = true;
-    const w = await world({ checkoutBusy: () => busy });
+    const w = await world({ activeFor: () => (busy ? runOf("in-the-way", "working") : undefined) });
     const id = await w.create();
     if (supersede === "drop") await w.post("drop", { group: id });
     else if (supersede === "remove") await w.hub.remove(id);
@@ -1381,10 +1381,10 @@ for (const supersede of ["drop", "remove", "detach"] as const)
     expect(w.reviewers).toEqual([]);
   });
 
-test("checkout ownership acquired during reviewer preflight defers instead of failing the review", async () => {
+test("a checkout filled during reviewer preflight defers instead of failing the review", async () => {
   let busy = false;
   let first = true;
-  const w = await world({ checkoutBusy: () => busy });
+  const w = await world({ activeFor: () => (busy ? runOf("in-the-way", "working") : undefined) });
   const start = w.deps.startReviewer;
   w.deps.startReviewer = async (group, prompt, current) => {
     if (first) {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ACTIONS, FIRST_MESSAGE, branchLine, branchPrompt, buildPrompt, busyWith, checkWhen, describeTool, planWords, repoFacts, splitMembers, toolDetail } from "./actions";
+import { ACTIONS, FIRST_MESSAGE, branchLine, branchPrompt, buildPrompt, busyWith, checkWhen, describeTool, planWords, repoFacts, sharingNote, splitMembers, toolDetail } from "./actions";
 import { isRunAction, RUN_ACTIONS, statusFingerprint, type Repo, type RepoStatus } from "./types";
 import { HANDOFF_HEADING, handoffFence, type WorkNote } from "./work";
 
@@ -358,6 +358,15 @@ test("propose starts in plan mode with room for plan and build", () => {
   expect(ACTIONS.propose.task).toContain("ExitPlanMode");
   expect(ACTIONS.propose.task).toContain("subagents");
   expect(ACTIONS.propose.allowedTools.some((t) => t.startsWith("Bash(bun"))).toBe(false);
+});
+
+test("the sharing note names the workflow by its verb and the other runs by name", () => {
+  expect(sharingNote(undefined, [])).toBeNull();
+  expect(sharingNote(undefined, ["peer sync"])).toBe("sharing the checkout with another run: peer sync");
+  expect(sharingNote(undefined, ["peer sync", "chat"])).toBe("sharing the checkout with 2 other runs: peer sync, chat");
+  expect(sharingNote("deploy", [])).toBe("sharing the checkout with the deploy workflow");
+  expect(sharingNote("deploy", ["peer sync"])).toBe("sharing the checkout with the deploy workflow and another run: peer sync");
+  expect(sharingNote("deploy", ["a", "b", "c"])).toBe("sharing the checkout with the deploy workflow and 3 other runs: a, b, c");
 });
 
 test("the busy message names the run's kind without an article that depends on it", () => {

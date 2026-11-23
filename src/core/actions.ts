@@ -293,6 +293,16 @@ export const checkoutFull = (name: string, most: number): string => `${name} has
  *  it starts in (FR-073): what it did not change is not its to tidy. */
 export const SHARED_CHECKOUT = "- Other agents are working in this checkout at the same time as you. Files you did not touch may change or show as uncommitted: leave them as they are. Do not revert, stash, reset, reformat or delete them, and commit only what your own task covers, naming the files you commit rather than adding everything.";
 
+/** What a run's timeline says it shares the checkout with as it begins
+ *  (FR-073): the workflow going there, by its verb, and the other runs by
+ *  the names they go by. Null when it has the checkout to itself. */
+export function sharingNote(workflow: string | undefined, runs: readonly string[]): string | null {
+  const flow = workflow ? `the ${workflow} workflow` : "";
+  if (runs.length === 0) return flow ? `sharing the checkout with ${flow}` : null;
+  const others = runs.length === 1 ? "another run" : `${runs.length} other runs`;
+  return `sharing the checkout with ${flow ? `${flow} and ` : ""}${others}: ${runs.join(", ")}`;
+}
+
 /** A workspace's members around its primary, for a run there: the local
  *  repos the run adds as folders, and in words the members it cannot open
  *  here (on another host, on the forge, missing from the last scan, or an

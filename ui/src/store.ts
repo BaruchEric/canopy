@@ -58,7 +58,7 @@ export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
 import { beat } from "./live";
 import { ownRun, pickable, selectable } from "./flows";
-import { chatToSay, chatToShow, needsMore, runAtWork } from "./runs";
+import { chatToSay, chatToShow, needsMore } from "./runs";
 import { unreadProposals, withSession } from "./secrets";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
 import { anchorWord } from "./goals";
@@ -5489,9 +5489,9 @@ export const useStore = create<CanopyState>((set, get) => ({
       set({ sheet: { kind: "flow", flowId: active.id } });
       return;
     }
-    // a workflow starts beside chats between turns and branch runs; a run
-    // at work in the checkout is what it waits for (a seed: any run)
-    const run = isSeedId(repoId) ? activeRunFor(get(), repoId) : runAtWork(runsFor(get(), repoId));
+    // a workflow starts beside the runs going in the checkout (FR-073); a
+    // seed takes one run at a time, so its run is shown instead
+    const run = isSeedId(repoId) ? activeRunFor(get(), repoId) : undefined;
     set({ sheet: run ? { kind: "run", runId: run.id } : { kind: "flow-plan", repoId, workflow } });
   },
   startFlow: async (repoId, workflow, note, request) => {

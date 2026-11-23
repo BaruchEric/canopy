@@ -195,9 +195,24 @@ export const chatToSay = <R extends Live>(live: readonly R[]): R | undefined => 
 /** The chat a plain "chat" opens: the newest one going, whatever its turn. */
 export const chatToShow = <R extends Live>(live: readonly R[]): R | undefined => newest(live.filter((r) => r.chat));
 
-/** The run a workflow waits for: one at work in the repo's checkout. A chat
- *  between turns and a run on its own branch hold nothing a workflow needs. */
-export const runAtWork = <R extends Live>(live: readonly R[]): R | undefined => live.find((r) => !r.branch && r.status !== "idle");
+/** The runs at work in the repo's checkout, which a workflow started now
+ *  would share it with. A chat between turns changes nothing until it is
+ *  spoken to, and a run on a branch has a worktree of its own. */
+export const runsAtWork = <R extends Live>(live: readonly R[]): R[] => live.filter((r) => !r.branch && r.status !== "idle");
+
+/** What a workflow's plan sheet says of the runs at work in the checkout it
+ *  is about to share (FR-073), by the names they go by; null for none. */
+export function flowBesideRuns(names: readonly string[]): string | null {
+  if (names.length === 0) return null;
+  return names.length === 1
+    ? `A run is at work in this checkout (${names[0]}). The workflow starts beside it, and its steps and checks see that run's changes, finished or not.`
+    : `${names.length} runs are at work in this checkout (${names.join(", ")}). The workflow starts beside them, and its steps and checks see their changes, finished or not.`;
+}
+
+/** What a run's plan sheet says of the workflow going in the checkout it is
+ *  about to share (FR-073). */
+export const runBesideFlow = (verb: string): string =>
+  `The ${verb} workflow is going in this checkout. This run starts beside it, and the workflow's checks see what the run changes.`;
 
 /** What a run's own panel or tab is called: the name it goes by, or its
  *  verb while it has none, and its repo. */

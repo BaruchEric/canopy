@@ -41,10 +41,10 @@ In chat, later messages continue the conversation. **end chat** closes it.
 A repo's checkout takes up to 8 runs at once, so an open chat does not stop a job or a second chat from starting. An incubator project is the exception and keeps one run at a time.
 
 - Each run has a name. Canopy cuts one from the first message, and a moment later your own `claude` writes a shorter one. Start a run under your own name with `--name` on the CLI.
-- The row of tabs under a run's head lists every run going on the repo. Press another tab to switch to that run. Press this run's tab to rename it; a name you type is never replaced. **+ chat** starts another chat.
+- The row of tabs under a run's head lists every run going on the repo. Press another tab to switch to that run. Press this run's tab to rename it; a name you type is never replaced. **+ chat** starts another chat. A run popped out into its own window has the same row: a tab there takes the window to that run.
 - The repo menu lists each run with its name and state. The card's chip shows the run that most needs you, with `+N` for the others.
 - Runs in one checkout share its files. Each is told to leave the others' changes alone and to commit only its own files, and Canopy tells both when they have edited the same file. For a job that should not share, choose **on a branch of its own**.
-- A workflow waits for a run that is at work in the checkout. While a workflow runs, new chats and jobs on that repo wait for it.
+- A workflow and plain runs share a checkout too. Start a chat or a job while a workflow runs, or a workflow while a run is at work: the pre-flight says what the start will share the checkout with, and the run's first note names the workflow. A workflow's check reads the files as they are, another run's unfinished changes included, so a check that fails beside a run at work says which runs were there. A checkout takes one workflow at a time.
 
 ## Start from an issue
 

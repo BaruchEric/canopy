@@ -1,7 +1,7 @@
 import { groupWord } from "../groups";
 import { landingAll, useStore } from "../store";
 import { keepKeys } from "../surface";
-import { flowWord } from "../flows";
+import { flowWord, namedFlowWord } from "../flows";
 import { AGENT_NAME, chipName, harnessOf, moreTitle, ranUnchanged, runWord } from "../runs";
 import { fromWord } from "../loadouts";
 import type { Flow, Run } from "../../../src/core/types";
@@ -43,8 +43,10 @@ export function RunChip({ run, long = false, named = false, more }: { run: Run; 
   );
 }
 
-/** The flow's word on a card or in the panel. Same colours as a run's. */
-export function FlowChip({ flow, long = false }: { flow: Flow; long?: boolean }) {
+/** The flow's word on a card or in the panel. Same colours as a run's.
+ *  `named` puts the workflow's verb before a short word that lacks it, for
+ *  a card that shows a run's chip beside this one. */
+export function FlowChip({ flow, long = false, named = false }: { flow: Flow; long?: boolean; named?: boolean }) {
   const showFlow = useStore((s) => s.showFlow);
   const status = flow.status === "gated" ? "waiting" : flow.status;
   const noChange = flow.status === "done" && flow.outcome === "unchanged";
@@ -61,7 +63,7 @@ export function FlowChip({ flow, long = false }: { flow: Flow; long?: boolean })
       onKeyDown={keepKeys}
     >
       <span className="dot" />
-      {flowWord(flow, long)}
+      {named && !long ? namedFlowWord(flow) : flowWord(flow, long)}
     </button>
   );
 }

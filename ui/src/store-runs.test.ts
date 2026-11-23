@@ -145,14 +145,16 @@ describe("starting beside the runs going", () => {
     expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "seeded" });
   });
 
-  test("a workflow's plan opens beside a chat between turns and a branch run, and waits for a run at work in the checkout", () => {
+  test("a workflow's plan opens beside the runs going, one at work among them; a seed shows its run", () => {
     const branch = { name: "run/x", target: "main", base: "b", dir: "/w", origin: "o", state: "working" as const };
     useStore.setState({ runs: byId(chat("c1", "idle", 2), run("onbranch", { branch })) });
     useStore.getState().planFlow("app", "ship");
     expect(useStore.getState().sheet).toEqual({ kind: "flow-plan", repoId: "app", workflow: "ship" });
-    useStore.setState({ runs: byId(chat("c1", "idle", 2), run("job")) });
+    useStore.setState({ sheet: null, runs: byId(chat("c1", "idle", 2), run("job"), run("seeded", { repoId: "_incubator/seed" })) });
     useStore.getState().planFlow("app", "ship");
-    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "job" });
+    expect(useStore.getState().sheet).toEqual({ kind: "flow-plan", repoId: "app", workflow: "ship" });
+    useStore.getState().planFlow("_incubator/seed", "ship");
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "seeded" });
   });
 });
 
