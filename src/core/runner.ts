@@ -634,9 +634,8 @@ export class Runner {
     if (scope?.skipped.length) live.ctx.step({ kind: "note", text: `left out of this run: ${scope.skipped.join("; ")}` });
     if (branch) live.ctx.step({ kind: "note", text: `on branch ${branch.branch.name} in ${branch.branch.dir}` });
     // said once the run has something to do: a chat opened with nothing to
-    // say shares nothing yet
-    const beside = branch || coordinate || run.status === "idle" ? [] : this.activeRunsFor(repo.id).filter((r) => r.id !== run.id);
-    if (beside.length) live.ctx.step({ kind: "note", text: `sharing the checkout with ${beside.length === 1 ? "another run" : `${beside.length} other runs`}: ${beside.map(runTitle).join(", ")}` });
+    // say shares nothing yet, and hears it with its first message (`say`)
+    if (run.status !== "idle") this.noteBeside(live);
     if (chat) {
       if (note.trim()) live.ctx.step({ kind: "user", text: note.trim() });
       this.hooks.onChange(run);
@@ -652,6 +651,16 @@ export class Runner {
   childRefusal(parent: string | undefined): string | null {
     const live = [...this.live.values()].filter(({ ctx }) => ctx.run.parent === parent && isRunActive(ctx.run)).length;
     return childRefusal(parent === undefined ? undefined : this.get(parent), live);
+  }
+
+  /** Says on a run's timeline which runs it shares the checkout with, as
+   *  its first turn begins. A branch run has a worktree of its own and a
+   *  coordinator no checkout, so neither is told. */
+  private noteBeside(live: Live): void {
+    const run = live.ctx.run;
+    if (run.branch || isCoordinate(run)) return;
+    const beside = this.activeRunsFor(live.repo.id).filter((r) => r.id !== run.id);
+    if (beside.length) live.ctx.step({ kind: "note", text: `sharing the checkout with ${beside.length === 1 ? "another run" : `${beside.length} other runs`}: ${beside.map(runTitle).join(", ")}` });
   }
 
   /** The prompt a run's first message is wrapped in: the repo's framing, or
@@ -735,6 +744,8 @@ export class Runner {
     const message = text.trim();
     if (run.chat && run.status === "idle") {
       if (!message) throw new SteerError("say something first");
+      // a chat opened with nothing to say begins here
+      if (!live.started) this.noteBeside(live);
       live.ctx.step({ kind: "user", text: message });
       run.status = "working";
       // a chat opened with nothing to say is named by its first message

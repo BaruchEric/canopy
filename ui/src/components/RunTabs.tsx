@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { RUN_NAME_MAX, runTitle } from "../../../src/core/runname";
+import { RUN_NAME_MAX, nameFailure, runTitle } from "../../../src/core/runname";
 import { isSeedId } from "../../../src/core/sprout";
 import type { Repo, Run } from "../../../src/core/types";
 import { isCoordinator } from "../coord";
@@ -63,7 +63,7 @@ export function RunTabs({ run, repo, solo = false }: { run: Run; repo: Repo | un
     setMode({ kind: "saving", draft });
     renameRun(run.id, name).then(
       () => setMode(TABS),
-      (err: unknown) => setMode({ kind: "naming", draft, error: words(err) }),
+      (err: unknown) => setMode({ kind: "naming", draft, error: nameFailure(words(err)) }),
     );
   };
   const another = () => {

@@ -343,6 +343,8 @@ test("runCommand lists, names and stops live runs (FR-073)", async () => {
       if (request.method === "GET" && url.pathname === "/api/runs") return Response.json([going, { ...going, id: "ffffffff", status: "done" }]);
       const body = (await request.json()) as { id?: string; name?: string };
       calls.push({ path: url.pathname, body });
+      // "eeeeeeee" stands for a backend from before run names: the route is not there
+      if (url.pathname === "/api/runs/name" && body.id === "eeeeeeee") return Response.json({ error: "not found" }, { status: 404 });
       if (url.pathname === "/api/runs/name") return body.id === "00000000" ? Response.json({ error: "no such run" }, { status: 404 }) : Response.json({ ...going, name: body.name });
       if (url.pathname === "/api/runs/stop") return Response.json({ ...going, status: "stopped" });
       return Response.json({ error: "unexpected route" }, { status: 404 });
@@ -364,6 +366,7 @@ test("runCommand lists, names and stops live runs (FR-073)", async () => {
     ]);
     expect(logs.slice(1)).toEqual(["ab12cd34 the landing queue", "ab12cd34 stopped"]);
     await expect(runCommand(["name", "00000000", "x", ...backend], { fail })).rejects.toThrow("no such run");
+    await expect(runCommand(["name", "eeeeeeee", "x", ...backend], { fail })).rejects.toThrow("runs a canopy from before run names; deploy the current one");
     await expect(runCommand(["name", "ab12cd34", ...backend], { fail })).rejects.toThrow("needs the name");
     await expect(runCommand(["name", "x/y", "hi", ...backend], { fail })).rejects.toThrow("invalid run id");
     await expect(runCommand(["stop", "ab12cd34", "extra", ...backend], { fail })).rejects.toThrow(RUN_USAGE);

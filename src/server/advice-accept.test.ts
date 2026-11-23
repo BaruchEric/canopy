@@ -95,7 +95,7 @@ afterAll(async () => {
   await rm(scratch, { recursive: true, force: true });
 });
 
-test("an accepted lesson opens an idle chat with a draft; sent, it runs with yolo off and no extra flags; a busy repo refuses", async () => {
+test("an accepted lesson opens an idle chat with a draft; sent, it runs with yolo off and no extra flags; the next lesson's chat opens beside it", async () => {
   const res = await postJson("/api/incubator/advice", { key: "clarify-asks-less", accept: true });
   expect(res.status).toBe(200);
   const body = (await res.json()) as { advice: AdviceOffer[]; accepted?: AdviceAccepted };
@@ -118,12 +118,23 @@ test("an accepted lesson opens an idle chat with a draft; sent, it runs with yol
   expect(agents[0]).toMatchObject({ yolo: false, extra: "" });
   expect(agents[0]?.cwd).toBe(join(await realpath(root), "canopy"));
 
-  // the chat is going: another lesson cannot open one, and stays on offer
-  const busy = await postJson("/api/incubator/advice", { key: "scout-reads-npm", accept: true });
-  expect(busy.status).toBe(409);
+  // the chat is going: the checkout takes the next lesson's chat beside it
+  // (FR-073), which is told it shares the checkout once it has words to act on
+  const next = await postJson("/api/incubator/advice", { key: "scout-reads-npm", accept: true });
+  expect(next.status).toBe(200);
+  const b = ((await next.json()) as { accepted?: AdviceAccepted }).accepted;
+  if (b?.kind !== "chat") throw new Error(`expected a second chat, got ${JSON.stringify(b)}`);
+  expect(b.runId).not.toBe(a.runId);
+  expect(b.run?.status).toBe("idle");
+  expect(b.run?.steps).toEqual([]);
+  const second = (await (await postJson("/api/runs/say", { id: b.runId, text: b.draft })).json()) as Run;
+  expect(second.steps[0]?.kind).toBe("note");
+  expect(second.steps[0]?.text).toStartWith("sharing the checkout with another run");
   const offers = (await (await fetch(url("/api/incubator/advice"))).json()) as AdviceOffer[];
-  expect(offers.map((o) => o.key)).toEqual(["scout-reads-npm"]);
+  expect(offers).toEqual([]);
 
-  const stopped = (await (await postJson("/api/runs/stop", { id: a.runId })).json()) as Run;
-  expect(stopped.id).toBe(a.runId);
+  for (const id of [b.runId, a.runId]) {
+    const stopped = (await (await postJson("/api/runs/stop", { id })).json()) as Run;
+    expect(stopped.id).toBe(id);
+  }
 }, 60_000);

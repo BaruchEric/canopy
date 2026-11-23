@@ -290,6 +290,24 @@ test("parseRunArgs takes a name for one run and refuses it for a group or a coor
   expect(parseRunArgs(["app", "coordinate", "--name", "x"])).toBe("a coordinator takes no name");
 });
 
+test("--name says so when the backend started the run without it, as one from before run names does", async () => {
+  const said: string[] = [];
+  const oldError = console.error;
+  console.error = (line: string) => { said.push(line); };
+  try {
+    const named = await loadoutBackend(404, { id: "run-1", status: "working", name: "slow build" }, ["app", "ask", "--name", "slow build"]);
+    expect(named.failed).toBeNull();
+    expect(named.lines).toEqual(["run-1 working"]);
+    expect(said).toEqual([]);
+    const old = await loadoutBackend(404, { id: "run-2", status: "working" }, ["app", "ask", "--name", "slow build"]);
+    expect(old.failed).toBeNull();
+    expect(old.lines).toEqual(["run-2 working"]);
+    expect(said).toEqual([`run run-2 started without its name: ${old.backend} runs a canopy from before run names; redeploy it, then canopy run name run-2 slow build`]);
+  } finally {
+    console.error = oldError;
+  }
+});
+
 test("the run dispatcher sends ls, name and stop to the transcript handler", async () => {
   const seen: string[][] = [];
   const deps = { fail: (m: string): never => { throw new Error(m); }, transcripts: (argv: string[]) => { seen.push(argv); } };

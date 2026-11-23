@@ -3,7 +3,7 @@
 import { writeFile } from "node:fs/promises";
 import { forkLine } from "../core/handoff";
 import { RUN_ID } from "../core/runlog";
-import { runSubject } from "../core/runname";
+import { nameFailure, runSubject } from "../core/runname";
 import { ago } from "../core/treelines";
 import { isRunActive, type KeptRunHead, type Run, type RunReplay, type RunStep } from "../core/types";
 import { apiBase } from "./api";
@@ -205,7 +205,9 @@ export async function runTranscriptCommand(argv: string[], { fail }: { fail: Fai
     const name = args.join(" ").trim();
     if (sub === "name" && !name) return fail("canopy run name needs the name to give it");
     if (sub === "stop" && name) return fail(RUN_USAGE);
-    const run = await ask<Run>(target, "POST", sub === "name" ? "/api/runs/name" : "/api/runs/stop", sub === "name" ? { id, name } : { id }).catch(requestFailure(target, fail));
+    // a backend from before run names answers a rename with a bare 404
+    const failed = sub === "name" ? (message: string): never => fail(nameFailure(message)) : fail;
+    const run = await ask<Run>(target, "POST", sub === "name" ? "/api/runs/name" : "/api/runs/stop", sub === "name" ? { id, name } : { id }).catch(requestFailure(target, failed));
     console.log(sub === "name" ? `${run.id} ${run.name ?? ""}`.trim() : `${run.id} ${run.status}`);
     return;
   }

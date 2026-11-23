@@ -702,7 +702,7 @@ test("group and low priority are present on the first real SSE run event and cos
   }
 });
 
-test("group members stay sorted and ready without independent queueing; compare waits for checkout and uses safe flow routing", async () => {
+test("group members stay sorted and ready without independent queueing; compare starts beside a checkout run and uses safe flow routing", async () => {
   const w = await world({ autoSort: true });
   await w.post("/api/agents/role", {
     role: "flow",
@@ -731,12 +731,13 @@ test("group members stay sorted and ready without independent queueing; compare 
     async () =>
       (await w.landing()).runs.every((r) => r.review) &&
       (await w.groups()).find((g) => g.id === group.id)?.state === "reviewing",
-    "waiting comparison",
+    "the comparison",
   );
   expect((await w.landing()).entries).toEqual([]);
-  expect(w.starts).toHaveLength(3);
-  await w.finish(0);
+  // the reviewer is one more run in the checkout (FR-073): it starts beside
+  // the run going there, where it used to wait for that run to end
   await until(() => w.starts.length === 4, "reviewer");
+  expect((await w.readRuns()).find((r) => r.note === "checkout")?.status).toBe("working");
   const reviewer = w.starts[3];
   if (!reviewer) throw new Error("reviewer absent");
   expect(reviewer.ctx.cwd).toBe(w.repo);
@@ -781,6 +782,7 @@ test("group members stay sorted and ready without independent queueing; compare 
     "winner",
   );
   expect((await w.landing()).entries).toEqual([]);
+  await w.finish(0);
 });
 
 test("concurrent groups reserve slots before the second request cuts anything", async () => {

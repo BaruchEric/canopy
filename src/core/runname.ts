@@ -98,6 +98,12 @@ export function nameFromModel(answer: string): string | null {
   return name;
 }
 
+/** What a failed rename says. A backend from before FR-073 has no such
+ *  route and answers the server's plain 404, which names nothing: say what
+ *  it means and what to do. Any other message stays as it is. */
+export const nameFailure = (message: string): string =>
+  message === "not found" ? "this backend runs a canopy from before run names; deploy the current one to it and try again" : message;
+
 /** what the namer is told it is */
 export const NAME_SYSTEM = "You name tasks. You answer with the name alone and never do the task.";
 

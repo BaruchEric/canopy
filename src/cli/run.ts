@@ -294,6 +294,10 @@ async function runStartCommand(argv: string[], { fail }: RunCommandDeps): Promis
     return fail(`run ${result.id} started on ${backendWord(target)} without loadout ${parsed.loadout}; stop it and redeploy ${backendWord(target)}`);
   }
   console.log(`${result.id} ${result.status}`);
+  // a backend from before run names takes the body and drops the name
+  if (parsed.name !== undefined && !result.name) {
+    console.error(`run ${result.id} started without its name: ${backendWord(target)} runs a canopy from before run names; redeploy it, then canopy run name ${result.id} ${parsed.name}`);
+  }
 }
 
 function isRunGroup(result: Run | RunGroup): result is RunGroup {

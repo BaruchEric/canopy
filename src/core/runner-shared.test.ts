@@ -141,16 +141,24 @@ describe("what a run is told about the others", () => {
     const idle = chat("r");
     expect(idle.steps).toEqual([]);
     ask("r", "fix the flaky test");
-    runner.say(idle.id, "what changed today");
+    const said = runner.say(idle.id, "what changed today");
     expect(made[0]?.started[0]).toContain(SHARED_CHECKOUT);
     expect(made[0]?.started[0]).toContain("First message from the user:\nwhat changed today");
+    // its timeline says so too, ahead of the message, and once
+    expect(said.steps.map((s) => [s.kind, s.text])).toEqual([
+      ["note", "sharing the checkout with another run: fix the flaky test"],
+      ["user", "what changed today"],
+    ]);
+    made[0]?.ctx?.result(OK, null);
+    expect(runner.say(idle.id, "and yesterday").steps.filter((s) => s.kind === "note")).toHaveLength(1);
   });
 
   test("a chat on a repo by itself is told nothing of it", () => {
     const { runner, made, chat } = setup();
     const only = chat("r");
-    runner.say(only.id, "hello");
+    const said = runner.say(only.id, "hello");
     expect(made[0]?.started[0]).not.toContain(SHARED_CHECKOUT);
+    expect(said.steps.filter((s) => s.kind === "note")).toEqual([]);
   });
 
   test("the note counts the runs it shares with", () => {

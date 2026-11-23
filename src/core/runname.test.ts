@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cleanName, nameFromModel, nameFromWords, namePrompt, NAME_TEXT_MAX, RUN_NAME_MAX, runSubject, runTitle, uniqueName } from "./runname";
+import { cleanName, nameFailure, nameFromModel, nameFromWords, namePrompt, NAME_TEXT_MAX, RUN_NAME_MAX, runSubject, runTitle, uniqueName } from "./runname";
 
 describe("nameFromWords", () => {
   test("keeps the first words of the first line, lower case at the front", () => {
@@ -104,4 +104,10 @@ test("a run goes by its name, else its note's first line, else its verb", () => 
   expect(runTitle({ note: "", verb: "chat" })).toBe("chat");
   expect(runSubject({ name: "peer sync", note: "x" })).toBe("peer sync");
   expect(runSubject({ note: "" })).toBe("");
+});
+
+test("an older backend's bare 404 on a rename says what it means; any other message stays", () => {
+  expect(nameFailure("not found")).toBe("this backend runs a canopy from before run names; deploy the current one to it and try again");
+  expect(nameFailure("unknown run: ab12cd34")).toBe("unknown run: ab12cd34");
+  expect(nameFailure("the run has ended")).toBe("the run has ended");
 });
