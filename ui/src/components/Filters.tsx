@@ -5,6 +5,7 @@ import { countFacets, FILTER_INFO, REPO_FILTERS } from "../filters";
 import { activeFilterCount, archivedCount, favoriteCount, focusCount, hasFocus, healthBad, scopedRepos, specStale, useStore } from "../store";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
+import { heldEverywhere } from "../scopeGate";
 
 /** Toggleable facet chips behind one pill. The pill counts what is lit so a
  *  narrowed grove never looks like a small one. */
@@ -22,6 +23,8 @@ export function FilterMenu() {
   const setFavoritesOnly = useStore((s) => s.setFavoritesOnly);
   const focused = useStore(hasFocus);
   const focusOnly = useStore((s) => s.focusOnly);
+  // held to its teams' folders everywhere, the board shows nothing else to hide
+  const held = useStore((s) => heldEverywhere(s.backendOrder, s.authByBackend));
   const inTeams = useStore((s) => (hasFocus(s) ? focusCount(s) : 0));
   const setFocusOnly = useStore((s) => s.setFocusOnly);
   const hideArchived = useStore((s) => s.settings.hideArchived);
@@ -133,7 +136,7 @@ export function FilterMenu() {
               </button>
             </div>
           </section>
-          {(focused || focusOnly) && (
+          {(focused || focusOnly) && !held && (
             <section className="settings-row">
               <h3 className="panel-label">teams</h3>
               <div className="chips" role="group" aria-label="Your teams' repos">

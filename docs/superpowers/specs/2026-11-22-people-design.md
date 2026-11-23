@@ -1,6 +1,6 @@
 # People, teams and tenants (FR-074)
 
-Date: 2026-11-22. Status: plan 1 (people, roles, invites, who did what, who is here) is built on the `multi-user` branch. Of plan 2, teams are built as a focus: a name, folders and members, and the page starts a member on their teams' repos. The scope lane that would make a team a wall is designed below and not built. Plan 3 (a tenant as a backend) is designed and not built.
+Date: 2026-11-22. Status: plan 1 (people, roles, invites, who did what, who is here) and plan 2 (teams, as a focus and as a wall for the API) are built on the `multi-user` branch, with a viewer's page that offers nothing their role refuses. Plan 3 (a tenant as a backend) is below.
 
 ## The case
 
@@ -71,13 +71,17 @@ The people routes that write, and `auth/join`, are checked in every mode, like t
 
 ## Plan 2: teams
 
-Built: a team is a name, folders and members. A repo is a team's when its path sits under one of its folders. The page of a member or viewer whose teams name folders starts with "my teams only" on, and they can turn it off. That is a focus and not a wall: the backend still answers every repo to everyone signed in, and the People view says so.
+A team is a name, folders and members. A repo is a team's when its path sits under one of its folders. A member or viewer whose teams name folders is scoped, and canopy shows and takes only those teams' repos. Owners and admins are never scoped, nor is a person on no team with folders.
 
-Not built, the wall: a member or viewer with teams would be scoped, so canopy shows and takes only those teams' repos. Owners and admins are never scoped.
+The 2026-11-09 decision turned down hiding fields per caller, because a list that leaks unless someone remembers a filter is a bug waiting. So the scope is built the other way round, as the coordinator's lane is: a scoped caller reaches only the routes `scopeRule` in `core/scope.ts` files, each with how it is held. `filter` is a list whose answer is cut down (the tree, runs, flows, fleets, jobs, shells, kept shells, tasks, branch trees, devices, helpers, the roster, the activity log). `ids` is a route that names a repo, a run, a flow or a shell in its query, its JSON body or its path, every one of which must trace to a repo under the folders; two values under one key, a missing id and an id canopy does not hold are refused. `own` is the caller's own records, and `any` holds no repo's data (the agents' profiles, the verdict, the push key, the backend registry). The event stream is cut per stream by `scopeEvent`, which drops any kind it does not know. Everything else is a 403 `{error, scoped: true}` in every mode, so a new route or event is closed to a scoped person until someone files it. The Library, the kit, secrets, notes, clips, the work ledger, the landing queue, triggers, the coordinator (a run's body asking to coordinate too), the incubator, tailchan, the sweep, archiving, moving and launching a repo, and opening anything on the backend's desktop stay closed. Routes open to anyone stay open, the Library's reads among them, and the page does not offer that view.
 
-The 2026-11-09 decision turned down hiding fields per caller, because a list that leaks unless someone remembers a filter is a bug waiting. The scope is built the other way round, as the coordinator's lane is: a scoped caller reaches only the routes `SCOPED` names, each with how it is held to the scope (`filter` for a list whose answer is cut down, `repo` for a route that names one repo in its query or JSON body, `own` for the caller's own records), and hears only the events `scopeEvent` knows how to cut. Everything else is a 403 that says so, in every mode. A new route or event is closed to a scoped person until someone files it. What is filed first is the board: the tree, the repo reads, runs and their answers, shells, tasks, the people routes. The Library, the kit, secrets, notes, clips, the work ledger, the landing queue, triggers, the coordinator, the incubator, tailchan and the sweep stay closed. A scoped person's shell token is scoped too, and the page hides the views it cannot load.
+What the build found on the way. A run, a shell and a task in a kept branch tree live under the config dir, not the team's folder, so each carries its checkout's `repoId` and the wall traces that. The activity log named a repo by name, and two repos share a name across folders, so each line now carries `repoId` too. A person's scope moves when a team's folders or members change; their streams end then, and the next read is the new cut. Every route an agent's token reaches is filed or named as closed on purpose, and a pure test holds that.
 
-The scope is soft for the reason above: a scoped member's agent can still `cat` a sibling folder. It is exact for a viewer.
+The page asks nothing the wall would refuse. `req()` learns from the auth read whether a backend holds the page and answers a closed route itself, with the backend's refusal. A held page offers the board, the shells and the people, and nothing else. `canopy auth status` names the folders.
+
+The scope is soft for the reason above: a scoped member's agent or shell can still `cat` a sibling folder. It is exact for a viewer.
+
+A viewer's page. The role caps the API, and the page now keeps to it too: under enforce `req()` answers a route the role lacks locally, and the controls a viewer cannot use are gone (card and panel menus, staging and the commit box, a run's answers, composer, stop and fork, a new shell). The star shows and stars nothing.
 
 ## Plan 3: a tenant is a backend
 

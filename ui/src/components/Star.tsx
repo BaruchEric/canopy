@@ -1,6 +1,7 @@
 import type { SyntheticEvent } from "react";
 import { isFavorite, useStore } from "../store";
 import { keepKeys } from "../surface";
+import { useLacks } from "../useLacks";
 
 /** The ☆/★ that stars a repo in canopy. It swallows its own click, middle
  *  click and Enter, like RepoLink, so the card or row underneath does not
@@ -9,6 +10,8 @@ import { keepKeys } from "../surface";
 export function Star({ repoId, name, onError }: { repoId: string; name: string; onError?: (msg: string) => void }) {
   const on = useStore((s) => isFavorite(s, repoId));
   const favoriteRepo = useStore((s) => s.favoriteRepo);
+  // a viewer's star says what is starred and stars nothing
+  const reads = useLacks(repoId, "operate");
   const stop = (e: SyntheticEvent) => e.stopPropagation();
   const toggle = async () => {
     try {
@@ -25,7 +28,8 @@ export function Star({ repoId, name, onError }: { repoId: string; name: string; 
       className={on ? "star on" : "star"}
       aria-pressed={on}
       aria-label={on ? `Unstar ${name}` : `Star ${name}`}
-      title={on ? "A favorite; click to unstar" : "Star as a favorite"}
+      title={reads ? (on ? "A favorite" : "Not a favorite") : on ? "A favorite; click to unstar" : "Star as a favorite"}
+      disabled={reads}
       onClick={(e) => {
         stop(e);
         void toggle();

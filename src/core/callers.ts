@@ -202,6 +202,9 @@ const RULES: readonly Rule[] = [
     paths: ["terms/say", "terms/keys"],
     right: "shell",
   },
+  // a shell's name and where its tab sits are its opener's to set, so a
+  // member, who opens shells and holds no admin, names their own (FR-074)
+  { methods: POST, paths: ["terms/label", "terms/place"], right: "shell" },
   { methods: DEL, paths: ["terms", "terms/kept"], right: "shell" },
   // a move's reads go with its writes: the plan names the agent's session
   // and its last prompt, and the transcript is its whole conversation

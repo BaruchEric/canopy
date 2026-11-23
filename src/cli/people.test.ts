@@ -73,6 +73,9 @@ describe("what canopy people prints", () => {
       "mode enforce  you cli  Avery (member)  holds read, plan, operate  refused 3",
     );
     expect(statusWords({ mode: "log", refused: { count: 0 }, you: "none", youId: null })).toBe("mode log  you none  refused 0");
+    expect(statusWords({ mode: "enforce", refused: { count: 0 }, you: "cli", youId: "c2", person: { id: "p-g", name: "Guest", role: "viewer" }, rights: ["read"], scope: ["/srv/rio"] })).toBe(
+      "mode enforce  you cli  Guest (viewer)  holds read  only in /srv/rio  refused 0",
+    );
   });
 });
 

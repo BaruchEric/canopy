@@ -716,9 +716,13 @@ export function authInfo(book: CallerBook, gate: CallerGate, caller: Caller | nu
   youId: string | null;
   person: Me | null;
   rights: Right[];
+  scope: string[] | null;
 } {
   const kind = caller?.kind ?? "none";
-  const whole = gate.mode !== "enforce" || gate.can(caller, "admin");
+  // the folders a member or viewer on a walled team is held to (FR-074,
+  // plan 2); someone scoped never reads the callers, whatever the mode
+  const scope = people?.scopeOf(caller)?.folders ?? null;
+  const whole = (gate.mode !== "enforce" && !scope) || gate.can(caller, "admin");
   return {
     mode: gate.mode,
     refused: whole ? gate.refused : { count: gate.refused.count, recent: [] },
@@ -730,6 +734,7 @@ export function authInfo(book: CallerBook, gate: CallerGate, caller: Caller | nu
     // route there takes nobody for a person
     person: people ? people.me(caller, gate.mode) : null,
     rights: gate.rights(caller),
+    scope: scope ? [...scope] : null,
   };
 }
 
@@ -743,6 +748,8 @@ export interface AuthPeople {
   handRefusal(actor: Caller | null, person: string): string | null;
   /** an invite spent: its person, or null for a wrong, used or expired code */
   redeem(code: string): Promise<{ person: string; name: string } | null>;
+  /** the folders a caller's person is held to, or null for the whole backend */
+  scopeOf(caller: Caller | null): { folders: readonly string[] } | null;
 }
 
 /** `/api/auth` and below, after the gate has passed the request; null for

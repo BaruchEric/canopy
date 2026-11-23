@@ -15,6 +15,7 @@ import { ctxLink, ctxSubjects, factLabel, isFact, type CtxItem, type CtxNode, ty
 import { pickable } from "../flows";
 import { lastShell, typeInto } from "../liveTerms";
 import { backendOf } from "../registry";
+import { lacks } from "../callerToken";
 import { say } from "../said";
 import { copyText } from "../share";
 import { GO, type CopyKey } from "../shortcuts";
@@ -198,11 +199,12 @@ function repoMenu(s: CanopyState, repo: Repo, where: "card" | "tab" | "head" | "
         : { id: "q:front", label: "Bring the project to the front", icon: <Icon name="front" />, run: () => s.bringOnDouble(id) },
     );
   }
-  if (!repo.forge) quick.push({ id: "q:shell", label: "A new shell here", icon: <Icon name="terminal" />, run: () => s.openTerm(id) });
-  quick.push(
-    { id: "q:star", label: fav ? "Take the star off" : "Star it", icon: <span className="ctx-star">{fav ? "★" : "☆"}</span>, on: fav, run: () => s.favoriteRepo(id, !fav).then(() => (fav ? "unstarred" : "starred")) },
-    { id: "q:copy", label: "Copy its path", icon: <Icon name="copy" />, run: () => copyNamed("path", repo.path) },
-  );
+  // a viewer's menu starts nothing (FR-074): no shell, no star, no actions
+  const auth = s.authByBackend[backendOf(id)];
+  const reads = lacks(auth, "operate");
+  if (!repo.forge && !lacks(auth, "shell")) quick.push({ id: "q:shell", label: "A new shell here", icon: <Icon name="terminal" />, run: () => s.openTerm(id) });
+  if (!reads) quick.push({ id: "q:star", label: fav ? "Take the star off" : "Star it", icon: <span className="ctx-star">{fav ? "★" : "☆"}</span>, on: fav, run: () => s.favoriteRepo(id, !fav).then(() => (fav ? "unstarred" : "starred")) });
+  quick.push({ id: "q:copy", label: "Copy its path", icon: <Icon name="copy" />, run: () => copyNamed("path", repo.path) });
 
   const blocks: CtxBlock[] = [];
   if (where !== "card") {
@@ -221,7 +223,7 @@ function repoMenu(s: CanopyState, repo: Repo, where: "card" | "tab" | "head" | "
   }
   // the panel's body has its gear for settings; its head and tab, the card
   // and the tree row have the repo's actions
-  if (where !== "body") blocks.push({ kind: "node", key: "repo", node: (done) => <RepoMenuItems repo={repo} onDone={done} onError={(m) => say(m, true)} /> });
+  if (where !== "body" && !reads) blocks.push({ kind: "node", key: "repo", node: (done) => <RepoMenuItems repo={repo} onDone={done} onError={(m) => say(m, true)} /> });
 
   const copies: CtxItem[] = [
     copyRow("copy:path", "path", repo.path),

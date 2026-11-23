@@ -142,7 +142,7 @@ import type { ProfileFields } from "../../src/core/screenlayouts";
 import { pickUrl, split, wsUrl, type BackendSignal } from "./backends";
 import { normalizeRoutes } from "../../src/core/route";
 import { keyHeaders } from "./answerKey";
-import { carriesToken, dialPlan, isAuthInfo, originOf, readToken, TOKEN_HEADER, tokenHeaders, type AuthInfo, type DialPlan } from "./callerToken";
+import { carriesToken, dialPlan, isAuthInfo, lacks, originOf, readToken, TOKEN_HEADER, tokenHeaders, type AuthInfo, type DialPlan } from "./callerToken";
 import {
   qDevice,
   qAdvice,
@@ -175,6 +175,7 @@ import {
 import { backendOf, baseOf, homeName, plainOf, qual, registry } from "./registry";
 import { clientId } from "./client";
 import type { CoordEdit } from "./coord";
+import { needOf, roleRefusal, ScopeBook, scopeReaches, scopeRefusal } from "./scopeGate";
 
 /* Every call goes to the backend its id names, with the id that backend
    knows, and whatever carries ids comes back under that backend's name. The
@@ -208,8 +209,44 @@ export class PartialFleetError extends Error {
   }
 }
 
+/** whether each backend holds this page to its teams' folders (FR-074) */
+const scopes = new ScopeBook();
+
+/** Forgets whether a backend holds this page to its teams' folders, so the
+ *  calls after a stream drop wait for the auth read that follows it. */
+export const scopeUnknown = (b: string): void => scopes.unknown(b);
+
+/** what each backend last said this page is, for the role's gate: a right
+ *  the page's role lacks there is refused here, as the backend would */
+const authAt = new Map<string, AuthInfo>();
+
+/** the backends whose auth read the gate itself has asked for, one at a time */
+const scopeAsked = new Set<string>();
+
+/** Asks a backend who this page is, when a call the wall would close waits
+ *  on it and nothing has asked yet: the first load reads the registry and
+ *  more before the store's own auth read. */
+function askScope(b: string): void {
+  if (scopeAsked.has(b) || scopes.now(b) !== null) return;
+  scopeAsked.add(b);
+  void api
+    .auth(b)
+    .catch(() => null)
+    .finally(() => scopeAsked.delete(b));
+}
+
 async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<T> {
   if (!reachable(b)) throw new Error(`${b} has not answered yet`);
+  // a page held to its teams' folders asks nothing the wall closes: the
+  // refusal is answered here, once the auth read says it is held
+  if (!scopeReaches(init.method ?? "GET", path)) {
+    askScope(b);
+    if (await scopes.scoped(b)) throw scopeRefusal();
+  }
+  // a role that does not hold the right (a viewer reads the board and no
+  // repo's files) is refused here, with the backend's own words
+  const need = needOf(init.method ?? "GET", path);
+  if (need !== "open" && lacks(authAt.get(b), need)) throw roleRefusal(need);
   const base = baseOf(b);
   const opts: RequestInit = { ...init };
   // The backend's own token, when this page signed in to it. To another
@@ -1065,8 +1102,19 @@ export const api = {
   /** one backend's caller check: its mode, callers, pair requests and who
    *  this page is to it; null from a backend from before there was one */
   auth: async (b: string = homeName()): Promise<AuthInfo | null> => {
-    const r = await req<unknown>(b, "/api/auth");
-    return isAuthInfo(r) ? r : null;
+    let r: unknown;
+    try {
+      r = await req<unknown>(b, "/api/auth");
+    } catch (err) {
+      // a backend that cannot say leaves its last answer standing
+      scopes.failed(b);
+      throw err;
+    }
+    const info = isAuthInfo(r) ? r : null;
+    scopes.known(b, Array.isArray(info?.scope) && info.scope.length > 0);
+    if (info) authAt.set(b, info);
+    else authAt.delete(b);
+    return info;
   },
   /** asks a backend to let this page in; the secret claims the token once approved */
   /** `renew` is the asker's own last pair: the server replaces it, when it still waits, with this one */

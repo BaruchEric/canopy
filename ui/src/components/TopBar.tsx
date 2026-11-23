@@ -19,7 +19,8 @@ import { primaryRefusal } from "../workspaces";
 import { PAGE_BUILD } from "../build";
 import { TUCK_START, nextTuck, rowOver, scrollEdges, type Tuck } from "../topbar";
 import { buildMoved, versionLine } from "../../../src/core/version";
-import { isOwnCode } from "../callerToken";
+import { isOwnCode, lacks } from "../callerToken";
+import { heldEverywhere } from "../scopeGate";
 import { inviteCode } from "../../../src/core/people";
 import { FilterMenu } from "./Filters";
 import { PickMenu, type PickGroup, type PickOption } from "./PickMenu";
@@ -679,6 +680,10 @@ function CliButton() {
  *  goal across the repos it names (FR-067), or a new project through the
  *  incubator, from one place. `n` does the same. */
 function NewButton() {
+  // the manager's goals and projects start runs and read every repo: a
+  // viewer and a page held to its teams' folders start none (FR-074)
+  const off = useStore((s) => lacks(s.authByBackend[s.home], "operate") || heldEverywhere(s.backendOrder, s.authByBackend));
+  if (off) return null;
   return (
     <button
       type="button"

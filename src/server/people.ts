@@ -17,6 +17,8 @@ import { readFileSync, statSync } from "node:fs";
 import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { scopeOf } from "../core/scope";
+import type { Scope } from "./scope";
 import {
   addRefusal,
   cleanFolder,
@@ -77,6 +79,10 @@ export interface PeopleDeps {
   dropUser: (id: string) => Promise<void>;
   /** the browsers on the event stream now */
   devices: () => Device[];
+  /** these people's scope moved (a team's folders, a membership, a role):
+   *  their open pages hold what the old one showed, so their streams end
+   *  and each page reads the board again under the new one */
+  rescoped?: (ids: string[]) => void;
   dir?: string;
   now?: () => number;
 }
@@ -188,10 +194,18 @@ export class PeopleHub implements AuthPeople {
   private change<T>(fn: (file: PeopleFile) => { file: PeopleFile; out: T }): Promise<T> {
     const next = this.serial.then(async () => {
       this.kept = this.load();
+      const before = this.kept;
       const { file, out } = fn(this.kept);
       await this.write(file);
       this.kept = file;
       this.looked = this.now();
+      const moved = everyone(file)
+        .filter((p) => {
+          const was = personById(before, p.id);
+          return (was ? scopeOf(before, was) : null)?.join("\n") !== scopeOf(file, p)?.join("\n");
+        })
+        .map((p) => p.id);
+      if (moved.length > 0) this.deps.rescoped?.(moved);
       this.publish();
       return out;
     });
@@ -215,6 +229,27 @@ export class PeopleHub implements AuthPeople {
 
   idOf(caller: Caller | null): string {
     return caller?.user ?? OWNER_ID;
+  }
+
+  /** The scope a person is held to (FR-074, plan 2), by their id: null for
+   *  an owner, an admin, a member or viewer whose teams name no folder, and
+   *  for someone gone or off, whose token the gate already refuses. */
+  scopeOfUser(user: string | undefined): Scope | null {
+    const file = this.file();
+    const p = personOf(file, user);
+    const folders = p ? scopeOf(file, p) : null;
+    return p && folders ? { person: p.id, teams: p.teams, folders } : null;
+  }
+
+  scopeOf(caller: Caller | null): Scope | null {
+    return this.scopeOfUser(caller?.user);
+  }
+
+  /** whether anyone here is scoped at all, so a backend with no walled
+   *  team cuts nothing and looks nothing up */
+  anyScoped(): boolean {
+    const file = this.file();
+    return file.people.some((p) => !p.off && scopeOf(file, p) !== null);
   }
 
   me(caller: Caller | null, mode: CallersMode): Me | null {
@@ -295,8 +330,8 @@ export class PeopleHub implements AuthPeople {
 
   /** One line of activity. Never throws and never waits: a full disk must
    *  not fail the call it describes. */
-  note(who: Actor, what: string, repo?: string): void {
-    const line: ActivityLine = { at: this.now(), person: who.person, kind: who.kind, what, ...(repo ? { repo } : {}) };
+  note(who: Actor, what: string, repo?: { id: string; name: string }): void {
+    const line: ActivityLine = { at: this.now(), person: who.person, kind: who.kind, what, ...(repo ? { repo: repo.name, repoId: repo.id } : {}) };
     const file = activityFile(this.dir);
     this.logging = this.logging.then(async () => {
       try {

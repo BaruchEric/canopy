@@ -35,6 +35,7 @@ import { runPanel } from "./itempanel";
 import { dropAskHere, openManager, parseRoute, viewOf } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, attentionCount, dockless, landingAll, prsAll, statusOf, useStore, type CanopyState } from "./store";
+import { heldEverywhere, viewShown } from "./scopeGate";
 import { useShallow } from "zustand/react/shallow";
 import { agentsBadge, gitBadge, healthBadge, managerBadge, type Badge, type BadgeTone } from "./badges";
 import { liveCoordinators, managerRows, viewAddress, type Goal } from "./manager";
@@ -164,10 +165,10 @@ const TONE_RANK: Record<BadgeTone, number> = { sky: 0, lichen: 1, rust: 2 };
 /** The views as one word, the one showing, with its count; the menu lists
  *  every view under its group, each with its count and what it is for. A
  *  dot after the word says another view has something to show. */
-function ViewMenu({ view, navigate }: { view: string; navigate: (next: string) => void }) {
+function ViewMenu({ view, navigate, shown }: { view: string; navigate: (next: string) => void; shown: typeof VIEW_GROUPS }) {
   const current = VIEWS.find((v) => v.key === view) ?? GIT_VIEW;
   const elsewhere = useStore((s) => elsewhereTone(s, view));
-  const groups: PickGroup[] = VIEW_GROUPS.map((g) => ({
+  const groups: PickGroup[] = shown.map((g) => ({
     label: g.label,
     options: g.views.map((v) => ({
       value: v.key,
@@ -203,10 +204,10 @@ function ViewMenu({ view, navigate }: { view: string; navigate: (next: string) =
  *  own views with their counts and what each is for. The group holding the
  *  view showing is underlined in moss and names that view with its count;
  *  another group carries a dot in the tone of its most pressing count. */
-function ViewGroups({ view, navigate }: { view: string; navigate: (next: string) => void }) {
+function ViewGroups({ view, navigate, shown }: { view: string; navigate: (next: string) => void; shown: typeof VIEW_GROUPS }) {
   return (
     <nav className="view-groups" aria-label="Canopy views">
-      {VIEW_GROUPS.map((g) => (
+      {shown.map((g) => (
         <ViewGroup key={g.label} group={g} view={view} navigate={navigate} />
       ))}
     </nav>
@@ -264,9 +265,12 @@ function ViewGroup({
 
 /** The three groups on anything wider than a phone; a phone has no room for
  *  them, so it keeps the one-word menu of every view. */
-function ViewSwitch(props: { view: string; navigate: (next: string) => void }) {
+function ViewSwitch(props: { view: string; navigate: (next: string) => void; held: boolean }) {
   const phone = useMedia(PHONE);
-  return phone ? <ViewMenu {...props} /> : <ViewGroups {...props} />;
+  const { held, ...rest } = props;
+  // a page held to its teams' folders everywhere lists only what it can load (FR-074)
+  const shown = held ? VIEW_GROUPS.map((g) => ({ ...g, views: g.views.filter((v) => viewShown(v.key, true)) })).filter((g) => g.views.length > 0) : VIEW_GROUPS;
+  return phone ? <ViewMenu {...rest} shown={shown} /> : <ViewGroups {...rest} shown={shown} />;
 }
 
 /** The phone's status bar in the palette's own bark: each theme-color meta
@@ -327,6 +331,10 @@ export function App() {
   const loadError = useStore((s) => s.loadError);
   const signInFirst = useStore((s) => s.signInFirst);
   const home = useStore((s) => s.home);
+  // every backend holds this page to its teams' folders: the views that
+  // read what the wall closes are not offered, and an address naming one
+  // shows the board (FR-074)
+  const held = useStore((s) => heldEverywhere(s.backendOrder, s.authByBackend));
   /** who the home backend takes this page for, once it has said */
   const homeYou = useStore((s) => s.authByBackend[s.home]?.you);
   const setDirtyOnly = useStore((s) => s.setDirtyOnly);
@@ -714,8 +722,9 @@ export function App() {
         <Said />
       </>
     );
-  const nav = <ViewSwitch view={view} navigate={navigate} />;
-  const other = OTHER_VIEWS.includes(view);
+  const shown = viewShown(view, held) ? view : "git";
+  const nav = <ViewSwitch view={shown} navigate={navigate} held={held} />;
+  const other = OTHER_VIEWS.includes(shown);
   return (
     <div className="app">
       {other ? (
@@ -733,32 +742,32 @@ export function App() {
       >
       <div className="app-view">
       {other ? <>
-      {view === "sessions" ? (
+      {shown === "sessions" ? (
         <SessionsView onView={navigate} />
-      ) : view === "agents" ? (
+      ) : shown === "agents" ? (
         <AgentsView onGit={() => navigate("git")} />
-      ) : view === "manager" ? (
+      ) : shown === "manager" ? (
         <ManagerView />
-      ) : view === "health" ? (
+      ) : shown === "health" ? (
         <HealthView />
-      ) : view === "costs" ? (
+      ) : shown === "costs" ? (
         <CostsView />
-      ) : view === "triggers" ? (
+      ) : shown === "triggers" ? (
         <TriggersView />
-      ) : view === "clock" ? (
+      ) : shown === "clock" ? (
         <ClockView />
-      ) : view === "work" ? (
+      ) : shown === "work" ? (
         <WorkView />
-      ) : view === "kit" ? (
+      ) : shown === "kit" ? (
         <KitView />
-      ) : view === "plugins" ? (
+      ) : shown === "plugins" ? (
         <PluginsView />
-      ) : view === "secrets" ? (
+      ) : shown === "secrets" ? (
         <SecretsView />
-      ) : view === "people" ? (
+      ) : shown === "people" ? (
         <PeopleView />
       ) : (
-        <Library ports={view === "ports"} project={project} onRepo={showRepo} onPorts={() => navigate("ports")} />
+        <Library ports={shown === "ports"} project={project} onRepo={showRepo} onPorts={() => navigate("ports")} />
       )}
       </> : <>
       <div

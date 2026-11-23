@@ -63,6 +63,7 @@ import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
 import { dragStep, TOUCH_HOLD, type DragInput, type DragPhase } from "../drag";
 import { showingAt } from "../swiperow";
 import { backendOf, homeName, isHome } from "../registry";
+import { useLacks } from "../useLacks";
 import { driftLine, driftReport } from "../triggers";
 import { openView } from "../clirun";
 import { kbKey, triggerKbId } from "../kbfocus";
@@ -172,6 +173,7 @@ function FileRow({
 }) {
   const [diff, setDiff] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const reads = useLacks(repo.id, "operate");
   const { staged, split } = stagingOf(file);
   const marker = markOf(file);
 
@@ -210,9 +212,9 @@ function FileRow({
       <div className="file-row">
         <input
           type="checkbox"
-          title={staged ? "Unstage" : "Stage"}
+          title={reads ? (staged ? "Staged" : "Not staged") : staged ? "Unstage" : "Stage"}
           checked={staged}
-          disabled={file.conflicted}
+          disabled={file.conflicted || reads}
           onChange={() => void toggleStage()}
         />
         {cols.map((col) => {
@@ -1082,6 +1084,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
   const [stageAll, setStageAll] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<Note | null>(null);
+  const reads = useLacks(id, "operate");
 
   useEffect(() => setNote(null), [id]);
 
@@ -1165,7 +1168,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
       layout={views}
       copy={() => files.map((f) => `${markOf(f)} ${f.orig ? `${f.orig} → ${f.path}` : f.path}`).join("\n")}
       // a paste lands in the commit message, after what is there
-      paste={files.length > 0 ? (text) => setMessage((m) => (m ? `${m}\n${text}` : text)) : null}
+      paste={files.length > 0 && !reads ? (text) => setMessage((m) => (m ? `${m}\n${text}` : text)) : null}
     >
       {files.length === 0 ? (
         <p className="panel-clean">Working tree clean.</p>
@@ -1175,7 +1178,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
       <PeerWipList repo={repo} paths />
       <ElsewhereList repo={repo} />
 
-      {files.length > 0 && (
+      {files.length > 0 && !reads && (
         <div className="commit-box">
           <textarea
             placeholder="commit message"
@@ -2887,6 +2890,8 @@ export function RepoPanel({
   hidden?: boolean;
 }) {
   const repo = useStore((s) => s.repos.find((r) => r.id === id));
+  // a viewer's panel offers no menu of things to start (FR-074)
+  const reads = useLacks(id, "operate");
   const repoRun = useStore((s) => runFor(s, id));
   // every run going here: several get a chip each, by name (FR-073)
   const repoLive = useStore(useShallow((s) => runsFor(s, id)));
@@ -3225,7 +3230,7 @@ export function RepoPanel({
           </button>
         )}
         <PanelGear repo={repo} mode={mode} setMode={setMode} body={() => bodyRef.current} solo={solo} screen={screen} toggleScreen={toggleScreen} />
-        {!guided && <RepoMenu repo={repo} onError={showError} />}
+        {!guided && !reads && <RepoMenu repo={repo} onError={showError} />}
         {closable && (
           <button
             type="button"

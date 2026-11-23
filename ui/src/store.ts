@@ -6,7 +6,8 @@ import { applyClips, looksSecret, type Clip } from "../../src/core/clips";
 import type { Copied } from "./clipsink";
 import { copyText } from "./share";
 import { create } from "zustand";
-import { api, onBackendSignal, PartialFleetError, resolveBase, subscribe } from "./api";
+import { api, onBackendSignal, PartialFleetError, resolveBase, scopeUnknown, subscribe } from "./api";
+import { scopedOr } from "./scopeGate";
 import { saveChoice } from "./preview";
 import { backendOf, baseOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
 import { rangerSessions } from "./ranger";
@@ -2300,6 +2301,9 @@ function sayPlaces(s: Pick<CanopyState, "panels" | "backendOrder" | "people">): 
  *  this stream did. A failure leaves what is here until the next event. */
 function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string): void {
   runSyncs.set(b, (runSyncs.get(b) ?? 0) + 1);
+  // a stream that drops may be a change of teams, which ends a held
+  // page's stream: what the page may ask waits for the auth read below
+  scopeUnknown(b);
   void get()
     .rescan(b)
     .catch(() => {});
@@ -2755,13 +2759,15 @@ export const useStore = create<CanopyState>((set, get) => ({
     try {
       const [tree, workspaces, runs, agents, flows, fleets, verdict, launchers, jobs, held, client, helpers, devices, kept] = await Promise.all([
         api.tree(),
-        api.workspaces(),
+        // a page held to its teams' folders (FR-074) goes without what the
+        // wall closes: the workspaces, the launch settings
+        api.workspaces().catch(scopedOr<Workspace[]>([])),
         api.runs(),
         api.agents(),
         api.flows(),
         api.fleets(),
         api.verdict(),
-        api.launchers(),
+        api.launchers().catch(scopedOr<Record<string, LaunchSettings>>({})),
         api.jobs(),
         // a server from before shells were held has no list; the grove
         // should still load, just with no shells to come back to
@@ -2993,7 +2999,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         api.fleets(name),
         api.jobs(name),
         api.agents(name),
-        api.launchers(name),
+        api.launchers(name).catch(scopedOr<Record<string, LaunchSettings>>({})),
         api.terms(name).catch((): TermInfo[] => []),
         api.kept(name).catch(() => ({ keeping: false, kept: [] as KeptShell[] })),
         api.client(name),

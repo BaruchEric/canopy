@@ -10,6 +10,7 @@ import { backendOf, qual } from "../registry";
 import { agentRows, heldShellAt, machinesOf, newTabKey, nextWaitingRow, pickRepos, sessionsKey, showingIn, splitKey, stepTab, tabsIn, untabbed, type Machine, type RepoTone, type TabKind, type TabScope } from "../sessions";
 import { boxesOf, groupOf, hasPane, headOf, leaveGroup, neighbourOf, paneIds, rowOf, setAt, splitIn, type Box, type Edge, type PaneTree } from "../splitpanes";
 import { connOf, idText, statusFacts, statusOf, useStore } from "../store";
+import { useLacksHome } from "../useLacks";
 import { isItemTab, isPageTab, isPageTabId, itemTabsAt, pageTabLabel, sectionTabId, sectionTabsAt, tabbableKeys, type PageTab } from "../sectiontabs";
 import { OVER_PAGE } from "../surface";
 import { LABEL_MAX, viewKey, type TermTab } from "../term";
@@ -58,6 +59,8 @@ const MACHINES_KEEP = 72;
 
 export function SessionsView({ onView }: { onView: (view: string) => void }) {
   useShellProbe();
+  // a viewer opens no shell (FR-074)
+  const shellless = useLacksHome("shell");
   const cards = useAllAgents();
   const terms = useStore((s) => s.terms);
   const activeTerm = useStore((s) => s.activeTerm);
@@ -335,7 +338,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   const side = (
     <aside className={`ss-side${narrow ? " drawer" : ""}`} aria-label="Machines and agents">
       <Machines machines={machines} scope={scope} tabs={strip.length} onRepo={openRepo} onScope={setScope} />
-      <NewShell box={newBox} home={home} onRepo={openRepo} />
+      {!shellless && <NewShell box={newBox} home={home} onRepo={openRepo} />}
       <PaneSeam
         pane="sessions-agents"
         axis="y"

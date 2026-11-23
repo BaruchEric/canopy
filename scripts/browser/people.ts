@@ -1,9 +1,11 @@
 // Drives people, roles, teams and invites (FR-074) on a backend that
 // enforces who calls, the way four people would: the owner signs in with the
 // first code and makes a team and two people; a member joins on a phone from
-// their link and starts on their team's folders; a viewer types their invite
-// into the sign-in box and is told they only read; a pair is approved as
-// someone else; then the roster is changed, emptied and signed out of.
+// their link and is held to their team's folders, the page asking for
+// nothing the wall would refuse; a viewer types their invite into the
+// sign-in box, is told they only read and is offered nothing to press; a
+// pair is approved as someone else; then the roster is changed, emptied and
+// signed out of.
 // people.sh starts the scratch server and runs this; it copies the file into
 // the browser folder first, where "playwright" resolves.
 //   people.ts <base url> <server log> <screenshot folder> <a team's folder>
@@ -63,6 +65,39 @@ const text = async (page: Page, sel: string) =>
   )
     .replace(/\s+/g, " ")
     .trim();
+
+/** every 403 the wall answered this page, by route: a held page that asks
+ *  for a closed route has a bug, since the page knows the routes it may ask */
+function walled(page: Page): string[] {
+  const seen: string[] = [];
+  page.on("response", (r) => {
+    if (r.status() !== 403) return;
+    void r
+      .text()
+      .then((t) => {
+        if (t.includes('"scoped":true')) seen.push(new URL(r.url()).pathname);
+      })
+      .catch(() => {});
+  });
+  return seen;
+}
+
+/** the views a page's menus offer: the phone's one menu, or the bar's groups */
+async function viewsOffered(page: Page): Promise<string[]> {
+  if ((await page.locator(".view-pick").count()) > 0) {
+    await page.locator(".view-pick .pick-btn").click();
+    const names = await page.locator('.view-pick [role="radio"] .sort-name').allTextContents();
+    await page.keyboard.press("Escape");
+    return names.map((n) => n.trim().split(/\s/)[0] ?? "");
+  }
+  const names: string[] = [];
+  for (const g of await page.locator(".view-group .pick-btn").all()) {
+    await g.click();
+    names.push(...(await page.locator('.view-group [role="radio"] .sort-name').allTextContents()).map((n) => n.trim().split(/\s/)[0] ?? ""));
+    await page.keyboard.press("Escape");
+  }
+  return names;
+}
 
 const noOverflow = async (page: Page, what: string) => {
   const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -134,7 +169,11 @@ try {
 
   /* ---------- Avery joins on a phone with the link ---------- */
   const averyCtx = await browser.newContext(PHONE);
-  const avery = await open(averyCtx, averyLink);
+  const averyPage = await averyCtx.newPage();
+  const averyWalled = walled(averyPage);
+  averyPage.on("pageerror", (e) => failures.push(`page error: ${e.message}`));
+  await averyPage.goto(averyLink, { waitUntil: "load" });
+  const avery = averyPage;
   await avery.waitForSelector(".app", { timeout: 30_000 });
   const a1 = await auth(avery);
   check(a1.person?.name === "Avery" && a1.person.role === "member" && !a1.rights.includes("admin"), `the link signs a phone in as Avery, a member (${JSON.stringify(a1.person)})`);
@@ -147,6 +186,43 @@ try {
   check(cards.length === 2 && cards.includes("app") && cards.includes("site"), `a member starts on their team's folders (${cards.join(", ")})`);
   await avery.screenshot({ path: `${shots}/04-member-phone-grid.png` });
   await noOverflow(avery, "the member's grid on a phone");
+
+  /* ---------- the wall: what a held page asks for and offers ---------- */
+  await avery.waitForTimeout(2000);
+  check(averyWalled.length === 0, `a held page asks for no route the wall closes on its first load (${averyWalled.join(", ") || "none"})`);
+  const heldViews = await viewsOffered(avery);
+  check(heldViews.join() === "git,sessions,people", `a held phone's menu offers the board, the shells and the people (${heldViews.join(", ")})`);
+  const scopeNow = await avery.evaluate(async () => {
+    const token = localStorage.getItem(`canopy.token.${location.origin}`);
+    const r = await fetch("/api/auth", { headers: token ? { "x-canopy-token": token } : {} });
+    const v: { scope?: string[] | null } = await r.json();
+    return v.scope ?? null;
+  });
+  check(Array.isArray(scopeNow) && scopeNow.length === 1, `the backend tells a held page its folders (${JSON.stringify(scopeNow)})`);
+  const kitAsked = await avery.evaluate(async () => {
+    const token = localStorage.getItem(`canopy.token.${location.origin}`);
+    const r = await fetch("/api/kit", { headers: token ? { "x-canopy-token": token } : {} });
+    return { status: r.status, text: await r.text() };
+  });
+  check(kitAsked.status === 403 && kitAsked.text.includes('"scoped":true'), `the backend still refuses a closed route asked by hand (${kitAsked.status})`);
+  // that refusal's own line lands before the count starts again
+  await avery.waitForTimeout(500);
+  averyWalled.length = 0;
+  // an address naming a closed view shows the board
+  await avery.goto(`${base}/?view=kit`, { waitUntil: "load" });
+  await avery.waitForFunction(() => document.querySelectorAll(".card").length > 0, null, { timeout: 20_000 });
+  check((await avery.locator(".kit-view, .kit").count()) === 0, "an address naming the kit shows a held page the board");
+  // a dropped stream comes back without asking for what the wall closes
+  await avery.waitForTimeout(1500);
+  await averyCtx.setOffline(true);
+  await avery.waitForTimeout(2500);
+  await averyCtx.setOffline(false);
+  await avery.waitForTimeout(6000);
+  check(averyWalled.length === 0, `nor after its stream drops and comes back (${averyWalled.join(", ") || "none"})`);
+  await avery.screenshot({ path: `${shots}/04b-held-phone-after-drop.png` });
+  // the filters menu has no "my teams only" to turn off when the backend holds the page
+  await avery.goto(`${base}/`, { waitUntil: "load" });
+  await avery.waitForFunction(() => document.querySelectorAll(".card").length > 0, null, { timeout: 20_000 });
 
   // the invite is spent
   const again = await browser.newContext(DESK);
@@ -180,6 +256,11 @@ try {
   /* ---------- Guest signs in by typing the invite, in the dark ---------- */
   const guestCtx = await browser.newContext({ ...DESK, colorScheme: "dark" });
   const guest = await open(guestCtx, `${base}/`);
+  // every 403 the viewer's page meets: neither the role nor the wall should refuse it anything it asked by itself
+  const guestRefused: string[] = [];
+  guest.on("response", (r) => {
+    if (r.status() === 403) guestRefused.push(new URL(r.url()).pathname);
+  });
   const termTickets: string[] = [];
   guest.on("request", (r) => {
     if (r.url().endsWith("/api/auth/ticket") && (r.postData() ?? "").includes('"term"')) termTickets.push(r.url());
@@ -191,11 +272,25 @@ try {
   check((await text(guest, ".people-chip")).includes("viewing"), "a viewer's chip says they are viewing");
   check((await post(guest, "/api/people/me", { name: "Guest Two" })).status === 200, "a viewer still renames themselves");
   check((await post(guest, "/api/people/team", { name: "X" })).status === 403, "a viewer's write is refused");
+  await guest.waitForTimeout(500);
+  guestRefused.length = 0;
+  // a viewer is offered nothing to press: no card menu, a star that only says
+  await guest.waitForFunction(() => document.querySelectorAll(".card").length === 3, null, { timeout: 20_000 });
+  check((await guest.locator(".card .card-more").count()) === 0, "a viewer's cards carry no menu of things to start");
+  check((await guest.locator(".card .star:not([disabled])").count()) === 0, "a viewer's stars say what is starred and star nothing");
+  check((await viewsOffered(guest)).length > 3, "a viewer who is on no team is not held: every view is offered");
   // a viewer's shell tab says why it stays shut and asks for no ticket it cannot get
   await guest.locator(".card").first().click();
   await guest.waitForTimeout(3000);
   check(termTickets.length === 0, `a viewer's shell tab asks for no ticket (${termTickets.length} asked)`);
+  check((await guest.locator(".panel .commit-box").count()) === 0, "a viewer's panel has no commit box");
+  check((await guest.locator('.panel .file-row input[type="checkbox"]:not([disabled])').count()) === 0, "nor a box that stages a file");
+  check(guestRefused.length === 0, `a viewer's page asks the backend for nothing its role refuses (${[...new Set(guestRefused)].join(", ") || "none"})`);
   await guest.screenshot({ path: `${shots}/08-viewer-dark.png` });
+  await guest.goto(`${base}/?view=sessions`, { waitUntil: "load" });
+  await guest.waitForSelector(".ss-side", { timeout: 20_000 });
+  check((await guest.locator(".ss-side .ss-new, .ss-side .new-shell").count()) === 0, "a viewer's sessions view offers no new shell");
+  await guest.screenshot({ path: `${shots}/08b-viewer-sessions.png` });
 
   /* ---------- update: a role change reaches the other page ---------- */
   await owner.goto(`${base}/?view=people`, { waitUntil: "load" });
@@ -204,13 +299,35 @@ try {
   await owner.selectOption('.people-row:has-text("Avery") select.people-role', "viewer");
   await avery.waitForFunction(() => document.querySelector(".people-view")?.textContent?.includes("viewer:"), null, { timeout: 15_000 });
   check((await auth(avery)).rights.join() === "read", "a role change caps the other page's token at once");
+  // a held viewer: the board of their folders, and nothing to press on it
+  await avery.goto(`${base}/`, { waitUntil: "load" });
+  await avery.waitForFunction(() => document.querySelectorAll(".card").length > 0, null, { timeout: 20_000 });
+  check((await avery.locator(".card").count()) === 2 && (await avery.locator(".card .card-more").count()) === 0, "a held viewer sees their team's two repos with no menus");
+  check((await avery.locator(".card .star:not([disabled])").count()) === 0, "and stars nothing");
+  await avery.screenshot({ path: `${shots}/07b-held-viewer-phone.png` });
+  await avery.goto(`${base}/?view=people`, { waitUntil: "load" });
+  await avery.waitForSelector(".people-view .people-list", { timeout: 20_000 });
   await owner.selectOption('.people-row:has-text("Avery") select.people-role', "member");
   await avery.waitForFunction(() => document.querySelector(".people-view")?.textContent?.includes("member:"), null, { timeout: 15_000 });
-  check(true, "and changing it back gives the rights back");
+  // and the page offers them again without a reload: the board through the menu, a card's menu, a star that stars
+  await avery.locator(".view-pick .pick-btn").click();
+  await avery.locator('.view-pick [role="radio"]', { hasText: "git" }).first().click();
+  await avery.waitForFunction(() => document.querySelectorAll(".card").length > 0, null, { timeout: 20_000 });
+  await avery.waitForSelector(".card .card-more", { timeout: 15_000 }).catch(() => {});
+  check((await avery.locator(".card .card-more").count()) === 2, "changing it back gives the menus back without a reload");
+  const starred = avery.waitForResponse((r) => r.url().includes("/api/repos/favorite"), { timeout: 15_000 }).catch(() => null);
+  await avery.locator(".card .star").first().tap();
+  const fav = await starred;
+  check(fav?.status() === 200, `and a star stars again (${fav?.status() ?? "nothing sent"})`);
+  await avery.goto(`${base}/?view=people`, { waitUntil: "load" });
+  await avery.waitForSelector(".people-view .people-list", { timeout: 20_000 });
 
   /* ---------- a pair approved as someone else ---------- */
   const pairCtx = await browser.newContext(DESK);
-  const pairPage = await open(pairCtx, `${base}/`);
+  const pairPage = await pairCtx.newPage();
+  const pairWalled = walled(pairPage);
+  pairPage.on("pageerror", (e) => failures.push(`page error: ${e.message}`));
+  await pairPage.goto(`${base}/`, { waitUntil: "load" });
   await pairPage.waitForSelector(".signin-first", { timeout: 20_000 });
   await pairPage.click("button.signin-chip");
   await pairPage.waitForSelector(".signin-code", { timeout: 10_000 });
@@ -225,6 +342,13 @@ try {
   await owner.locator(".ask-row button.strong", { hasText: "allow" }).first().click();
   await pairPage.waitForSelector(".app", { timeout: 30_000 });
   check((await auth(pairPage)).person?.name === "Avery", "a pair approved as Avery becomes Avery's session");
+  await pairPage.waitForFunction(() => document.querySelectorAll(".card").length > 0, null, { timeout: 20_000 });
+  const deskViews = await viewsOffered(pairPage);
+  check(deskViews.join() === "git,sessions,people", `a held page at 1400 offers the board, the shells and the people (${deskViews.join(", ")})`);
+  await pairPage.waitForTimeout(2000);
+  check(pairWalled.length === 0, `a held page at 1400 asks for no route the wall closes (${pairWalled.join(", ") || "none"})`);
+  await pairPage.screenshot({ path: `${shots}/09b-held-desk.png` });
+  await noOverflow(pairPage, "a held page at 1400");
   await pairCtx.close();
   await owner.keyboard.press("Escape");
 

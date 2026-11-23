@@ -133,6 +133,13 @@ export class TaskHub {
     return this.panes.has(termId) || termId in this.state;
   }
 
+  /** the repo a task's session belongs to, for the scope lane (FR-074),
+   *  whether it runs in the checkout or a kept tree: undefined for an id
+   *  that is no task's */
+  repoOf(termId: string): string | undefined {
+    return this.panes.get(termId)?.repoId ?? (Object.hasOwn(this.state, termId) ? this.state[termId]?.repoId : undefined);
+  }
+
   /** Reads the records and starts the supervisor. Nothing here waits on
    *  tmux, gh or ssh: recovery and the first sweep run once a listing has
    *  answered, after the server is listening. */

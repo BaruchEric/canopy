@@ -180,6 +180,9 @@ export interface AuthInfo {
   person?: Me | null;
   /** what the token holds: its kind's rights capped by the person's role */
   rights?: Right[];
+  /** the folders this page is held to (FR-074, plan 2): null or absent for
+   *  the whole backend */
+  scope?: string[] | null;
 }
 
 /** One backend's sign-in as the page keeps it: what it last said, whether
@@ -211,6 +214,12 @@ export const readsAdmin = (auth: Pick<AuthInfo, "mode" | "you" | "rights"> | und
  *  what the backend listed, which a person's role caps (FR-074), else the
  *  kind's own on a backend older than people. */
 export const holds = (auth: Pick<AuthInfo, "you" | "rights">, right: Right): boolean => (auth.rights ?? KIND_RIGHTS[auth.you]).includes(right);
+
+/** Whether this page lacks a right on a backend that checks it (FR-074): a
+ *  person whose role caps it, under enforce. A page nobody signed in lacks
+ *  nothing here, since the sign-in screen is what it meets. */
+export const lacks = (auth: Pick<AuthInfo, "mode" | "you" | "rights" | "person"> | undefined, right: Right): boolean =>
+  auth !== undefined && auth.mode === "enforce" && auth.person != null && !holds(auth, right);
 
 /** Whether a people write will land: those are checked in every mode, so a
  *  page nobody signed in manages no one even where the backend only logs. */

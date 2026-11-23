@@ -10,6 +10,7 @@ import { activeFlowFor, agentFor, connOf, idText, landingAll, launchFor, memberF
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
 import { branchByDefault, freeBranchSlots, runLanding, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
+import { useLacks } from "../useLacks";
 import { equipTitle, fromWord, inheritedLabel, loadoutLabel, loadoutsFor } from "../loadouts";
 import { planPriority, priorityTitle } from "../capacity";
 import { DEFAULT_CAPACITY, type CapacitySettings } from "../../../src/core/capacity";
@@ -535,6 +536,8 @@ export function Timeline({
   const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
   const harness = harnessOf(run);
   const repoWord = useStore((s) => runRepoName(s.repos, run.repoId));
+  // a viewer reads what the run asks and answers nothing (FR-074)
+  const reads = useLacks(run.repoId, "operate");
   const list = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
 
@@ -617,7 +620,10 @@ export function Timeline({
           </li>
         )}
       </ol>
-      {!run.kept && run.prompt && (
+      {!run.kept && run.prompt && reads && (
+        <p className="sheet-hint run-reads">{AGENT_NAME[harness]} is waiting on someone who may answer it; a viewer reads along.</p>
+      )}
+      {!run.kept && run.prompt && !reads && (
         <RunPromptForm
           key={run.prompt.id}
           prompt={run.prompt}
@@ -710,6 +716,8 @@ export function Console({ run, repo, onClose, go }: { run: Run; repo: Repo | und
   const sayRun = useStore((s) => s.sayRun);
   const interruptRun = useStore((s) => s.interruptRun);
   const draft = useStore((s) => s.chatDrafts[run.id]);
+  // a viewer's sheet reads the run and steers nothing (FR-074)
+  const reads = useLacks(run.repoId, "operate");
   const active = !run.kept && isRunActive(run);
   const chat = run.chat;
   const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
@@ -736,7 +744,7 @@ export function Console({ run, repo, onClose, go }: { run: Run; repo: Repo | und
   // "fork from here" (FR-043 plan 3): the step the replay bar stands at,
   // or the end from the footer; the fork sheet takes the timeline's place
   const [forkAt, setForkAt] = useState<ForkAt | null>(null);
-  const forkable = !active && !isCoordinator(run) && repo !== undefined && !repo.host && !repo.forge;
+  const forkable = !reads && !active && !isCoordinator(run) && repo !== undefined && !repo.host && !repo.forge;
   const cards = isCoordinator(run) && ((run.tasks?.length ?? 0) > 0 || active);
   const cardsOnly = cards && phone && view === "cards";
 
@@ -805,7 +813,7 @@ export function Console({ run, repo, onClose, go }: { run: Run; repo: Repo | und
 
       {/* hidden, not gone, in the cards view, so what was typed stays;
           any run at work takes a person's message, a job's too (FR-066) */}
-      {active && (
+      {active && !reads && (
         <Composer
           who={name}
           repoId={run.repoId}
@@ -836,7 +844,7 @@ export function Console({ run, repo, onClose, go }: { run: Run; repo: Repo | und
             fork
           </button>
         )}
-        {active && isCoordinator(run) ? (
+        {reads ? null : active && isCoordinator(run) ? (
           <button
             type="button"
             className={`mini${ending.armed ? " mgr-end" : ""}`}

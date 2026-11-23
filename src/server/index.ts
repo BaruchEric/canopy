@@ -70,7 +70,7 @@ import { unattendedRefusal } from "../core/workflow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sayTo, sendKeys, sendLine, LINE_END, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
 import { choiceOnScreen, codexAgentListOnScreen, steerWords } from "../core/steer";
-import { isPerson } from "../core/callers";
+import { isPerson, needs } from "../core/callers";
 import { cardAsks } from "../core/agentstatus";
 import { cardSession, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, resumeLine as resumeKeptLine, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
@@ -282,8 +282,10 @@ import { cardFilesLine, coordWorkflows, GOAL_LIMITS, goalAnchor, goalFileNames, 
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
 import { PeopleHub } from "./people";
+import { scopeCut, scopeRefusal, viewOf, type Scope, type ScopeDeps } from "./scope";
+import { scopeEvent } from "../core/scope";
 import { actor, asActor, type Actor } from "./actor";
-import { activityWords } from "../core/people";
+import { activityWords, OWNER_ID } from "../core/people";
 import { bodyUpTo } from "./body";
 import { ClipsHub } from "./clips";
 import { DiskRunLogger, closeOpen, dropKept, listKept as listKeptRuns, pruneKept, readKeptRun, readWire, runsDir, RUN_ID, type RunLogger } from "../core/runlog";
@@ -3702,7 +3704,7 @@ function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): Live
  *  with nobody asking leaves none */
 function noteShell(state: ServerState, repo: Repo): void {
   const who = actor();
-  if (who) state.people.note(who, "opened a shell", repo.name);
+  if (who) state.people.note(who, "opened a shell", { id: repo.id, name: repo.name });
 }
 
 /** A socket onto a shell on tmux: the session made when this is the first
@@ -3982,13 +3984,46 @@ function endStreams(state: ServerState, ids: readonly string[]): void {
 /** the events after which the push hub reads its "needs you" list again */
 const PUSH_EVENTS: ReadonlySet<ServerEvent["type"]> = new Set(["run", "run-gone", "flow", "flow-gone", "asks", "landing", "prs", "triggers", "ranger"]);
 
+/** The scope a stream's caller is held to (FR-074, plan 2): null for the
+ *  whole backend, which is also a stream with no caller, since only a page
+ *  outside enforce has none and that page is the owner's; `gone` for a
+ *  stream whose caller was dropped, which hears nothing until it is ended. */
+function streamScope(state: ServerState, c: ReadableStreamDefaultController<Uint8Array>): Scope | null | "gone" {
+  const id = state.streamCallers.get(c);
+  if (id === undefined) return null;
+  const caller = state.callers.byId(id);
+  return caller ? state.people.scopeOf(caller) : "gone";
+}
+
 function broadcast(state: ServerState, event: ServerEvent): void {
   // a commit in a kept worktree moves refs in the common git dir, which the
   // main checkout's watcher reports: its trees' counts are read again
   if (event.type === "repo") state.trees.touched(event.repo.path);
   if (PUSH_EVENTS.has(event.type)) state.push.poke();
   const data = enc.encode(`data: ${JSON.stringify(event)}\n\n`);
-  for (const c of state.clients) send(state, c, data);
+  // a backend where nobody is scoped sends every stream the same frame
+  if (!state.people.anyScoped()) {
+    for (const c of state.clients) send(state, c, data);
+    return;
+  }
+  // a scoped person's streams hear the event cut to their teams' repos, or
+  // not at all; the cut is made once a person
+  const cuts = new Map<string, Uint8Array | null>();
+  for (const c of state.clients) {
+    const scope = streamScope(state, c);
+    if (scope === "gone") continue;
+    if (!scope) {
+      send(state, c, data);
+      continue;
+    }
+    let cut = cuts.get(scope.person);
+    if (cut === undefined) {
+      const ev = scopeEvent(event, viewOf(scope, state.result.repos));
+      cut = ev ? enc.encode(`data: ${JSON.stringify(ev)}\n\n`) : null;
+      cuts.set(scope.person, cut);
+    }
+    if (cut) send(state, c, cut);
+  }
 }
 
 /** One frame down one stream; a stream that is gone is let go. */
@@ -4013,9 +4048,12 @@ function broadcastPairs(state: ServerState, pending: PendingPair[]): void {
   const open = state.gate.mode !== "enforce";
   for (const c of state.clients) {
     const id = state.streamCallers.get(c);
-    // admin by the caller's kind and its person's role, both (FR-074)
-    const admin = id !== undefined && state.gate.can(state.callers.byId(id), "admin");
-    send(state, c, open || admin ? whole : none);
+    const caller = id === undefined ? null : state.callers.byId(id);
+    // admin by the caller's kind and its person's role, both (FR-074); a
+    // scoped person reads no pair request, whatever the mode
+    const admin = caller !== null && state.gate.can(caller, "admin");
+    const scoped = caller !== null && state.people.scopeOf(caller) !== null;
+    send(state, c, (open && !scoped) || admin ? whole : none);
   }
 }
 
@@ -4076,7 +4114,7 @@ const byWhom = (): { who?: string } => {
 /** The repo a write named, for its line of activity: an id in the query or
  *  in a small JSON body, or a run's. The body is read off a clone, so the
  *  route still reads its own. */
-async function repoNamed(state: ServerState, req: Request, url: URL): Promise<string | undefined> {
+async function repoNamed(state: ServerState, req: Request, url: URL): Promise<{ id: string; name: string } | undefined> {
   const refs: string[] = [];
   for (const k of ["id", "repo", "repoId"]) {
     const v = url.searchParams.get(k);
@@ -4094,12 +4132,12 @@ async function repoNamed(state: ServerState, req: Request, url: URL): Promise<st
   }
   for (const ref of refs) {
     const repo = state.result.repos.find((r) => r.id === ref);
-    if (repo) return repo.name;
+    if (repo) return { id: repo.id, name: repo.name };
   }
   for (const ref of refs) {
     const run = state.runner.get(ref);
     const repo = run ? state.result.repos.find((r) => r.id === run.repoId) : undefined;
-    if (repo) return repo.name;
+    if (repo) return { id: repo.id, name: repo.name };
   }
   return undefined;
 }
@@ -7932,6 +7970,7 @@ export async function startServer(opts: {
       broadcast: (ev) => broadcast(state, ev),
       dropUser: (id) => callers.dropUser(id),
       devices: () => deviceList(state),
+      rescoped: (ids) => endStreams(state, callers.list().filter((c) => ids.includes(c.user ?? OWNER_ID)).map((c) => c.id)),
     }),
     prs: new PrHub({
       ...opts.prs,
@@ -8418,6 +8457,19 @@ export async function startServer(opts: {
         onChange: keepPreviews,
       })
     : null;
+  /** how the scope lane traces an id to its repo (FR-074, plan 2) */
+  const scopeDeps: ScopeDeps = {
+    repos: () => state.result.repos,
+    runRepo: (id) => state.runner.get(id)?.repoId,
+    flowRepo: (id) => state.flows.get(id)?.repoId,
+    termRepo: (id) => state.terms.get(id)?.info.repoId ?? state.kept.find((k) => k.id === id)?.repoId ?? state.tasks.repoOf(id),
+    isRanger: (id) => state.ranger.knows(id),
+    keptRunRepo: async (id) => {
+      if (!RUN_ID.test(id)) return undefined;
+      await state.readyRunlog();
+      return (await listKeptRuns(runsDir())).find((r) => r.id === id)?.repo;
+    },
+  };
   /** Every request on both listeners. `lane` is true on the coordinator's
    *  own listener, where the lane takes only a coordinator's token and its
    *  routes, so nothing past the lane check (the Library, the event stream,
@@ -8451,6 +8503,17 @@ export async function startServer(opts: {
     if (laned) return laned;
     const denied = state.gate.gate(req, url, caller);
     if (denied) return denied;
+    // A member or viewer on a team with folders is held to them (FR-074,
+    // plan 2), in every mode: a route nobody filed for a scoped caller is
+    // closed, and a filed one names only what the folders hold. What
+    // answers a request with no token (the page's own files, the sign-in
+    // routes, the Library's reads) is no token's scope to close.
+    const scope = caller && needs(req.method === "HEAD" ? "GET" : req.method, url.pathname) !== "open" ? state.people.scopeOf(caller) : null;
+    const view = scope ? viewOf(scope, state.result.repos) : null;
+    if (view && caller) {
+      const outside = await scopeRefusal(scopeDeps, view, caller, req, url);
+      if (outside) return outside;
+    }
     if (url.pathname === "/api/library" || url.pathname === "/library" || url.pathname.startsWith("/library/")) return library.handle(req);
     if (url.pathname.startsWith("/api/") && !libraryOriginAllowed(returnLeg(req, url), publicOrigin, beyondLoopback, origins, lane ? coordHosts : [])) {
       return json({ error: "Foreign origin" }, 403);
@@ -8533,7 +8596,9 @@ export async function startServer(opts: {
     }
     if (url.pathname.startsWith("/api/")) {
       try {
-        return said(await asActor(actorOf(state, caller), () => handleApi(state, req, url, clientKey(srv.requestIP(req)?.address ?? "127.0.0.1"), caller)));
+        const res = said(await asActor(actorOf(state, caller), () => handleApi(state, req, url, clientKey(srv.requestIP(req)?.address ?? "127.0.0.1"), caller)));
+        // a list a scoped caller asked for goes out cut to their repos
+        return view ? await scopeCut(view, req, url, res) : res;
       } catch (err) {
         // a start the governor held (FR-036): a 409 with when it may go
         if (isCapacityHeld(err)) return json({ error: err.message, until: err.until }, 409);

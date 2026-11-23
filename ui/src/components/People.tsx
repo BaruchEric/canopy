@@ -478,7 +478,7 @@ function BackendPeople({ backend }: { backend: string }) {
         <h3 className="panel-label">
           Teams <span className="work-count">{roster.teams.length}</span>
         </h3>
-        <p className="settings-hint">A team is a name, its people and the folders they work in. The folders set what a person's page shows first. They are not a wall: everyone on a backend acts as the one OS user canopy runs as, so a separate backend is what keeps two groups apart.</p>
+        <p className="settings-hint">A team is a name, its people and the folders they work in. A member or a viewer on a team with folders sees and reaches only the repos under them: the board, their runs and shells, and nothing of the Library, the kit, notes or the landing queue. Owners and admins see everything. For a viewer that is exact. A member's agent and shell still run as the one OS user canopy runs as and could read a sibling folder, so a separate backend is what keeps two groups apart for certain.</p>
         {roster.teams.length > 0 && (
           <ul className="people-list">
             {roster.teams.map((t) => (

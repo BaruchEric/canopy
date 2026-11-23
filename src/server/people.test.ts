@@ -324,15 +324,15 @@ describe("who did what", () => {
   test("lines come back newest first, one person's when asked", async () => {
     const hub = hubOf();
     const id = await add(hub, "Avery");
-    hub.note({ person: "owner", kind: "page" }, "started a run", "rio");
+    hub.note({ person: "owner", kind: "page" }, "started a run", { id: "rio-id", name: "rio" });
     clock += 10;
-    hub.note({ person: id, kind: "cli" }, "opened a shell", "clms");
+    hub.note({ person: id, kind: "cli" }, "opened a shell", { id: "clms-id", name: "clms" });
     clock += 10;
     hub.note({ person: "owner", kind: "none" }, "committed");
     await hub.flush();
     const all = await hub.activity(200);
     expect(all.map((l) => l.what)).toEqual(["committed", "opened a shell", "started a run"]);
-    expect(all[1]).toEqual({ at: 1_000_010, person: id, kind: "cli", what: "opened a shell", repo: "clms" });
+    expect(all[1]).toEqual({ at: 1_000_010, person: id, kind: "cli", what: "opened a shell", repo: "clms", repoId: "clms-id" });
     expect((await hub.activity(200, id)).map((l) => l.what)).toEqual(["opened a shell"]);
     expect(await hub.activity(1)).toHaveLength(1);
     expect((await stat(activityFile(dir))).mode & 0o777).toBe(0o600);

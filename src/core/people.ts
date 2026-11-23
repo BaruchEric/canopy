@@ -371,6 +371,9 @@ export interface ActivityLine {
   what: string;
   /** the repo's name, when the call named one */
   repo?: string;
+  /** and its id, which a team's wall goes by, since two folders can each
+   *  hold a repo of one name; absent from a line older than the wall */
+  repoId?: string;
 }
 
 /** The writes worth a line, with their words. A route not here is never
@@ -435,7 +438,14 @@ export function parseActivity(v: unknown): ActivityLine | null {
   if (!isRecord(v)) return null;
   const at = timeOf(v["at"]);
   if (at === undefined || typeof v["person"] !== "string" || typeof v["what"] !== "string" || !isKind(v["kind"])) return null;
-  return { at, person: v["person"], kind: v["kind"], what: v["what"], ...(typeof v["repo"] === "string" && v["repo"] ? { repo: v["repo"] } : {}) };
+  return {
+    at,
+    person: v["person"],
+    kind: v["kind"],
+    what: v["what"],
+    ...(typeof v["repo"] === "string" && v["repo"] ? { repo: v["repo"] } : {}),
+    ...(typeof v["repoId"] === "string" && v["repoId"] ? { repoId: v["repoId"] } : {}),
+  };
 }
 
 /* ---------- what the page is told ---------- */

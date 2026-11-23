@@ -599,7 +599,9 @@ A role caps what a person's tokens hold, whatever they came through:
 
 Turning a person off signs them out of everything at once and keeps their record; removing them deletes it. Each backend has its own roster, so a person on two backends is added on both.
 
-The top bar shows who else is on, a repo's card shows who else has it open, and a run or a kept shell says who started it when that was not you. The People view's log says who did what. A team is a name, its people and the folders they work in: a member's page starts on "my teams only" in the filters menu and they can turn it off. A team is not a wall. Everyone on a backend acts as the one OS user canopy runs as, so an agent or a shell there can read any folder that user can. Two groups that must not reach each other's files get a backend each, and one page shows both.
+The top bar shows who else is on, a repo's card shows who else has it open, and a run or a kept shell says who started it when that was not you. The People view's log says who did what. A viewer's page offers nothing their role refuses: no menus of things to start, no commit box, no answers to a run.
+
+A team is a name, its people and the folders they work in. A member or a viewer on a team with folders sees and reaches only the repos under them: the board, their runs, shells and tasks, and the People view. The Library, the kit, notes, secrets, the landing queue and the other views are closed to them, and the backend refuses those routes whatever asks. Owners and admins see everything. For a viewer that is exact. A member's agent or shell still runs as the one OS user canopy runs as and could read a sibling folder with `cat`, so two groups that must not reach each other's files get a backend each, and one page shows both. `canopy auth status` names the folders a held person reaches.
 
 Runs spend the backend's own `claude` login, and a Max plan is one person's. A backend several people start runs on should run them through a provider file on a key the team pays for (`providers/<id>.json`).
 

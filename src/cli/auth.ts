@@ -97,13 +97,16 @@ interface AuthInfo {
   /** who the token is held for, and what it holds (FR-074); absent from a backend older than people */
   person?: { id: string; name: string; role: string } | null;
   rights?: string[];
+  /** the folders a team's wall holds the caller to; null or absent when it reaches every repo */
+  scope?: string[] | null;
 }
 
-/** `auth status`'s line: the mode, the caller's kind, whose it is and what it holds */
+/** `auth status`'s line: the mode, the caller's kind, whose it is, what it holds and where */
 export function statusWords(a: AuthInfo): string {
   const who = a.person ? `  ${a.person.name} (${a.person.role})` : "";
   const holds = a.rights ? `  holds ${a.rights.join(", ") || "nothing"}` : "";
-  return `mode ${a.mode}  you ${a.you}${who}${holds}  refused ${a.refused.count}`;
+  const held = a.scope && a.scope.length > 0 ? `  only in ${a.scope.join(", ")}` : "";
+  return `mode ${a.mode}  you ${a.you}${who}${holds}${held}  refused ${a.refused.count}`;
 }
 
 /** `--name value` removed from args, as the index's own `opt` does */

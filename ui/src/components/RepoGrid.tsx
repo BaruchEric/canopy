@@ -23,6 +23,7 @@ import {
   visibleRepos,
 } from "../store";
 import { backendOf, isHome } from "../registry";
+import { useLacks } from "../useLacks";
 import { isPrimary, wsOf } from "../workspaces";
 import type { RepoCard as Card } from "../checkouts";
 import { ago, GLYPH, stateOf } from "../util";
@@ -129,6 +130,8 @@ function MachineStrip({ card, lead, selecting }: { card: Card; lead: string; sel
 
 const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) {
   const openRepo = useStore((s) => s.openRepo);
+  // a viewer's card offers no menu of things to start (FR-074)
+  const reads = useLacks(repo.id, "operate");
   const bringOnDouble = useStore((s) => s.bringOnDouble);
   const many = useStore(multi);
   const card = useStore((s) => (multi(s) ? cardOf(s, repo.id) : undefined));
@@ -296,9 +299,11 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
           </span>
         )}
         {repo.link && <RepoLink url={repo.link} name={repo.name} />}
-        <span className="card-more">
-          <RepoMenu repo={repo} onError={setMenuErr} />
-        </span>
+        {!reads && (
+          <span className="card-more">
+            <RepoMenu repo={repo} onError={setMenuErr} />
+          </span>
+        )}
       </div>
       {many && card && <MachineStrip card={card} lead={repo.id} selecting={selecting} />}
       {repo.description && (
