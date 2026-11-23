@@ -3,6 +3,7 @@ import {
   changesLine,
   diagnosisArgs,
   diagnosisConfig,
+  diagnosisFailure,
   diagnosisHead,
   diagnosisLine,
   ignoredGlobs,
@@ -182,5 +183,10 @@ describe("the words", () => {
     expect(isDiagnosisPick("auto")).toBe(true);
     expect(isDiagnosisPick("ts")).toBe(true);
     expect(isDiagnosisPick("js")).toBe(false);
+  });
+
+  test("an older backend's 404 says what it means, and any other failure stays", () => {
+    expect(diagnosisFailure("not found")).toContain("from before the Architecture Diagnosis");
+    expect(diagnosisFailure("an analysis is going on this checkout already")).toBe("an analysis is going on this checkout already");
   });
 });

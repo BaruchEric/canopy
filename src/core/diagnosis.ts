@@ -267,6 +267,12 @@ export function parseReceipt(stdout: string, code: number): { ok: true } | { ok:
   return { ok: false, message: `${message}${hint}` };
 }
 
+/** What a failed request says. A backend from before FR-075 has no such
+ *  route and answers the server's plain 404, which names nothing: say what
+ *  it means and what to do. Any other message stays as it is. */
+export const diagnosisFailure = (message: string): string =>
+  message === "not found" ? "this backend runs a canopy from before the Architecture Diagnosis; deploy the current one to it and try again" : message;
+
 const plural = (n: number, one: string, many = `${one}s`): string => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
 
 /** One line for a checkout's diagnosis, as the section and `canopy

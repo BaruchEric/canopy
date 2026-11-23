@@ -4,7 +4,7 @@
  *  panel's map section does with its diagnosis switch on. */
 
 import { existsSync } from "node:fs";
-import { DIAGNOSIS_LANGUAGES, DIAGNOSIS_PAGE, DIAGNOSIS_PATH, changesLine, diagnosisLine, isDiagnosisPick, othersLine, type DiagnosisInfo, type DiagnosisPick } from "../core/diagnosis";
+import { DIAGNOSIS_LANGUAGES, DIAGNOSIS_PAGE, DIAGNOSIS_PATH, changesLine, diagnosisFailure, diagnosisLine, isDiagnosisPick, othersLine, type DiagnosisInfo, type DiagnosisPick } from "../core/diagnosis";
 import { ask, askText, has, take } from "./health";
 import { repoId, requestFailure, selectedTarget } from "./run";
 import { ageWord } from "./worktrees";
@@ -75,7 +75,8 @@ export async function diagnosisCommand(argv: string[], { fail }: { fail: (messag
   const target = await selectedTarget(parsed, fail);
   const id = await repoId(parsed.repo, target, fail);
   const path = `/api/repos/diagnosis?${new URLSearchParams({ id })}`;
-  const failed = requestFailure(target, fail);
+  // an older backend's bare 404 gets its meaning; the rest pass as they are
+  const failed = requestFailure(target, (message) => fail(diagnosisFailure(message)));
   const read = () => ask<DiagnosisInfo>(target, "GET", path, undefined, 30_000).catch(failed);
   const say = (info: DiagnosisInfo) => {
     if (parsed.json) console.log(JSON.stringify(info, null, 2));

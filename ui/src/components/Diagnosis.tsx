@@ -10,6 +10,7 @@ import {
   DIAGNOSIS_PATH,
   DIAGNOSIS_SETTINGS,
   changesLine,
+  diagnosisFailure,
   diagnosisHead,
   diagnosisLine,
   isDiagnosisPick,
@@ -21,7 +22,7 @@ import {
 } from "../../../src/core/diagnosis";
 import type { Repo } from "../../../src/core/types";
 
-const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
+const errText = (err: unknown) => diagnosisFailure(String(err instanceof Error ? err.message : err));
 
 /** a unix-ms time in the page's own words ("3h ago") */
 const agoMs = (ms: number): string => ago(ms / 1000);
