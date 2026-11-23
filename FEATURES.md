@@ -436,3 +436,7 @@ P2 · added 2026-10-07 · source: Eric · shipped 2026-10-07
 Opening a workspace in the agent opener starts one agent at the workspace's primary, with the other members on that machine passed as `--add-dir`, plus a tab each for members on another machine. The follow-up the Kilo borrowings spec named.
 
 ## Declined
+
+### FR-082 · Google's Gemini CLI as a fourth harness
+P3 · added 2026-11-23 · source: Claude's recommendation after FR-081 ("drive Blocked do Recommendations", Eric, 2026-11-23) · declined 2026-11-23
+Declined because the Gemini CLI no longer signs in with a personal Google account. On 0.55.1, `gemini --acp` answers `authenticate` with "oauth-personal" by saying the client "is no longer supported for Gemini Code Assist for individuals" and points to Antigravity. What is left is a billed Gemini API key or Vertex AI, and agy (FR-081) already takes a Gemini API key. The ACP shapes were measured on the Mac all the same, in case a reason comes back: `session/new` returns `modes` and `models` but no `configOptions`; the model is set with `session/set_model`; there is no effort; an `echo` ran in default mode without a permission request; the tool update carried no output; and the turn's tokens come back in `_meta.quota.token_count`, not `usage`.
