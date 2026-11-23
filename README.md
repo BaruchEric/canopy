@@ -151,6 +151,10 @@ canopy diagnosis <repo> rm   # remove .archify/diagnosis
 canopy understand <repo> [--json]   # the repo's knowledge graph in .ua/: its nodes, files and layers, its age, the commits since, its viewer and the run making it
 canopy understand <repo> make|update|rebuild [-m note]   # a Claude run makes the graph, refreshes what changed, or rebuilds it from nothing
 canopy understand <repo> open|stop|prepare   # start the graph's viewer on the backend (the map section frames it), stop it, or only prepare the plugin
+canopy fr [--all] [--json]         # the feature numbers reserved in the repo this shell sits in, who holds each, and the next free one
+canopy fr reserve [-m title]       # take the next free FR number before writing it anywhere; no other session, worktree or machine gets the same one
+canopy fr next                     # the next free number, reserving nothing
+canopy fr check                    # exit 1 when FEATURES.md gives one number to two entries
 canopy collisions [repo]           # runs on one repo editing the same files right now, and what they share; a word, never a hold
 canopy scenarios <repo>                     # the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
 canopy scenarios <repo> add <name> [--judge] [--run CMD]   # a new scenario file under <configDir>/scenarios/<repo key>/; edit it there
@@ -408,6 +412,17 @@ A manual step shows `held` with `<step> waits for your go`. Continue or retry st
 
 Select several repos on the board (the select button in the top bar, or `x`) and run one workflow across all of them as a fleet: each repo whose precondition does not hold is skipped, the rest run up to three at a time, and the fleet's own sheet shows every repo's flow. Select mode starts with nothing picked. Click a card or a tree row to pick it, shift-click to pick (or unpick) everything from the last click to that one, tick a group heading to take the whole group, and use the bar along the bottom for all, none, invert, or just the repos in one state (with changes, unpushed, behind, and so on). ⌘A picks everything in view, Escape leaves. The count and the fleet only ever include picks the current filters show. All, none, invert and "only…" replace the selection with what is in view; a single pick a filter hides stays put and comes back when the filter clears.
 
+## Feature numbers
+
+A repo's feature list is its `FEATURES.md`, one `### FR-NNN · Title` per entry, and a number is never used twice. Counting up from the file stops working once two sessions work in two worktrees, because each reads its own copy. So take the number first:
+
+```bash
+canopy fr reserve -m "A cart that remembers"   # prints FR-013
+canopy fr                                      # who holds what, and the next free number
+```
+
+`reserve` runs in the repo the shell sits in (`-C dir` names another) and asks no backend. It looks at the list in every worktree of the repo, committed or not, at every branch's copy, origin's included, and at the numbers already reserved, and takes the one after the highest. The reservation is a git ref, `refs/canopy/fr/013`, which git makes only when none is there, and canopy pushes it to origin without force, so a second session gets the number after, whether it sits in another worktree or on another machine. When origin does not answer, the number is reserved on this machine and the command says so; the next `canopy fr` there shares it, and a number origin gave to someone else in the meantime shows as a clash. `canopy fr check` exits 1 when a list gives one number to two entries.
+
 ## The shared repo spec
 
 `spec/` is one spec for every repo canopy scans, versioned in `spec/manifest.json`: `SPEC.template.md`, a seven-section SPEC.md every repo keeps (what it is, who uses it, stack, how it is built and run, data, decisions, out of scope), and `DESIGN.md`, one visual system in Google's [DESIGN.md](https://github.com/google-labs-code/design.md) format (check it with `bunx @google/design.md@0.4.0 lint spec/DESIGN.md`). A repo adopts it with `canopy spec sync <repo>` or the bundled **spec** workflow, run on one repo or as a fleet: canopy writes marker blocks (`<!-- spec:begin vX.Y.Z -->…<!-- spec:end -->`) into SPEC.md and AGENTS.md or CLAUDE.md, DESIGN.md whole only for a repo that opts into the visual half (`--visual`), and records the version and each block's sha256 in `.canopy/spec.json` (going back to `--doc` removes the DESIGN.md it wrote, unless you edited it since); the workflow's agent then fills in a new SPEC.md's sections. Text outside the blocks stays the repo's. The scan reads each local checkout's state: **spec text in sync**, **behind** (an older version, untouched), **drifted** (a block or DESIGN.md edited by hand) or **not adopted**. A repo panel's folded **spec** section shows that state and syncs it (`sync`, **SPEC.md only** for `--doc`, **with DESIGN.md** for `--visual`), as does `spec sync <repo>` on the command line. The board's filter menu has **spec drift** and **no spec** chips, and the select bar can pick by them, so a fleet of the spec workflow brings every drifted repo up to date. "In sync" means the text matches, not that the code follows DESIGN.md. Bump the version in the manifest whenever the spec changes; every adopted repo then reads as behind.
@@ -583,6 +598,7 @@ Cloudflare Access protecting the hostname); see "A public name" in
 - A repo's map lives in the repo, in `floorplan/`, whose own `.gitignore` keeps it out of git. Its server's pid, port and token are in `floorplan/.cache/server.json`.
 - A repo's diagrams live in the repo, one folder each under `.archify/`, whose own `.gitignore` keeps them out of git. Which kind the map section shows is in this browser's localStorage under `canopy.mapKind`.
 - A repo's Architecture Diagnosis lives in the repo, in `.archify/diagnosis/`, with a `.gitignore` of its own. `.canopy/diagnosis.json`, checked in, holds the repo's language and the folders to leave out.
+- A repo's reserved feature numbers are refs in the repo itself, `refs/canopy/fr/NNN`, pushed to its origin. Nothing about them is in canopy's config.
 - A repo's knowledge graph lives in the repo, in `.ua/`, whose own `.gitignore` keeps it out of git. The prepared plugin is in canopy's config dir under `understand/plugin-<version>-<key>/`, and each viewer's pid, port and token under `understand/servers/`.
 - Workspaces store absolute repo paths, so they work from any scan root. A repo on another host is stored as `ssh://<host><path>`.
 - Agent settings live under `agents` in the same config, keyed the same way; a repo set back to the defaults loses its entry. Launch settings live under `launchers` the same way.

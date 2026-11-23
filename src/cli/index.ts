@@ -65,6 +65,7 @@ import { worktreesCommand } from "./worktrees";
 import { floorplanCommand } from "./floorplan";
 import { archifyCommand } from "./archify";
 import { diagnosisCommand } from "./diagnosis";
+import { frCommand } from "./fr";
 import { understandCommand } from "./understand";
 import { peersRoot, type PeersAnswer } from "./peersroot";
 import { issuesCommand } from "./issues";
@@ -148,6 +149,7 @@ export const COMMANDS = new Set([
   "archify",
   "diagnosis",
   "understand",
+  "fr",
   "queue",
   "collisions",
   "scenarios",
@@ -890,6 +892,8 @@ export async function main(argv: string[]): Promise<void> {
       return archifyCommand(args, { fail });
     case "diagnosis":
       return diagnosisCommand(args, { fail });
+    case "fr":
+      return frCommand(args, { fail });
     case "understand":
       return understandCommand(args, { fail });
     case "scenarios":

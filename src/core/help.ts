@@ -195,6 +195,11 @@ usage:
   canopy diagnosis <repo> save [file]   save the diagnosis's page here as one HTML file
   canopy diagnosis <repo> rm         remove the diagnosis's folder; one the repo tracks is refused
     --backend URL | --on NAME       select the backend that owns the repo
+  canopy fr [--all] [--json]         the feature numbers reserved in the repo this shell sits in, who holds each, and the next free one
+  canopy fr reserve [-m title]       take the next free FR number before writing it anywhere: no other session in this repo, in any worktree or on any machine that shares its origin, gets the same one
+  canopy fr next                     the next free number, reserving nothing
+  canopy fr check                    exit 1 when FEATURES.md gives one number to two entries
+    -C dir                          the repo, in place of the folder the shell sits in
   canopy understand <repo> [--json]  the repo's knowledge graph (Understand-Anything) in .ua/: its nodes, files and layers, its age, the commits since, its viewer and the run making it
   canopy understand <repo> make|update|rebuild [-m note]   a Claude run makes the graph, refreshes what changed, or rebuilds it from nothing; the first on a backend prepares the plugin there
   canopy understand <repo> open|stop|prepare   start the graph's viewer on the backend (the map section frames it), stop it, or only prepare the plugin
