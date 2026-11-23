@@ -96,7 +96,8 @@ test("a make starts a diagram run with Archify loaded in a folder of its own; th
   expect(one.ctx.spec.pluginDirs).toEqual([ARCHIFY_PLUGIN]);
   const edit = one.ctx.spec.allowedTools.find((t) => t.startsWith("Edit("));
   expect(edit).toMatch(new RegExp(`^Edit\\(/${app}/\\.archify/sequence-the-login-request-\\d{8}-\\d{6}/\\*\\*\\)$`));
-  expect(one.ctx.spec.allowedTools).toContain(`Bash(node ${ARCHIFY_SKILL}/bin/archify.mjs:*)`);
+  expect(one.ctx.spec.allowedTools).toContain(`Bash(node ${ARCHIFY_SKILL}/bin/archify.mjs finalize:*)`);
+  expect(one.ctx.spec.allowedTools).not.toContain(`Bash(node ${ARCHIFY_SKILL}/bin/archify.mjs:*)`);
   expect(one.ctx.env["ARCHIFY_UPDATE_CHECK_DISABLED"]).toBe("1");
   expect(one.message).toContain("with the archify:archify skill");
   expect(one.message).toContain("Make it a sequence diagram.");

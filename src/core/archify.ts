@@ -1,6 +1,6 @@
 /**
  * Diagrams of a repo with Archify (FR-071): canopy's copy of Archify
- * (tt-a1i/archify, MIT at the release canopy pins, in lib/archify) turns a checkout, or a
+ * (tt-a1i/archify, Apache-2.0 at the release canopy pins, in lib/archify) turns a checkout, or a
  * question about it, into a checked standalone HTML diagram: architecture,
  * workflow, sequence, data flow, lifecycle, ERD, class, tree, timeline,
  * waterfall, or a one-page explainer. A canopy run of the user's own claude,
@@ -20,7 +20,7 @@
 import { TOOL_SETS, type ActionSpec } from "./actions";
 
 /** the upstream release lib/archify holds (VENDOR.md says how to move it) */
-export const ARCHIFY_VERSION = "3.2.0";
+export const ARCHIFY_VERSION = "3.3.0";
 
 /** a diagram run's action name, which the page and the CLI find it by */
 export const ARCHIFY_ACTION = "archify";
@@ -171,12 +171,41 @@ interface ArchifyWhere {
  *  page `revise` names inside `folder`. */
 export type ArchifyStart = ArchifyWhere & ({ type: ArchifyPick } | { revise: string });
 
+/** The CLI commands a diagram run may call without asking: the ones that
+ *  validate, render, check and repair a page from the files they are given.
+ *  Left out, so each stops to ask: `start` and `code-analysis` (Archify
+ *  3.3.0's Code Analysis, which serves on loopback, can ask api.github.com
+ *  about a pull request, and runs go, java, python or the program a config
+ *  file names), `pr` (its `attach` posts to a pull request with the user's
+ *  gh), and `preview` and `demo`, which serve or write outside the folder.
+ *  VENDOR.md says to check this list at each new release. */
+export const ARCHIFY_COMMANDS = [
+  "finalize",
+  "validate",
+  "deliver",
+  "check",
+  "browser-check",
+  "visual-check",
+  "render",
+  "inspect",
+  "patch",
+  "compare",
+  "migrate",
+  "export-svg",
+  "story",
+  "guide",
+  "brands",
+  "examples",
+  "doctor",
+] as const;
+
 /** What a diagram run may do without asking: read, git's reads, write
- *  inside its own folder, and run canopy's copy of the skill's CLI by its
- *  absolute path. Claude matches file rules on Edit alone, which covers
- *  Write too, and `//` starts an absolute path. */
+ *  inside its own folder, and run the commands above of canopy's copy of
+ *  the skill's CLI by its absolute path. Claude matches file rules on Edit
+ *  alone, which covers Write too, and `//` starts an absolute path. */
 export function archifyTools(skillDir: string, root: string, folder: string): string[] {
-  return [...(TOOL_SETS["read"] ?? []), ...(TOOL_SETS["git-read"] ?? []), `Edit(/${root}/${ARCHIFY_FOLDER}/${folder}/**)`, `Bash(node ${skillDir}/bin/archify.mjs:*)`];
+  const cli = `node ${skillDir}/bin/archify.mjs`;
+  return [...(TOOL_SETS["read"] ?? []), ...(TOOL_SETS["git-read"] ?? []), `Edit(/${root}/${ARCHIFY_FOLDER}/${folder}/**)`, ...ARCHIFY_COMMANDS.map((c) => `Bash(${cli} ${c}:*)`)];
 }
 
 const TYPE_WORDS: Record<ArchifyType, string> = {
@@ -200,7 +229,7 @@ function differences(s: ArchifyStart): string[] {
   const revising = "revise" in s;
   return [
     "Where canopy differs from the skill's own steps:",
-    `- The skill's bin/archify.mjs is ${cli}. Call it as \`node ${cli} …\` with that absolute path every time: canopy's permission rule lets exactly that run without asking.`,
+    `- The skill's bin/archify.mjs is ${cli}. Call it as \`node ${cli} …\` with that absolute path every time: canopy's permission rules let exactly that run without asking, for the commands that draw, check and repair a page.`,
     "- Run each archify.mjs call as one plain command with literal paths, relative to the codebase root: no cd, no shell variables, no &&, ; or pipes. Anything else stops to ask the user.",
     "- Read the skill's references and the code with the Read, Grep and Glob tools, not cat, sed or other shell commands, and write or change the candidate with the Write and Edit tools, never sed, python or a shell redirect. Those are what canopy allows without asking.",
     `- This request's folder is ${folder}/, which canopy chose: keep the candidate and the HTML there${revising ? "" : ` (for a native diagram, meta.output is ${folder}/<slug>.html)`}.`,
@@ -210,7 +239,8 @@ function differences(s: ArchifyStart): string[] {
     "- A finalize that exits 2 with validate, deliver and check passed and browser-check skipped (viewer/chrome-unavailable) found no Chrome on this machine. The diagram is delivered and checked: say the browser check was skipped and stop, without repairing or retrying for it.",
     "- Do not open, preview or serve the HTML, and give no file link: canopy shows the diagram in this repository's map section.",
     "- Skip the update notice: canopy turns the skill's update check off and updates its own copy.",
-    "- Never offer the explainer modes, and never write an [archify explainer: …] line into any rules file.",
+    "- Make only the page this task asks for: no explainer page beside it, which the skill would otherwise add unasked, and never write an [archify explainer: …] line into any rules file.",
+    "- Leave the Architecture Diagnosis section out of the summary, and do not run the CLI's start, code-analysis or pr commands unless the user's note asks for one: they serve a local page, run other toolchains or post to a pull request, and each stops to ask the user.",
     `- Write only inside ${folder}/, and commit nothing: ${ARCHIFY_FOLDER}/ keeps itself out of git.`,
   ];
 }
@@ -248,8 +278,8 @@ export function archifySpec(s: ArchifyStart): ActionSpec {
     label: revising ? "revise the diagram" : "draw a diagram",
     verb: revising ? "revise" : "diagram",
     blurb: revising
-      ? "Claude edits the diagram's JSON as your note asks and runs Archify's finalize again, which renders and checks it. It asks before running anything beyond reading, git's reads and Archify's own CLI."
-      : "Claude reads the code and draws a checked, interactive diagram with Archify into .archify/ (kept out of git). It asks before running anything beyond reading, git's reads and Archify's own CLI.",
+      ? "Claude edits the diagram's JSON as your note asks and runs Archify's finalize again, which renders and checks it. It asks before running anything beyond reading, git's reads and Archify's drawing and checking commands."
+      : "Claude reads the code and draws a checked, interactive diagram with Archify into .archify/ (kept out of git). It asks before running anything beyond reading, git's reads and Archify's drawing and checking commands.",
     notePlaceholder: revising ? "what to change" : "what to draw (optional: the repo's architecture)",
     noteRequired: revising,
     allowedTools: archifyTools(s.skillDir, s.root, s.folder),

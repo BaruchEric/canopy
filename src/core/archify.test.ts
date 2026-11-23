@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  ARCHIFY_COMMANDS,
   ARCHIFY_TYPES,
   archifyFolder,
   archifyHead,
@@ -114,9 +115,22 @@ describe("a diagram run", () => {
     expect(tools).toContain(`Edit(//home/eric/dev/shop/.archify/${FOLDER}/**)`);
     // Claude matches file rules on Edit only: a Write rule would be refused
     expect(tools.some((t) => t.startsWith("Write("))).toBe(false);
-    expect(tools).toContain(`Bash(node ${SKILL}/bin/archify.mjs:*)`);
+    expect(tools).toContain(`Bash(node ${SKILL}/bin/archify.mjs finalize:*)`);
+    expect(tools).toContain(`Bash(node ${SKILL}/bin/archify.mjs browser-check:*)`);
     expect(tools).toContain("Read");
     expect(tools).toContain("Bash(git rev-parse:*)");
+  });
+
+  test("runs only the CLI's drawing and checking commands unasked", () => {
+    const cli = `Bash(node ${SKILL}/bin/archify.mjs`;
+    const rules = archifyTools(SKILL, ROOT, FOLDER).filter((t) => t.startsWith(cli));
+    expect(rules).toEqual(ARCHIFY_COMMANDS.map((c) => `${cli} ${c}:*)`));
+    // the whole CLI under one rule would let these run too: a local server,
+    // other toolchains and a config file's program, and a post to a pull request
+    expect(rules).not.toContain(`${cli}:*)`);
+    for (const asks of ["start", "code-analysis", "pr", "preview", "demo"]) {
+      expect(rules.some((r) => `${cli} ${asks} x`.startsWith(r.slice(0, -3)))).toBe(false);
+    }
   });
 
   test("a new diagram's task names the skill, the type, the folder and where canopy differs", () => {
@@ -131,7 +145,10 @@ describe("a diagram run", () => {
     expect(task).toContain("browser-check skipped (viewer/chrome-unavailable)");
     expect(task).toContain("Do not open, preview or serve the HTML");
     expect(task).toContain("Skip the update notice");
+    expect(task).toContain("no explainer page beside it");
     expect(task).toContain("never write an [archify explainer: …] line");
+    expect(task).toContain("Leave the Architecture Diagnosis section out");
+    expect(task).toContain("do not run the CLI's start, code-analysis or pr commands unless the user's note asks for one");
     expect(task).toContain(`Write only inside .archify/${FOLDER}/`);
     expect(task).toContain("draw the repository's architecture");
   });
