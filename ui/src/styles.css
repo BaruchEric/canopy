@@ -4752,6 +4752,10 @@ body.resizing-rows {
      to the panel's min-content and scrolled a phone sideways */
   grid-template-columns: minmax(0, 1fr);
   height: 100vh;
+  /* the visible height: on a phone whose browser keeps a toolbar at the
+     bottom (Chrome on the Fold), 100vh runs 57px under it and hid the
+     bottom of a run's message box */
+  height: 100dvh;
 }
 .solo-id {
   color: var(--ink-dim);
@@ -7074,6 +7078,11 @@ button.rtab:hover .rtab-pen {
   order: -2;
   margin-right: auto;
   padding-left: 0;
+}
+@media (pointer: coarse) {
+  .side-q-head > .close {
+    min-height: 44px;
+  }
 }
 .side-q.over > .side-q-head > .status {
   order: -1;
