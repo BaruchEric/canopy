@@ -108,8 +108,8 @@ function checkEquip(v: unknown, at: string, ctx: PlanContext): { equip: CardEqui
   const lo = ctx.loadouts.loadouts.find((l) => l.name === name);
   if (!lo) return { error: `${at}.equip.loadout: no loadout ${name} in kit.json` };
   const equip: CardEquip = { loadout: name };
-  if (lo.harness === "codex" && (v["skills"] !== undefined || v["mcp"] !== undefined)) {
-    return { error: `${at}.equip: a codex loadout takes no skills or servers` };
+  if (lo.harness !== "claude" && (v["skills"] !== undefined || v["mcp"] !== undefined)) {
+    return { error: `${at}.equip: ${lo.harness === "antigravity" ? "an Antigravity" : "a codex"} loadout takes no skills or servers` };
   }
   const model = v["model"];
   if (model !== undefined) {

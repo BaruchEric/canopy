@@ -143,7 +143,9 @@ describe("classify", () => {
     expect(classify("2.1.286", ["2.1.286"])).toBe("claude");
     expect(classify("2.1.286", ["ruby", "x"])).toBeNull();
     expect(classify("codex", ["/x/codex"])).toBe("codex");
+    expect(classify("agy", ["agy"])).toBe("antigravity");
     expect(classify("node", ["node", "/x/@openai/codex/bin/codex.js"])).toBe("codex");
+    expect(classify("node", ["node", "/x/agy"])).toBe("antigravity");
     expect(classify("bun", ["bun", "/x/node_modules/@anthropic-ai/claude-code/cli.js"])).toBe("claude");
     expect(classify("which", ["which", "claude"])).toBeNull();
     expect(classify("vim", ["vim", "/tmp/codex"])).toBeNull();
@@ -300,6 +302,15 @@ describe("working or idle, off the CPU", () => {
     const second = scanStates(first.next, [at(41, 1_000 + busy), at(42, 1_000 + busy - 1), at(43, 9_000, 6), at(44, undefined)], 30_000);
     expect(Object.fromEntries(second.states)).toEqual({ 41: "working", 42: "idle", 43: "idle" });
     expect(second.next.get(43)).toEqual({ tree: new Map([[43, 9_000]]), at: 30_000, startedAt: 6 });
+  });
+
+  test("Antigravity's live state stays unknown without transcript evidence", () => {
+    const p: AgentProc = { pid: 99, ppid: 1, harness: "antigravity", cwd: "", startedAt: 5, tree: new Map([[99, 10_000]]) };
+    const first = scanStates(new Map(), [p], 0);
+    const second = scanStates(first.next, [{ ...p, tree: new Map([[99, 100_000]]) }], 30_000);
+    expect(second.states.has(99)).toBe(false);
+    expect(second.next.has(99)).toBe(false);
+    expect(scanBody([p], [], false, "darwin", new Map([[99, "working"]])).procs[0]?.state).toBeUndefined();
   });
 
   test("a child that ends gives no CPU back, and one new since the last scan counts whole", () => {

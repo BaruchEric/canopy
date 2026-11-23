@@ -384,6 +384,18 @@ describe("finding and reading a transcript", () => {
     expect(await findTranscript("codex", S1, "", homes, now)).toBeNull();
   });
 
+  test("Antigravity has no disk activity, even when a Claude file is present", async () => {
+    const homes = { claude: claudeHome };
+    const dir = join(claudeHome, "projects", projectFolder("/dev/agy"));
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${S3}.jsonl`), `${user(0, "do not read this")}\n`);
+    expect(await findTranscript("antigravity", S3, "/dev/agy", homes)).toBeNull();
+    expect(await readActivity("antigravity", S3, "/dev/agy", homes)).toBeNull();
+    const tally = newTally("antigravity");
+    feedLine(tally, user(1, "do not parse this either"));
+    expect(activityOf(tally, S3, 0, 0).prompts).toBe(0);
+  });
+
   test("reads on from where it stopped, a cut last line once it is whole, and a rewritten file anew", async () => {
     const homes = { claude: claudeHome };
     const dir = join(claudeHome, "projects", projectFolder("/dev/inc"));

@@ -606,6 +606,7 @@ export function feedLine(t: Tally, line: string): void {
   }
   if (!isRecord(rec)) return;
   if (t.harness === "codex") return feedCodex(t, rec);
+  if (t.harness !== "claude") return;
   const carrier = rec.type === "user" || rec.type === "queue-operation" || rec.type === "attachment";
   if (carrier && rec.isSidechain !== true && line.includes("<task-notification>")) settleTasks(t, line);
   feedClaude(t, rec);
@@ -684,6 +685,7 @@ export async function findTranscript(harness: Harness, session: string, cwd: str
     }
     return null;
   }
+  if (harness !== "codex") return null;
   const root = join(homes.codex ?? codexHome(), "sessions");
   const tail = `-${session}.jsonl`;
   for (const day of codexDayDirs(now, CODEX_DAYS)) {
@@ -781,7 +783,7 @@ async function readOnce(key: string, harness: Harness, session: string, cwd: str
  * tally twice.
  */
 export function readActivity(harness: Harness, session: string, cwd: string, homes: AgentHomes = {}, now = new Date()): Promise<AgentActivity | null> {
-  if (!isSessionId(session)) return Promise.resolve(null);
+  if (!isSessionId(session) || harness === "antigravity") return Promise.resolve(null);
   const home = harness === "codex" ? (homes.codex ?? codexHome()) : (homes.claude ?? claudeHome());
   const key = `${harness}\0${home}\0${session}`;
   const before = reading.get(key) ?? Promise.resolve();

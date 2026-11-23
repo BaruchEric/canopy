@@ -356,8 +356,8 @@ describe("which harnesses the login shell has", () => {
     const none = () => false;
     expect(harnessesFrom(none, { at: 0, found: ["codex"] })).toEqual(["codex"]);
     expect(harnessesFrom((b) => b === "claude", { at: 0, found: [] })).toEqual(["claude"]);
-    expect(harnessesFrom(none, { at: 0, found: null, why: "timed out" })).toEqual(["claude", "codex"]);
-    expect(harnessesFrom(none, null)).toEqual(["claude", "codex"]);
+    expect(harnessesFrom(none, { at: 0, found: null, why: "timed out" })).toEqual(["claude", "codex", "antigravity"]);
+    expect(harnessesFrom(none, null)).toEqual(["claude", "codex", "antigravity"]);
   });
 
   test("a real shell: markers are read, a shell that fails without any is no answer", async () => {
@@ -398,7 +398,7 @@ describe("which harnesses the login shell has", () => {
       warn: (l) => warned.push(l),
     });
     // before the shell answers, nothing is refused
-    expect(h.list()).toEqual(["claude", "codex"]);
+    expect(h.list()).toEqual(["claude", "codex", "antigravity"]);
     await h.refresh();
     expect(asked).toBe(1);
     expect(h.list()).toEqual(["claude"]);

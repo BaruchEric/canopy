@@ -52,6 +52,11 @@ The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: 
 
 ## Shipped
 
+### FR-081 · Google Antigravity as a third harness
+P2 · added 2026-11-23 · source: Eric ("add google provider Antigravity etc", 2026-11-23) · shipped 2026-11-23
+canopy starts Google Antigravity's `agy` CLI beside Claude Code and Codex. Pick **antigravity** as the harness in a profile, a role or a repo's agent settings, and shells, chats, jobs and ordinary workflow steps run on it, with the backend's own Google login. A shell runs the interactive CLI with `--model`, `--effort`, `--conversation` and `--continue`. A run, a chat or a step speaks the Agent Client Protocol to `agy acp` (`core/antigravity.ts`, the fold in `core/acpfold.ts`): agy's permission requests are canopy's prompts, answered allow once even after allow all; the model and thinking level go through the session's config options and take either `agy models`' ids (`gemini-4-neon-high`) or a bare model with an effort; agy's tokens show on the run. The provider field, skills, the kit's MCP servers, the coordinator, suggestions, stages, session moves and side-question forks stay with the other harnesses, and a start that asks for one of those is refused in words. `docs/antigravity.md` has the setup.
+Checked on the Mac on 2026-11-23 against agy 1.5.15 with a Gemini API key in a scratch home: the handshake, the config options, the sign-in error, a run that asked to run `echo canopy-live`, was allowed and answered with its output, both shell model forms and `/exit`. The Mac has `agy` at `~/.local/bin`; the mini and De Soto do not.
+
 ### FR-079 · A simple level for the whole page
 P2 · added 2026-11-22 · source: Eric ("borrow UI simplicity", 2026-11-22, on Google's "Antigravity, Redesigned" video) · shipped 2026-11-22
 Settings' level used to change a repo's panel and nothing else. It now sets how much the whole page shows. **Advanced** is the page as it was. **Intermediate**, what a new browser gets and keeps, is the quiet page, in four parts. A browser that saved a layout before levels and never changed a setting stays on advanced. A new browser notes its level on its first load: the page writes a layout as it loads, and until 2026-11-23 the next load took that layout for a browser from before levels and put it on advanced.

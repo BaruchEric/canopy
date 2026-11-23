@@ -1178,7 +1178,7 @@ function ForkSheet({ run, repo, at, onClose }: { run: Run; repo: Repo; at: ForkA
   const [error, setError] = useState<string | null>(null);
   const action: RunAction = run.action === "propose" ? "propose" : "ask";
   const agent = resolveAgent(routes, repo.path, "job", profile ? { profile } : undefined, { kind: "task", name: action }).settings;
-  const sameHarness = agent.harness === run.harness && run.session !== undefined;
+  const sameHarness = agent.harness === run.harness && run.harness !== "antigravity" && run.session !== undefined;
   const where = at.step ? `step ${at.at} of ${at.of}: ${stepWords(at.step)}` : `its end (${at.of} step${at.of === 1 ? "" : "s"})`;
   const how = sameHarness
     ? run.harness === "claude"

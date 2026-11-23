@@ -433,7 +433,7 @@ export function ShellsPopBody({ onDone }: { onDone?: () => void }) {
                         type="button"
                         className="mini"
                         disabled={busy !== ""}
-                        title={`A new shell at ${repoName(repoId)} running ${c.harness === "codex" ? "codex resume" : "claude --resume"} ${c.id}`}
+                        title={`A new shell at ${repoName(repoId)} running ${HARNESS[c.harness].binary} ${HARNESS[c.harness].resume([], c.id).join(" ")}`}
                         onClick={() => void run(c.id, () => resumeAgent(repoId, c.id, c.harness))}
                       >
                         {busy === c.id ? "starting…" : "resume"}

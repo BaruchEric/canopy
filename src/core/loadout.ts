@@ -73,7 +73,7 @@ function parseOne(name: string, o: Record<string, unknown>, kit: KitManifest, pr
     if (isHarness(o["harness"])) harness = o["harness"];
     else {
       harnessOk = false;
-      bad("harness", "claude or codex");
+      bad("harness", "claude, codex or antigravity");
     }
   }
 
@@ -92,7 +92,7 @@ function parseOne(name: string, o: Record<string, unknown>, kit: KitManifest, pr
   if (o["skills"] !== undefined) {
     const l = list(o["skills"], (s) => SKILL_KEY.test(s));
     if (!l) bad("skills", "a list of skill names");
-    else if (harness === "codex" && l.length > 0) bad("skills", "a codex loadout takes no skills");
+    else if (harness !== "claude" && l.length > 0) bad("skills", `${harness === "antigravity" ? "an Antigravity" : "a codex"} loadout takes no skills`);
     else skills = l;
   }
 
@@ -100,7 +100,7 @@ function parseOne(name: string, o: Record<string, unknown>, kit: KitManifest, pr
   if (o["mcp"] !== undefined) {
     const l = list(o["mcp"], () => true);
     if (!l) bad("mcp", "a list of server names");
-    else if (harness === "codex" && l.length > 0) bad("mcp", "a codex loadout takes no servers");
+    else if (harness !== "claude" && l.length > 0) bad("mcp", `${harness === "antigravity" ? "an Antigravity" : "a codex"} loadout takes no servers`);
     else {
       const why = l.map((n) => {
         if (n === "canopy") return "canopy's own server comes with canopyTools";
@@ -277,7 +277,7 @@ export function cardLoadout(equip: CardEquip, info: LoadoutsInfo): Loadout | { r
   const name = equip.loadout ?? "";
   const lo = info.loadouts.find((l) => l.name === name);
   if (!lo) return { refused: `no loadout ${name} in kit.json` };
-  if (lo.harness === "codex" && (equip.skills !== undefined || equip.mcp !== undefined)) return { refused: "a codex loadout takes no skills or servers" };
+  if (lo.harness !== "claude" && (equip.skills !== undefined || equip.mcp !== undefined)) return { refused: `${lo.harness === "antigravity" ? "an Antigravity" : "a codex"} loadout takes no skills or servers` };
   if (equip.mcp?.includes("canopy")) return { refused: "a card's worker never holds canopy's own server" };
   if (equip.model !== undefined && !takesModel(lo.harness, equip.model)) return { refused: `${lo.harness} does not take ${equip.model}` };
   if (equip.effort !== undefined && !takesEffort(lo.harness, equip.effort)) return { refused: `${lo.harness} does not take ${equip.effort}` };
@@ -407,17 +407,17 @@ export function planLoadoutStart(o: {
     const why = o.providerRefusal?.(loadout.provider) ?? null;
     if (why) return { refused: `loadout ${loadout.name}: ${why}` };
   }
-  const codex = loadout.harness === "codex";
+  const ownSettings = loadout.harness !== "claude";
   const { provider: _provider, ...rest } = o.agent;
   const kept = loadout.harness === o.agent.harness ? o.agent : { ...rest, extra: "" };
   // the loadout's provider beats the route's; with none, the route's stays on its own harness
   const agent: AgentSettings = { ...kept, harness: loadout.harness, model: loadout.model, effort: loadout.effort, ...(loadout.provider ? { provider: loadout.provider } : {}) };
-  const { overrides, plugins, pluginsOff, off }: SkillPlan = codex ? { overrides: {}, plugins: {}, pluginsOff: [], off: 0 } : skillOverridesFor(loadout, o.info.base, o.skills);
+  const { overrides, plugins, pluginsOff, off }: SkillPlan = ownSettings ? { overrides: {}, plugins: {}, pluginsOff: [], off: 0 } : skillOverridesFor(loadout, o.info.base, o.skills);
   return {
     agent,
     overrides,
     plugins,
-    servers: codex ? {} : servers,
+    servers: ownSettings ? {} : servers,
     canopyTools: loadout.canopyTools,
     equip: {
       loadout: loadout.name, model: loadout.model, effort: loadout.effort, skills: [...loadout.skills], mcp: [...loadout.mcp], off,

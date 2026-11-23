@@ -28,6 +28,7 @@ describe("agentIn", () => {
     // the folder, a plain shell reports the shell
     expect(agentIn("2.1.278", "claude agents")).toBe("claude");
     expect(agentIn("codex", "canopy")).toBe("codex");
+    expect(agentIn("agy", "canopy")).toBe("antigravity");
     expect(agentIn("zsh", "Erics-MacBook-Pro.local")).toBeNull();
   });
 
@@ -55,6 +56,7 @@ describe("agentIn off the processes under the pane", () => {
     expect(agentIn("node", "app")).toBeNull();
     expect(agentIn("node", "fix the scan | app", [["-bash"], ["node", "/home/bun/.bun/install/global/node_modules/@openai/codex/bin/codex.js", "--no-daemon"]])).toBe("codex");
     expect(agentIn("node", "app", [["/home/bun/.bun/bin/codex", "resume"]])).toBe("codex");
+    expect(agentIn("node", "app", [["/home/bun/.bun/bin/agy", "--continue"]])).toBe("antigravity");
     expect(agentIn("node", "app", [["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"]])).toBe("claude");
   });
 
@@ -74,6 +76,7 @@ describe("continueLine", () => {
   test("either harness is offered a continue, a shell with no agent none", () => {
     expect(continueLine("claude")).toBe("claude --continue");
     expect(continueLine("codex")).toBe("codex resume --last --no-daemon");
+    expect(continueLine("antigravity")).toBe("agy --continue");
     expect(continueLine(null)).toBeNull();
   });
 
@@ -96,6 +99,7 @@ describe("resumeLine", () => {
   test("picks the shell's own conversation back up, not the folder's newest", () => {
     expect(resumeLine("claude", "abc")).toBe("claude --resume abc");
     expect(resumeLine("codex", "abc")).toBe("codex resume --no-daemon abc");
+    expect(resumeLine("antigravity", "abc")).toBe("agy --conversation abc");
   });
 
   test("the repo's settings ride along when they are the same harness's", () => {
@@ -175,6 +179,7 @@ describe("clip", () => {
 describe("parseKept", () => {
   test("reads a record back", () => {
     expect(parseKept(JSON.stringify(shell({ agent: "claude" })))).toEqual(shell({ agent: "claude" }));
+    expect(parseKept(JSON.stringify(shell({ agent: "antigravity" })))).toEqual(shell({ agent: "antigravity" }));
   });
 
   test("a hand-given name reads back cleaned; a blank one is none", () => {

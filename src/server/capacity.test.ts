@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_CAPACITY, HIT_GRACE, type CapacitySettings } from "../core/capacity";
 import type { CostEntry } from "../core/costs";
-import type { CapacityInfo, Harness, HeldStart, Run, ServerEvent } from "../core/types";
+import { HARNESSES, type CapacityInfo, type Harness, type HeldStart, type Run, type ServerEvent } from "../core/types";
 import { CapacityHub, type CapacityHubDeps } from "./capacity";
 
 let dir = "";
@@ -98,11 +98,11 @@ test("a file that cannot be read, or names a harness canopy lacks, starts clean 
   await writeFile(file, "{nope");
   const { h } = hub({ file });
   await h.start();
-  expect(h.list().map((capacity) => capacity.hit)).toEqual([null, null]);
+  expect(h.list().map((capacity) => capacity.hit)).toEqual(HARNESSES.map(() => null));
   await writeFile(file, JSON.stringify({ hits: { gemini: { window: "fiveHour", at: NOW, resetsAt: AT_3PM, text: "x" }, claude: { window: "fiveHour" } } }));
   const again = hub({ file });
   await again.h.start();
-  expect(again.h.list().map((capacity) => capacity.hit)).toEqual([null, null]);
+  expect(again.h.list().map((capacity) => capacity.hit)).toEqual(HARNESSES.map(() => null));
   again.h.onRun(limited());
   await sleep(10);
   expect(JSON.parse(await readFile(file, "utf8")).hits.claude.text).toBe(LIMIT);
@@ -127,10 +127,10 @@ test("a reader is asked at start, at every while a hit stands, at idle otherwise
   };
   const { h, events } = hub({ reader, timings: { every: 20, idle: 10_000 } });
   await h.start();
-  expect(calls).toBe(2);
+  expect(calls).toBe(HARNESSES.length);
   expect(h.get("claude")).toMatchObject({ fiveHour: { used: 0.32, resetsAt: Date.UTC(2026, 9, 26, 14, 10), readAt: NOW }, weekly: { used: 0.61 }, source: "endpoint" });
   await sleep(80);
-  expect(calls).toBe(2);
+  expect(calls).toBe(HARNESSES.length);
   const sent = events.length;
   h.onRun(limited());
   await sleep(120);
@@ -148,7 +148,7 @@ test("GET /api/capacity answers the info with no held starts; other paths are no
   expect(response.status).toBe(200);
   const info: unknown = await response.json();
   expect(info).toMatchObject({
-    capacity: [{ harness: "claude" }, { harness: "codex" }],
+    capacity: HARNESSES.map((harness) => ({ harness })),
     held: [],
     settings: { lowHold: 0.6 },
   });
@@ -223,7 +223,7 @@ test("POST /api/capacity/read refreshes; release starts a held start and refuses
   await h.start();
   const before = reads;
   expect((await post(h, "/api/capacity/read"))?.status).toBe(200);
-  expect(reads).toBe(before + 2);
+  expect(reads).toBe(before + HARNESSES.length);
   expect((await post(h, "/api/capacity/release", { id: "flow:f1" }))?.status).toBe(200);
   expect(released).toEqual(["flow:f1"]);
   expect((await post(h, "/api/capacity/release", { id: "flow:nope" }))?.status).toBe(404);
@@ -248,7 +248,7 @@ test("a harness's count is the reading with no endpoint and no figure: the event
   const file = join(dir, "heard.json");
   const { h, events } = hub({ file });
   await h.start();
-  expect(h.list().map((c) => c.source)).toEqual(["unknown", "unknown"]);
+  expect(h.list().map((c) => c.source)).toEqual(HARNESSES.map(() => "unknown"));
   const before = events.length;
   h.onHeard("claude", { weekly: { used: 0.56, resetsAt: THU_3PM } });
   h.onHeard("codex", { weekly: { used: 0.03, resetsAt: THU_3PM } });
@@ -256,7 +256,7 @@ test("a harness's count is the reading with no endpoint and no figure: the event
   expect(h.get("claude")).toEqual({ harness: "claude", fiveHour: null, weekly: { used: 0.56, resetsAt: THU_3PM, readAt: NOW }, source: "run", hit: null });
   expect(h.get("codex")).toMatchObject({ weekly: { used: 0.03 }, source: "run" });
   expect(events.length).toBe(before + 1);
-  expect(events.at(-1)?.capacity.map((c) => c.source)).toEqual(["run", "run"]);
+  expect(events.at(-1)?.capacity.map((c) => c.source)).toEqual(["run", "run", "unknown"]);
   expect(JSON.parse(await readFile(file, "utf8"))).toEqual({
     hits: {},
     windows: {

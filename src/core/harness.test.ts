@@ -173,7 +173,8 @@ describe("the argv table", () => {
 
   test("the harnesses a machine has, off a lookup by binary", () => {
     expect(presentHarnesses((b) => b === "claude")).toEqual(["claude"]);
-    expect(presentHarnesses(() => true)).toEqual(["claude", "codex"]);
+    expect(presentHarnesses(() => true)).toEqual(["claude", "codex", "antigravity"]);
+    expect(presentHarnesses((b) => b === "agy")).toEqual(["antigravity"]);
     expect(presentHarnesses(() => false)).toEqual([]);
   });
 });
@@ -195,4 +196,13 @@ describe("the shell's token in a typed line", () => {
     expect(agentShellCommand("/bin/zsh", pwned).at(-1)).toBe("claude '\u0001;echo' pwned");
     expect(agentLine(claude({ yolo: false }), "\u0001;echo pwned")).toBe("claude '\u0001;echo pwned'");
   });
+});
+
+ test("Antigravity shells use agy with model, effort, permissions and conversation flags", () => {
+  const agent = { ...DEFAULT_AGENT, harness: "antigravity", model: "gemini-pro", effort: "high", yolo: false } satisfies AgentSettings;
+  // agy's --mode has no name for its own default, which asks: ask passes nothing
+  expect(agentArgv(agent)).toEqual(["agy", "--model", "gemini-pro", "--effort", "high"]);
+  expect(resumeArgv(agent, "conversation-id").slice(-2)).toEqual(["--conversation", "conversation-id"]);
+  expect(continueArgv("antigravity", agent).at(-1)).toBe("--continue");
+  expect(takesProvider("antigravity", "local")).toBe(false);
 });

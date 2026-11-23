@@ -153,7 +153,7 @@ export class RunCosts {
     this.write({
       at: Date.now(),
       service: run.harness,
-      provider: run.result?.provider || run.agentSettings?.provider || (run.harness === "claude" ? "anthropic" : "openai"),
+      provider: run.result?.provider || run.agentSettings?.provider || (run.harness === "claude" ? "anthropic" : run.harness === "antigravity" ? "google" : "openai"),
       model: run.result?.model || (run.agentSettings?.model && run.agentSettings.model !== "default" ? run.agentSettings.model : null),
       repo: repo?.path ?? null,
       repoName: repo?.name ?? null,

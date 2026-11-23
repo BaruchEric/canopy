@@ -88,10 +88,10 @@ export const DEFAULT_PROFILE = "default";
  * lacks is a separate check (`Backend.harnesses`).
  */
 export const ROLE_HARNESSES: Record<AgentRole, readonly Harness[]> = {
-  shell: ["claude", "codex"],
-  chat: ["claude", "codex"],
-  job: ["claude", "codex"],
-  flow: ["claude", "codex"],
+  shell: ["claude", "codex", "antigravity"],
+  chat: ["claude", "codex", "antigravity"],
+  job: ["claude", "codex", "antigravity"],
+  flow: ["claude", "codex", "antigravity"],
   suggest: ["claude", "codex"],
   coordinate: ["claude"],
 };

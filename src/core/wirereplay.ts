@@ -19,6 +19,7 @@
  *  runlog.ts) and redacts the replay again on the way out (`redactReplay`).
  *  It runs on the server, since the prompts' words are the drivers'. */
 
+import { acpFold, acpPermissionPrompt, acpSession, acpTurn, foldAcp, ownSession } from "./acpfold";
 import { describeTool, FIRST_MESSAGE } from "./actions";
 import { PLAN_TURNED_DOWN } from "./claudedrive";
 import { claudeFold, foldClaude } from "./claudefold";
@@ -26,7 +27,7 @@ import { codexFold, codexThread, codexTurn, foldCodex, ownThread } from "./codex
 import { approvalPrompt, DISMISSED, questionPrompt } from "./codexrun";
 import { settleNote, type FoldOut, type PromptInput } from "./driver";
 import { redactLine, type Secret } from "./redact";
-import type { Harness, Run, RunAnswer, RunQuestion, RunReplay, RunStep } from "./types";
+import { isHarness, type Harness, type Run, type RunAnswer, type RunQuestion, type RunReplay, type RunStep } from "./types";
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -74,10 +75,10 @@ export interface ReplayOptions {
 export function replayWire(lines: readonly string[], run: Run, opts: ReplayOptions): RunReplay {
   const parsed = lines.map(parse).filter((v): v is Record<string, unknown> => v !== null);
   const start = parsed.find((v) => canopyLine(v) && v["canopy"] === "start");
-  const harness: Harness = start?.["harness"] === "codex" || start?.["harness"] === "claude" ? start["harness"] : run.harness;
+  const harness: Harness = isHarness(start?.["harness"]) ? start?.["harness"] : run.harness;
   const cut = parsed.some((v) => canopyLine(v) && v["canopy"] === "cut");
   const fold = new WireFold(run, opts);
-  const folded = harness === "codex" ? fold.codex(parsed) : fold.claude(parsed);
+  const folded = harness === "antigravity" ? fold.antigravity(parsed) : harness === "codex" ? fold.codex(parsed) : fold.claude(parsed);
   const asks = folded.asks.map((a) => a.step.id);
   if (folded.steps.filter(isWork).length > run.steps.filter(isWork).length) {
     return { source: "wire", steps: folded.steps, asks, cut };
@@ -279,6 +280,51 @@ class WireFold {
         foldClaude(state, m, this.out, { now: this.now });
       },
     );
+    return { steps: this.steps, asks: this.asks };
+  }
+
+  antigravity(parsed: readonly Record<string, unknown>[]): { steps: RunStep[]; asks: Ask[] } {
+    const state = acpFold(this.opts.cwd);
+    const key = (id: unknown): string => `${typeof id}:${String(id)}`;
+    const sent = new Map<string, string>();
+    const options = new Map<string, Map<string, string>>();
+    this.walk(parsed, (m) => {
+      const method = str(m, "method");
+      const id = m["id"];
+      if (!method) {
+        const outcome = rec(rec(m["result"])["outcome"]);
+        const kind = options.get(key(id))?.get(str(outcome, "optionId"));
+        this.settle(key(id), () => str(outcome, "outcome") === "selected" && (kind === "allow_once" || kind === "allow_always") ? { kind: "allow" } : { kind: "deny" });
+        options.delete(key(id));
+        return;
+      }
+      if (id !== undefined) sent.set(key(id), method);
+      const params = rec(m["params"]);
+      if (method === "session/load") state.session = str(params, "sessionId") || null;
+      if (method === "session/prompt") {
+        acpTurn(state, this.now);
+        const blocks = Array.isArray(params["prompt"]) ? params["prompt"] : [];
+        this.said(blocks.filter(isRecord).filter((b) => str(b, "type") === "text").map((b) => str(b, "text")).join("\n"));
+      }
+    }, (m) => {
+      const method = str(m, "method");
+      const id = m["id"];
+      if (!method) {
+        const asked = sent.get(key(id));
+        if (asked === "session/new" || asked === "session/load") acpSession(state, rec(m["result"]));
+        sent.delete(key(id));
+        return;
+      }
+      const params = rec(m["params"]);
+      if (!ownSession(state, params)) return;
+      if (method === "session/request_permission" && id !== undefined) {
+        const raw = Array.isArray(params["options"]) ? params["options"] : [];
+        options.set(key(id), new Map(raw.filter(isRecord).map((o) => [str(o, "optionId"), str(o, "kind")])));
+        this.ask(key(id), acpPermissionPrompt(params, state.cwd));
+        return;
+      }
+      foldAcp(state, method, params, this.out, this.now);
+    });
     return { steps: this.steps, asks: this.asks };
   }
 

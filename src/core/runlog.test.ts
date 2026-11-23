@@ -38,6 +38,14 @@ test("wire directions are ordered and redacted before writing, then settle is on
   expect(existsSync(join(log.folder, WIRE))).toBe(false);
 });
 
+test("kept run records accept Antigravity as a harness", async () => {
+  const value = run({ id: "agy-run", harness: "antigravity" });
+  const log = open(join(root, "antigravity"), value);
+  await log.settle(value);
+  expect(await readKeptRun(join(root, "antigravity"), value.id)).toMatchObject({ harness: "antigravity" });
+  expect(await listKept(join(root, "antigravity"))).toMatchObject([{ harness: "antigravity" }]);
+});
+
 test("an out line after a quiet spell is stamped by a tick, and readWire reads the wire plain or gzipped", async () => {
   const dir = join(root, "ticks");
   const times = [100, 100 + WIRE_TICK - 1, 100 + WIRE_TICK + 50, 100 + WIRE_TICK + 60, 100 + 3 * WIRE_TICK, 100 + 3 * WIRE_TICK + 10];

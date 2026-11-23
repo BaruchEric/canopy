@@ -81,7 +81,7 @@ export function AgentSettingsForm({
               ? `${HARNESS[x].label} is not installed on ${machine}`
               : !allowed.includes(x)
                 ? `${HARNESS[x].label} cannot run this yet`
-                : `Start ${HARNESS[x].label === "claude" ? "Claude Code" : "Codex"}`,
+                : `Start ${x === "claude" ? "Claude Code" : x === "codex" ? "Codex" : "Antigravity"}`,
           }))}
           onChange={(x) => onChange(withHarness(value, x))}
         />
@@ -114,7 +114,7 @@ export function AgentSettingsForm({
               ))}
             </datalist>
             <p className={modelError ? "settings-hint error" : "settings-hint"}>
-              {modelError ? "A model name is one plain word, not a flag or claude's own alias." : "Any model codex knows; default leaves it to codex's config."}
+              {modelError ? "A model name is one plain word, not a flag or claude's own alias." : value.harness === "antigravity" ? "An id from agy models, such as gemini-4-neon-high, or a bare model with an effort; default leaves it to agy." : "Any model codex knows; default leaves it to codex's config."}
             </p>
           </>
         ) : (
@@ -126,7 +126,7 @@ export function AgentSettingsForm({
           />
         )}
       </section>
-      <section className="settings-row">
+      {value.harness !== "antigravity" && <section className="settings-row">
         <h3 className="panel-label">provider</h3>
         <input
           type="text"
@@ -151,7 +151,7 @@ export function AgentSettingsForm({
               ? `Use an ID from ${machine}'s Codex config. Blank or default follows that config; Canopy stores only the ID, not credentials.`
               : `A settings file on ${machine}, ~/.config/canopy/providers/<ID>.json, passed as --settings wherever Claude starts for this route: its env block names the gateway (ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL), which puts the agent on a local or another model. Blank or default keeps the login; Canopy stores only the ID.`}
         </p>
-      </section>
+      </section>}
       <section className="settings-row">
         <h3 className="panel-label">effort</h3>
         <Seg
@@ -191,7 +191,7 @@ export function AgentSettingsForm({
         <input
           type="text"
           className="agent-extra"
-          placeholder={value.harness === "codex" ? "--search --add-dir ../shared" : "--add-dir ../shared --name work"}
+          placeholder={value.harness === "antigravity" ? "Shell flags only; leave blank for runs" : value.harness === "codex" ? "--search --add-dir ../shared" : "--add-dir ../shared --name work"}
           value={extra}
           onChange={(e) => setExtra(e.target.value)}
           onBlur={saveExtra}

@@ -902,9 +902,9 @@ export const isJobActive = (j: Job): boolean => j.status === "working";
 
 /* ---------- agent settings: which harness starts, and how, for a repo ---------- */
 
-/** The agent harnesses canopy starts: Claude Code and Codex. What differs
+/** The agent harnesses canopy starts: Claude Code, Codex and Antigravity. What differs
  *  between them (flags, resume, sessions) is a table in core/harness. */
-export const HARNESSES = ["claude", "codex"] as const;
+export const HARNESSES = ["claude", "codex", "antigravity"] as const;
 export type Harness = (typeof HARNESSES)[number];
 
 export const isHarness = (v: unknown): v is Harness => typeof v === "string" && (HARNESSES as readonly string[]).includes(v);

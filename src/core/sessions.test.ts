@@ -8,6 +8,7 @@ import {
   codexDayDirs,
   codexSessions,
   hasClaudeSession,
+  hasAgentSession,
   hasCodexSession,
   isSessionId,
   parseCodexHead,
@@ -15,6 +16,7 @@ import {
   parseSessionHead,
   projectFolder,
   resumeLine,
+  newestTranscript,
   transcriptFile,
 } from "./sessions";
 import { DEFAULT_AGENT } from "./types";
@@ -70,6 +72,21 @@ describe("which conversations a repo has", () => {
     expect(resumeLine(A, { ...DEFAULT_AGENT, harness: "codex", model: "gpt-5.5" })).toBe(
       `codex resume -m gpt-5.5 --dangerously-bypass-approvals-and-sandbox --no-daemon ${A}`,
     );
+  });
+
+  test("Antigravity session files are unavailable rather than Claude files by fallback", async () => {
+    const home = await mkdtemp(join(tmpdir(), "canopy-antigravity-sessions-"));
+    try {
+      const dir = join(home, "projects", projectFolder("/srv/dev/app"));
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, `${A}.jsonl`), line({ type: "user", message: { content: "Claude transcript" } }));
+      const homes = { claude: home };
+      expect(await hasAgentSession("antigravity", "/srv/dev/app", A)).toBe(false);
+      expect(await newestTranscript("antigravity", "/srv/dev/app", homes)).toBeNull();
+      expect(await transcriptFile("antigravity", "/srv/dev/app", A, homes)).toBeNull();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });
 

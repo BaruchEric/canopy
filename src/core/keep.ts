@@ -50,6 +50,7 @@ export function argvAgent(argv: readonly string[]): AgentKind | null {
   for (const w of argv.slice(0, 2)) {
     if (/\/@openai\/codex\//.test(w) || /(^|\/)codex(\.js)?$/.test(w)) return "codex";
     if (/\/@anthropic-ai\/claude-code\//.test(w) || /(^|\/)claude$/.test(w)) return "claude";
+    if (/(^|\/)agy(\.js)?$/.test(w)) return "antigravity";
   }
   return null;
 }
@@ -72,6 +73,7 @@ export function agentIn(command: string, title: string, argvs: readonly (readonl
   const head = title.trim().toLowerCase().replace(/^✳\s*/, "");
   if (name.startsWith("claude") || head.startsWith("claude")) return "claude";
   if (name.startsWith("codex") || head.startsWith("codex")) return "codex";
+  if (name.startsWith("agy") || head.startsWith("agy") || head.startsWith("antigravity")) return "antigravity";
   // Claude Code's process title is its version, and nothing else canopy
   // starts in a shell looks like one
   if (/^\d+\.\d+\.\d+/.test(name)) return "claude";
@@ -161,7 +163,7 @@ export function parseKept(raw: string): KeptShell | null {
   const path = typeof o.path === "string" ? o.path : "";
   if (!isTermId(id) || !repoId || !path) return null;
   const num = (x: unknown, fallback: number): number => (typeof x === "number" && Number.isFinite(x) ? x : fallback);
-  const agent = o.agent === "claude" || o.agent === "codex" ? o.agent : null;
+  const agent = o.agent === "claude" || o.agent === "codex" || o.agent === "antigravity" ? o.agent : null;
   const savedAt = num(o.savedAt, 0);
   const label = typeof o.label === "string" ? cleanLabel(o.label) : undefined;
   const session = typeof o.session === "string" && o.session !== "" ? o.session : undefined;

@@ -2377,7 +2377,7 @@ async function startForkRun(state: ServerState, b: Record<string, unknown>, clie
     if (agent.harness === "codex") {
       how = "whole";
       resume = session;
-    } else {
+    } else if (agent.harness === "claude") {
       let lines: string[] | null = null;
       for (const file of await transcriptPaths(originalCwd, session)) lines ??= await readTranscript(file);
       if (lines) {

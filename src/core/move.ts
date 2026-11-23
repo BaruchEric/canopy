@@ -154,6 +154,7 @@ const SPLIT = "this machine already has a different copy of that conversation";
  *  split: an earlier copy may be replaced only when it is a line-for-line
  *  prefix of this one (the same conversation, moved here before) */
 async function placing(o: PlaceTranscript): Promise<{ file: string; had: string | null; split: boolean }> {
+  if (o.harness === "antigravity") throw new MoveError(501, "Antigravity session moves are unavailable");
   if (!isSessionId(o.session)) throw new MoveError(400, "session must be a session id");
   if (o.text.length > MOVE_MAX) throw new MoveError(413, "the transcript is over 64 MB");
   let file: string;
@@ -204,7 +205,7 @@ export interface PaneDriver {
 }
 
 /** the command each harness quits on */
-export const QUIT: Record<Harness, string> = { claude: "/exit", codex: "/quit" };
+export const QUIT: Record<Harness, string> = { claude: "/exit", codex: "/quit", antigravity: "/exit" };
 
 /** true once the pane is back at its shell before `until`; a read that
  *  fails counts as not yet */

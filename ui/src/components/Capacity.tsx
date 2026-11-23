@@ -18,6 +18,7 @@ const errText = (e: unknown): string => (e instanceof Error ? e.message : String
  *  whose stream carries the harness's own count of its windows. The costs
  *  view adds Claude's stopgap, the dollar figure in the form below it. */
 const readingHint = (row: CapacityRow, where: "chip" | "costs"): string => {
+  if (row.cap.harness === "antigravity") return "Antigravity does not report account usage windows through ACP";
   const next = `the next ${AGENT_NAME[row.cap.harness]} run ${row.backend ? `on ${row.backend}` : "here"} reports it`;
   return where === "costs" && row.cap.harness === "claude" ? `${next}; until then a 5-hour window in Claude $ below estimates it from the ledger` : next;
 };

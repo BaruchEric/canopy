@@ -180,7 +180,7 @@ export async function suggestMessage(
     if (agent.harness === "codex") {
       const message = await askCodex(bin, repoPath, agent, context, o);
       if (message) return { message, source: "ai" };
-    } else {
+    } else if (agent.harness === "claude") {
       const r = await claudeSuggest(bin, agent, context, o);
       const message = r.stdout.trim();
       if (r.code === 0 && message) return { message, source: "ai" };

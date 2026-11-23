@@ -14,6 +14,18 @@ export interface ExportInfo {
   now?: number;
 }
 
+function agentName(harness: Run["harness"]): string {
+  switch (harness) {
+    case "claude": return "Claude Code";
+    case "codex": return "Codex";
+    case "antigravity": return "Google Antigravity";
+    default: {
+      const exhaustive: never = harness;
+      return exhaustive;
+    }
+  }
+}
+
 /**
  * Make a Markdown excerpt for a FEATURES.md source line or a bug report from
  * run.json's settled steps. This reads the kept run, not the wire; plan 2
@@ -36,7 +48,7 @@ export function exportRun(run: Run, secrets: readonly Secret[], info: ExportInfo
     "",
     `- run: ${run.id}`,
     `- action: ${run.action}`,
-    `- agent: ${run.harness === "claude" ? "Claude Code" : "Codex"}, model ${model}`,
+    `- agent: ${agentName(run.harness)}, model ${model}`,
     `- when: ${new Date(run.startedAt).toISOString()} to ${endLabel}, ${duration}`,
     `- cost: ${cost}`,
     ...(run.note !== "" ? [`- note: ${run.note}`] : []),

@@ -151,7 +151,7 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
     );
   }
 
-  const codex = loadout.harness === "codex";
+  const ownSettings = loadout.harness !== "claude";
   const table = HARNESS[loadout.harness];
   const models = table.models.includes(picks.model) ? table.models : [...table.models, picks.model];
   const efforts = table.efforts.includes(picks.effort as (typeof table.efforts)[number]) ? table.efforts : [...table.efforts, picks.effort as (typeof table.efforts)[number]];
@@ -168,8 +168,8 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
     picks.model !== "default" ? picks.model : "",
     picks.effort !== "default" ? `effort ${picks.effort}` : "",
     providerWord ? `on ${providerWord}` : "",
-    codex ? "" : count(picks.skills.length, "skill"),
-    codex ? "" : count(here.length, "server"),
+    ownSettings ? "" : count(picks.skills.length, "skill"),
+    ownSettings ? "" : count(here.length, "server"),
   ].filter(Boolean).join(", ");
 
   const choose = (l: Loadout) => {
@@ -213,6 +213,7 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
           <Segment values={models} on={picks.model} pick={(model) => setPicks({ ...picks, model })} />
           <h3>effort</h3>
           <Segment values={efforts} on={picks.effort} pick={(effort) => setPicks({ ...picks, effort })} />
+          {loadout.harness !== "antigravity" && <>
           <h3>provider</h3>
           <div className="mgr-equip-seg">
             <button type="button" aria-pressed={picks.provider === "" || picks.provider === loadout.provider} title={loadout.provider ? "The loadout's provider" : "The provider the repo's route names, if any"} onClick={() => setPicks({ ...picks, provider: "" })}>
@@ -227,14 +228,15 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
               </button>
             ))}
           </div>
+          </>}
         </section>
 
         <section aria-label="skills">
           <h3>
-            skills <span className="mgr-equip-count">{codex ? 0 : picks.skills.length}</span>
+            skills <span className="mgr-equip-count">{ownSettings ? 0 : picks.skills.length}</span>
           </h3>
-          {codex ? (
-            <p className="mgr-equip-note">A Codex worker takes model and effort only.</p>
+          {ownSettings ? (
+            <p className="mgr-equip-note">{loadout.harness === "codex" ? "A Codex" : "An Antigravity"} worker takes model and effort only.</p>
           ) : (
             <>
               <p className="mgr-equip-note">Only the checked skills load, plus the base skills of the kit. Every other skill stays off for this worker.</p>
@@ -260,10 +262,10 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
 
         <section aria-label="servers">
           <h3>
-            servers <span className="mgr-equip-count">{codex ? 0 : here.length}</span>
+            servers <span className="mgr-equip-count">{ownSettings ? 0 : here.length}</span>
           </h3>
-          {codex ? (
-            <p className="mgr-equip-note">A Codex worker takes model and effort only.</p>
+          {ownSettings ? (
+            <p className="mgr-equip-note">{loadout.harness === "codex" ? "A Codex" : "An Antigravity"} worker takes model and effort only.</p>
           ) : servers.length === 0 ? (
             <p className="mgr-equip-note">The kit lists no servers a card can take.</p>
           ) : (

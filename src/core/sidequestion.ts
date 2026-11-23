@@ -37,7 +37,7 @@ export function withoutSideWord(text: string): string {
 }
 
 /** What `sideRefusal` reads of a run. */
-export type SideParent = Pick<Run, "status" | "action" | "session" | "sideOf" | "kept">;
+export type SideParent = Pick<Run, "status" | "action" | "session" | "sideOf" | "kept"> & Partial<Pick<Run, "harness">>;
 
 /** Why a run takes no side question now, or null. A side question forks
  *  the run's session, so the run has to be going and to have one. Both
@@ -45,6 +45,7 @@ export type SideParent = Pick<Run, "status" | "action" | "session" | "sideOf" | 
 export function sideRefusal(run: SideParent): string | null {
   if (run.kept || !isRunActive(run)) return "the run has ended, and a side question is asked beside one that is going; fork it to go on from its end";
   if (run.action === "coordinate") return "a coordinator takes no side question";
+  if (run.harness === "antigravity") return "Antigravity session forking is not supported yet";
   if (run.sideOf) return "this is a side question already: ask it here, or beside the run it started from";
   if (!run.session) return "the run has no session to fork yet: ask once it has begun";
   return null;

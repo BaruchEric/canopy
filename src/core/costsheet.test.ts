@@ -86,6 +86,18 @@ test("canopy's Claude rows sit on their runs but are not added to the archive's 
   expect(chat).toMatchObject({ label: "chat", usd: 0.4, seconds: 120, detail: "api · Claude Code + Voice" });
 });
 
+test("Google Antigravity usage stays its own cost service", () => {
+  const sheet = costSheet(
+    [row({ service: "antigravity", provider: "google", tokens: { input: 10, cachedInput: 0, output: 2, reasoning: 0, total: 12 }, run: "r-agy", label: "ask" })],
+    null,
+    7,
+    cards,
+  );
+  expect(sheet.services.map((line) => line.key)).toEqual(["antigravity:google"]);
+  expect(sheet.services[0]).toMatchObject({ tokens: 12, unpriced: 1 });
+  expect(sheet.services.map((line) => line.key)).not.toContain("claude:anthropic");
+});
+
 test("custom providers stay distinct in service and run usage lines", () => {
   const sheet = costSheet(
     [

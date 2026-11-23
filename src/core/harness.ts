@@ -1,5 +1,5 @@
 /**
- * The agent harnesses canopy starts, Claude Code and Codex, as one table:
+ * The agent harnesses canopy starts, Claude Code, Codex and Antigravity, as one table:
  * everything that differs between them (the binary, how a model, an effort
  * and yolo are spelled on its command line, how a conversation is resumed
  * or continued) is a lookup here, so nothing above it branches on the
@@ -84,7 +84,7 @@ export const PROVIDER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
  *  names the gateway (ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN,
  *  ANTHROPIC_MODEL), so a run or a shell can go to a local model. */
 export function takesProvider(h: Harness, provider: unknown): provider is string {
-  return isHarness(h) && typeof provider === "string" && provider !== "default" && PROVIDER_RE.test(provider);
+  return isHarness(h) && h !== "antigravity" && typeof provider === "string" && provider !== "default" && PROVIDER_RE.test(provider);
 }
 
 /** The launch with a Claude provider resolved to `providers`, this
@@ -158,7 +158,28 @@ const CODEX: HarnessInfo = {
   askTitle: "Codex asks before commands, in the workspace-write sandbox (-a on-request -s workspace-write)",
 };
 
-export const HARNESS: Record<Harness, HarnessInfo> = { claude: CLAUDE, codex: CODEX };
+const ANTIGRAVITY: HarnessInfo = {
+  id: "antigravity",
+  label: "antigravity",
+  glyph: "△",
+  binary: "agy",
+  models: ["default"],
+  openModels: true,
+  providerArgs: () => [],
+  efforts: ["default", "low", "medium", "high", "xhigh", "max"],
+  modelArgs: (m) => m === "default" ? [] : ["--model", m],
+  effortArgs: (e) => e === "default" ? [] : ["--effort", e],
+  // agy's --mode takes accept-edits, auto or plan; its unnamed default asks
+  permissionArgs: (yolo) => yolo ? ["--dangerously-skip-permissions"] : [],
+  always: [],
+  envArgs: () => [],
+  resume: (flags, session) => [...flags, "--conversation", session],
+  continue: (flags) => [...flags, "--continue"],
+  yoloTitle: "Skip every permission prompt (--dangerously-skip-permissions)",
+  askTitle: "Antigravity asks before actions its permission rules do not allow",
+};
+
+export const HARNESS: Record<Harness, HarnessInfo> = { claude: CLAUDE, codex: CODEX, antigravity: ANTIGRAVITY };
 
 /** Whether a harness takes this model: "default" always, a closed list's
  *  own names, or for an open list any plain name but another harness's

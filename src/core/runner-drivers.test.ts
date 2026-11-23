@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startStageRunner, type RunnerOptions as StageRunnerOptions } from "../stage/runner";
 import { ACTIONS } from "./actions";
+import { AntigravityDriver } from "./antigravity";
 import { ClaudeDriver } from "./claudedrive";
 import { goalAnchor } from "./coordinator";
 import { bunSpawn, type RpcSpawn } from "./codexrpc";
@@ -1075,4 +1076,11 @@ describe("remembered rules and stages", () => {
     if (!ctx) throw new Error("the driver never started");
     expect(await ctx.ask(ls, "0")).toEqual({ kind: "allow" });
   });
+});
+
+test("Antigravity gets its own driver and cannot start in an isolated stage", () => {
+  expect(defaultDriver("antigravity")).toBeInstanceOf(AntigravityDriver);
+  const { runner, made } = setup({ stage: () => true });
+  expect(() => runner.start(repo("google"), "ask", ACTIONS.ask, "do x", { ...DEFAULT_AGENT, harness: "antigravity" })).toThrow("Antigravity is not supported in the incubator stage runner");
+  expect(made).toEqual([]);
 });

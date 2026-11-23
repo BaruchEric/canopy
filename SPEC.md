@@ -16,7 +16,7 @@ How to keep this file (shared repo spec 1.0.0):
 
 ## What it is
 
-A workbench for building software with Claude across every repo and machine you have: a live board of every git repo under a folder, shells that outlive the page, and Claude Code run as shells, jobs, chats and workflows. Web UI and a full CLI.
+A workbench for building software with Claude across every repo and machine you have: a live board of every git repo under a folder, shells that outlive the page, and Claude Code, Codex or Google Antigravity run as shells, jobs, chats and workflows. Web UI and a full CLI.
 
 ## Who uses it
 
@@ -136,6 +136,7 @@ canopy ui ~/dev
 - 2026-11-22: More than one person signs in to a backend, each with a role that caps what their tokens hold, and a team is a focus on folders and never a wall (FR-074), on Eric's ask. This reverses "not built for teams" and the out-of-scope line on multi-user accounts. A role guards the API and a team sorts the board, because whoever may start a run or open a shell already acts as canopy's OS user; a real wall is a second backend. Identity is an invite link or an approved device, with no passwords, because the tailnet and the edge proxy already say who reaches the page.
 - 2026-11-23: A team's folders are a wall for the API after all (FR-074, plan 2), on Eric's "do Recommendations". A member or viewer on a team with folders reaches only the routes `core/scope.ts` files, lists and events are cut to their repos, and every other route is a 403 in every mode, so a route nobody files stays closed. It is exact for a viewer and soft for a member, whose agent or shell still runs as canopy's OS user, so a group that must not read another's files still gets a backend of its own. The page keeps to the wall and to a role itself and asks the backend for nothing it would refuse.
 - 2026-11-23: A group that must not read another's files gets a tenant, a second canopy on the host (FR-074, plan 3, `canopy tenant add`). On the mini it is a compose project from the main stack's images with only the tenant's folder and a home of its own mounted, none of the owner's logins, keys or secrets, one port on loopback and `tailscale serve` for https on the tailnet. On a Mac it is a launchd agent on loopback with its own config dir and HOME: its people, callers and claude login are its own, its files are not, so the Mac's is no wall. A tenant starts with no claude login, so a Max plan is never shared by default.
+- 2026-11-23: Google Antigravity is a third harness (FR-081), run as the backend's own `agy` CLI on its own Google login, like claude and codex. A run speaks the Agent Client Protocol to `agy acp`, which sends each permission request as a message the page can answer, the way Claude Code's stream-json and Codex's app-server do. canopy answers each of agy's permission requests "allow once" and keeps allow-all itself, so nothing a run allows lands in agy's settings. Provider, skills, kit servers, the coordinator, suggestions, stages, session moves and side-question forks stay with claude and codex and are refused in words, since agy has no gateway setting and keeps its conversations where canopy does not read them. The flags and wire shapes were read off agy 1.5.15.
 
 ## Out of scope
 

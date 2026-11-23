@@ -124,6 +124,20 @@ test("accounting rows keep the resolved route and prefer reported Codex provider
   expect(rows[1]).toMatchObject({ service: "codex", provider: "team_fallback", model: "gpt-selected", tokens: { total: 11 } });
 });
 
+test("Antigravity rows default to Google's provider", async () => {
+  const rows: CostEntry[] = [];
+  const costs = new RunCosts((e) => rows.push(e), () => null);
+  costs.onRun({
+    id: "r-antigravity",
+    repoId: "api",
+    harness: "antigravity",
+    verb: "ask",
+    result: { text: "done", durationMs: 1, turns: 1, tokens: { input: 10, cachedInput: 0, output: 2, reasoning: 0, total: 12 } },
+  } as Run);
+  await costs.settled();
+  expect(rows[0]).toMatchObject({ service: "antigravity", provider: "google", tokens: { total: 12 } });
+});
+
 test("Claude rows retain both reported dollars and tokens", async () => {
   const rows: CostEntry[] = [];
   const costs = new RunCosts((e) => rows.push(e), () => null);

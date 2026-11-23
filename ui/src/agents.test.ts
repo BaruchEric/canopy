@@ -103,7 +103,7 @@ describe("the effective table", () => {
   });
 
   test("a shell at a repo on another host may start any harness: it runs there", () => {
-    expect(startHarnesses({ openers: false, sshHost: null, harnesses: ["claude"] }, "qnap")).toEqual(["claude", "codex"]);
+    expect(startHarnesses({ openers: false, sshHost: null, harnesses: ["claude"] }, "qnap")).toEqual(["claude", "codex", "antigravity"]);
     expect(startHarnesses({ openers: false, sshHost: null, harnesses: ["claude"] }, null)).toEqual(["claude"]);
   });
 
@@ -153,7 +153,7 @@ describe("editing a repo's override", () => {
   });
 
   test("the whole repo and every role may be either harness", () => {
-    expect(slotHarnesses("all")).toEqual(["claude", "codex"]);
-    for (const role of ["shell", "chat", "job", "flow", "suggest"] as const) expect(slotHarnesses(role)).toEqual(["claude", "codex"]);
+    expect(slotHarnesses("all")).toEqual(["claude", "codex", "antigravity"]);
+    for (const role of ["shell", "chat", "job", "flow", "suggest"] as const) expect(slotHarnesses(role)).toEqual(role === "suggest" ? ["claude", "codex"] : ["claude", "codex", "antigravity"]);
   });
 });

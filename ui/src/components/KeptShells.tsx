@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { HARNESS } from "../../../src/core/harness";
 import { escapeCloses } from "../surface";
 import { homeConn, idParts, useStore } from "../store";
 import { registry } from "../registry";
@@ -282,7 +283,7 @@ export function KeptPopBody() {
                           type="button"
                           className="mini"
                           disabled={locked}
-                          title={`Restores the shell and runs ${k.agent === "codex" ? "codex resume --last" : "claude --continue"} in it`}
+                          title={`Restores the shell and runs ${HARNESS[k.agent].binary} ${HARNESS[k.agent].continue([]).join(" ")} in it`}
                           onClick={() => void run(k.id, () => restoreShell(k.id, true))}
                         >
                           restore + continue

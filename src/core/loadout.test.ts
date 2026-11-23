@@ -40,7 +40,7 @@ test.each([
   [{ "Bad Name": {} }, "loadouts.Bad Name: a name of lowercase letters, digits and dashes"],
   [{ a: "x" }, "loadouts.a: not an object"],
   [{ a: { skill: [] } }, "loadouts.a.skill: not a loadout field"],
-  [{ a: { harness: "gpt" } }, "loadouts.a.harness: claude or codex"],
+  [{ a: { harness: "gpt" } }, "loadouts.a.harness: claude, codex or antigravity"],
   [{ a: { model: "gpt-5" } }, "loadouts.a.model: claude does not take gpt-5"],
   [{ a: { effort: "turbo" } }, "loadouts.a.effort: claude does not take turbo"],
   [{ a: { skills: "x" } }, "loadouts.a.skills: a list of skill names"],
@@ -357,4 +357,14 @@ test("a card may change the provider to one of the loadout's harness", () => {
   expect(cardLoadout({ loadout: "feature" }, info)).not.toHaveProperty("provider");
   // default is the login, over the loadout's provider and the route's
   expect(cardLoadout({ loadout: "feature", provider: "default" }, info)).toMatchObject({ provider: "default" });
+});
+
+test("Antigravity loadouts select models but reject Claude skills and kit servers", () => {
+  const parsed = parseLoadouts({ loadouts: { google: { harness: "antigravity", model: "gemini-pro", effort: "high" } } }, kit);
+  expect(parsed.errors).toEqual([]);
+  expect(parsed.loadouts[0]).toMatchObject({ harness: "antigravity", model: "gemini-pro", effort: "high" });
+  expect(parseLoadouts({ loadouts: { google: { harness: "antigravity", skills: ["review"], mcp: ["executor"] } } }, kit).errors).toEqual([
+    "loadouts.google.skills: an Antigravity loadout takes no skills",
+    "loadouts.google.mcp: an Antigravity loadout takes no servers",
+  ]);
 });

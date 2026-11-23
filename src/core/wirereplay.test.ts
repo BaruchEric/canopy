@@ -187,3 +187,21 @@ describe("a steered run's kept wire (FR-066)", () => {
     expect(texts).toContain("done with bun");
   });
 });
+
+test("Antigravity replay rebuilds text and permission answers without interpreting Claude events", () => {
+  const incoming = (v: unknown) => line({ canopy: "in", at: 1001, line: line(v) });
+  const got = replayWire([
+    start("antigravity"),
+    incoming({ jsonrpc: "2.0", id: 1, method: "session/new", params: { cwd: "/repo" } }),
+    line({ jsonrpc: "2.0", id: 1, result: { sessionId: "google-session" } }),
+    incoming({ jsonrpc: "2.0", id: 2, method: "session/prompt", params: { sessionId: "google-session", prompt: [{ type: "text", text: "framed" }] } }),
+    line({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "google-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Checking files" } } } }),
+    line({ jsonrpc: "2.0", id: 9, method: "session/request_permission", params: { sessionId: "google-session", toolCall: { toolCallId: "t1", title: "git status", kind: "execute" }, options: [{ optionId: "yes", kind: "allow_once", name: "Allow" }] } }),
+    incoming({ jsonrpc: "2.0", id: 9, result: { outcome: { outcome: "selected", optionId: "yes" } } }),
+    line({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "another-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "wrong session" } } } }),
+    line(say("not ACP")),
+  ], run({ harness: "antigravity" }), opts);
+  expect(got.source).toBe("wire");
+  expect(got.steps.map((s) => s.text)).toEqual(["Checking files", "asked: git status", "allowed: git status"]);
+  expect(got.asks).toHaveLength(1);
+});

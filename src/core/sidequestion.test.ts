@@ -100,3 +100,7 @@ describe("what the forked session is told", () => {
     expect(sideNote("migrate checkout")).toBe('a side question beside "migrate checkout", on a fork of its session as it stood; that run got no message and works on');
   });
 });
+
+test("Antigravity side questions refuse session forks", () => {
+  expect(sideRefusal({ harness: "antigravity", status: "working", action: "ask", session: "s-1" })).toContain("Antigravity session forking");
+});

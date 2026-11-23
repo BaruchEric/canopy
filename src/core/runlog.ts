@@ -8,7 +8,7 @@ import type { WireDir } from "./driver";
 import { PRIVATE_ENV, TRIGGER_ENV_PREFIX } from "./envnames";
 import { PLAIN_SETTINGS, redactArgv, redactLine, secretValues, type Secret } from "./redact";
 import { configDir } from "./store";
-import { AGENT_EFFORTS, PRIORITIES, type CardEquip, type Harness, type KeptRunHead, type Run, type RunBranch, type RunStep } from "./types";
+import { AGENT_EFFORTS, isHarness, PRIORITIES, type CardEquip, type Harness, type KeptRunHead, type Run, type RunBranch, type RunStep } from "./types";
 
 export const RUN_LOG_MAX = 50 * 1024 * 1024;
 /** Out lines carry no time of their own: one comes after a `tick` line once
@@ -59,7 +59,7 @@ const optional = (v: Record<string, unknown>, key: string, check: (x: unknown) =
 const strFields = (v: Record<string, unknown>, keys: readonly string[]): boolean => keys.every((key) => text(v[key]));
 const optStrFields = (v: Record<string, unknown>, keys: readonly string[]): boolean => keys.every((key) => optional(v, key, text));
 const terminal = (v: unknown): v is Terminal => v === "done" || v === "failed" || v === "stopped" || v === "limited";
-const harness = (v: unknown): v is Harness => v === "claude" || v === "codex";
+const harness = (v: unknown): v is Harness => isHarness(v);
 const errText = (e: unknown): string => e instanceof Error ? e.message : String(e);
 
 function isBranch(v: unknown): v is RunBranch {

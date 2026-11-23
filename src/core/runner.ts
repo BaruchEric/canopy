@@ -14,6 +14,7 @@
 import { ACTIONS, branchPrompt, buildPrompt, busyWith, checkoutFull, sharingNote, type ActionSpec } from "./actions";
 import { normalizeAgent } from "./agent";
 import { CapacityHeldError, type Decision, type Heard } from "./capacity";
+import { AntigravityDriver, antigravityArgs } from "./antigravity";
 import { ClaudeDriver, cliArgs } from "./claudedrive";
 import { isGoalAnchor } from "./coordinator";
 import type { RpcProc } from "./codexrpc";
@@ -259,6 +260,7 @@ function stageRefusal(client: StageClient, harness: Harness): string | null {
 
 /** The driver a harness gets when nothing is swapped in. */
 export function defaultDriver(harness: Harness, version = "0"): RunDriver {
+  if (harness === "antigravity") return new AntigravityDriver({ client: { name: "canopy", title: "canopy", version } });
   return harness === "codex"
     ? new CodexDriver({ client: { name: "canopy", title: "canopy", version } })
     : new ClaudeDriver();
@@ -266,6 +268,7 @@ export function defaultDriver(harness: Harness, version = "0"): RunDriver {
 
 /** The command line each driver builds from these same resolved settings. */
 export function startArgv(harness: Harness, spec: DriveSpec, agent: AgentSettings, stage: boolean): string[] {
+  if (harness === "antigravity") return ["agy", ...antigravityArgs(spec, agent)];
   return harness === "claude" ? ["claude", ...cliArgs(spec, agent, stage)] : ["codex", ...appServerArgs(agent, spec.mcpServer)];
 }
 
@@ -522,6 +525,7 @@ export class Runner {
       if (decision !== "go") throw new CapacityHeldError(decision);
     }
     const stage = this.opts.stage?.(repo) ?? false;
+    if (stage && settings.harness === "antigravity") throw new Error("Antigravity is not supported in the incubator stage runner");
     if (branch && stage) throw new Error("an incubator stage works in its seed, not on a branch");
     const cwd = extras.cwd ?? (branch ? branch.branch.dir : repo.path);
     // a coordinator runs through its own runner, never the stages'

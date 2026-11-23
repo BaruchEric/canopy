@@ -142,6 +142,7 @@ export function classify(comm: string, argv: readonly string[]): Harness | null 
   const name = base(comm).toLowerCase();
   if (name === "claude") return "claude";
   if (name === "codex") return "codex";
+  if (name === "agy") return "antigravity";
   const head = base(argv[0] ?? "").toLowerCase();
   if (VERSION.test(name)) {
     const claude = [comm, ...argv.slice(0, 2)].some((w) => /claude/i.test(w)) || VERSION.test(head);
@@ -242,6 +243,7 @@ export function scanStates(
   const states = new Map<number, "working" | "idle">();
   const next = new Map<number, CpuSample>();
   for (const p of procs) {
+    if (p.harness === "antigravity") continue;
     if (p.tree === undefined) continue;
     next.set(p.pid, { tree: p.tree, at: now, startedAt: p.startedAt });
     const before = prev.get(p.pid);
@@ -272,7 +274,7 @@ export function scanBody(
       const id = repoOfCwd(p.cwd || undefined, local);
       const repo = id === undefined ? undefined : local.find((r) => r.id === id);
       const branch = repo?.status?.branch;
-      const state = states.get(p.pid);
+      const state = p.harness === "antigravity" ? undefined : states.get(p.pid);
       return {
         pid: p.pid,
         harness: p.harness,

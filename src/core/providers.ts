@@ -55,7 +55,7 @@ export function parseProviders(raw: unknown, machines: readonly KitMachine[]): {
     }
     let harness: Harness = "claude";
     if (def["harness"] !== undefined) {
-      if (isHarness(def["harness"])) harness = def["harness"];
+      if (isHarness(def["harness"]) && def["harness"] !== "antigravity") harness = def["harness"];
       else errors.push(`${at}.harness: claude or codex`);
     }
     let ms: string[] | null = null;

@@ -95,6 +95,7 @@ function agentName(harness: Run["harness"]): string {
   switch (harness) {
     case "claude": return "Claude Code";
     case "codex": return "Codex";
+    case "antigravity": return "Antigravity";
     default: {
       const exhaustive: never = harness;
       return exhaustive;

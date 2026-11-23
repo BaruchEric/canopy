@@ -324,7 +324,7 @@ function SteerBar({ card, term }: { card: AgentCard; term: string | null }) {
   const chanReady = useStore((s) => s.chan?.ready === true);
   const asking = useStore((s) => Object.values(s.asks).some((a) => a.state === "open" && a.agent === card.id));
   if (!isLiveAgent(card) || (!term && !(card.handle && chanReady))) return null;
-  const name = card.harness === "codex" ? "Codex" : card.harness === "claude" ? "Claude" : "the agent";
+  const name = card.harness === "codex" ? "Codex" : card.harness === "claude" ? "Claude" : card.harness === "antigravity" ? "Antigravity" : "the agent";
   const closed = asking || cardAsks(card) ? { closed: `${name} waits on you: answer above` } : {};
   const target: SteerTarget = term
     ? {

@@ -119,7 +119,7 @@ describe("resolving a role", () => {
   });
 
   test("every role but the coordinator's may be codex", () => {
-    for (const role of AGENT_ROLES) expect(ROLE_HARNESSES[role]).toEqual(role === "coordinate" ? ["claude"] : ["claude", "codex"]);
+    for (const role of AGENT_ROLES) expect(ROLE_HARNESSES[role]).toEqual(role === "coordinate" ? ["claude"] : role === "suggest" ? ["claude", "codex"] : ["claude", "codex", "antigravity"]);
     const r = full();
     r.repos[P] = { all: { profile: "review" } };
     expect(resolveAgent(r, P, "shell")).toMatchObject({ settings: review, from: "repo" });
@@ -303,4 +303,17 @@ describe("the coordinate role", () => {
     expect(resolveAgent(builtin, P, "coordinate").settings).toBe(resolveAgent(builtin, P, "coordinate").settings);
     expect(resolveAgent(full(), P, "suggest").settings).toBe(resolveAgent(full(), P, "suggest").settings);
   });
+});
+
+test("Antigravity profiles route normal work and fall through for unsupported roles", () => {
+  const google = { ...DEFAULT_AGENT, harness: "antigravity", model: "gemini-pro" } satisfies AgentSettings;
+  const routes: AgentRoutes = { profiles: { google }, roles: {}, repos: { [P]: { all: { profile: "google" } } } };
+  for (const role of ["shell", "chat", "job", "flow"] as const) {
+    expect(resolveAgent(routes, P, role).settings).toEqual(google);
+  }
+  for (const role of ["suggest", "coordinate"] as const) {
+    const pick = resolveAgent(routes, P, role);
+    expect(pick.settings.harness).toBe("claude");
+    expect(pick.skipped?.[0]?.profile).toBe("google");
+  }
 });

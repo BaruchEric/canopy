@@ -33,6 +33,7 @@ const loadouts = [
   L({ name: "quick", note: "small fixes", model: "haiku", effort: "low", mcp: ["github"] }),
   L({ name: "build", model: "opus", effort: "high" }),
   L({ name: "fast", harness: "codex", model: "gpt-5.5" }),
+  L({ name: "google", harness: "antigravity", model: "gemini-pro" }),
 ];
 
 function seed(servers: { name: string; here: boolean }[]): void {
@@ -82,6 +83,14 @@ describe("EquipSheet", () => {
     const html = renderCurrent(<EquipSheet run={coord} task={task({ equip: { loadout: "fast" } })} onDone={() => {}} />);
     expect(html).toContain("A Codex worker takes model and effort only");
     expect(html).toContain("gpt-5.5");
+    expect(html).not.toContain('value="github"');
+  });
+  test("an Antigravity loadout takes model and effort only, without a gateway provider", () => {
+    seed([{ name: "github", here: true }]);
+    const html = renderCurrent(<EquipSheet run={coord} task={task({ equip: { loadout: "google" } })} onDone={() => {}} />);
+    expect(html).toContain("An Antigravity worker takes model and effort only");
+    expect(html).toContain("gemini-pro");
+    expect(html).not.toContain("<h3>provider</h3>");
     expect(html).not.toContain('value="github"');
   });
   test("the card's saved override shows as the picked model", () => {

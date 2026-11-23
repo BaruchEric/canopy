@@ -43,7 +43,7 @@ describe("parseHelperQuery", () => {
     expect(parseHelperQuery(q("&harnesses="), "x", 1)).toMatchObject({ harnesses: [] });
     expect(parseHelperQuery(q(""), "x", 1)).not.toHaveProperty("harnesses");
     // this helper says so when it dials
-    expect(new URL(helperUrl("http://mini:7850", "mbp", "darwin", ["agent"])).searchParams.get("harnesses")).toBe("claude,codex");
+    expect(new URL(helperUrl("http://mini:7850", "mbp", "darwin", ["agent"])).searchParams.get("harnesses")).toBe("claude,codex,antigravity");
   });
 
   test("the simulators and emulators it lists (FR-050); absent from an older helper, and a bad one dropped", () => {

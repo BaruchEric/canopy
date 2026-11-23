@@ -90,6 +90,11 @@ describe("placeTranscript", () => {
     const got = await placeTranscript({ harness: "codex", session: S, text: "{}\n", name, to: TO, homes: homes() });
     expect(got.file).toBe(join(scratch, "codex", "sessions", name));
   });
+  test("Antigravity transcript moves are explicitly unavailable, not Claude moves", async () => {
+    const at: PlaceTranscript = { harness: "antigravity", session: S, text: "{}\n", name: `${S}.jsonl`, to: TO, homes: homes() };
+    await expect(placeTranscript(at)).rejects.toMatchObject({ status: 501, message: "Antigravity session moves are unavailable" });
+    await expect(transcriptConflict(at)).rejects.toMatchObject({ status: 501 });
+  });
   test.if(process.getuid?.() !== 0)("an unreadable existing transcript is refused and preserved", async () => {
     const home = join(scratch, "unreadable");
     const dir = join(home, "projects", projectFolder(TO));

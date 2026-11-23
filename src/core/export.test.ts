@@ -138,6 +138,11 @@ test("a Codex run uses grouped token cost and falls back to branch state", () =>
   expect(md.endsWith("\n---\nnothing redacted\n")).toBe(true);
 });
 
+test("an Antigravity run is named Google Antigravity", () => {
+  const md = exportRun({ ...run, harness: "antigravity", steps: [], result: { text: "ok", durationMs: 1, turns: 1, tokens: { input: 1, cachedInput: 0, output: 1, reasoning: 0, total: 2 } } }, [], { repoName: "canopy" });
+  expect(md).toContain("- agent: Google Antigravity, model unknown\n");
+});
+
 test("a stopped run with no result or end uses the supplied current time", () => {
   const stoppedRun: Run = {
     ...run,

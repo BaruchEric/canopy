@@ -7,14 +7,15 @@
  * server's ledger (costledger.ts) and the costs view both import it.
  */
 
-import { AGENT_EFFORTS, type AgentSettings, type FlowStepName, type Run, type RunTokens } from "./types";
+import { isHarness, AGENT_EFFORTS, type AgentSettings, type FlowStepName, type Run, type RunTokens } from "./types";
 
-export const COST_SERVICES = ["claude", "codex", "voice", "speech"] as const;
+export const COST_SERVICES = ["claude", "codex", "antigravity", "voice", "speech"] as const;
 export type CostService = (typeof COST_SERVICES)[number];
 
 export const SERVICE_NAME: Record<CostService, string> = {
   claude: "Claude Code",
   codex: "Codex",
+  antigravity: "Antigravity",
   voice: "Voice",
   speech: "Dictation",
 };
@@ -179,7 +180,7 @@ function tokensOf(v: unknown): RunTokens | null {
 }
 
 function settingsOf(v: unknown): CostEntry["agentSettings"] {
-  if (!isObject(v) || (v["harness"] !== "claude" && v["harness"] !== "codex")) return undefined;
+  if (!isObject(v) || !isHarness(v["harness"])) return undefined;
   const effort = AGENT_EFFORTS.find((level) => level === v["effort"]);
   if (typeof v["model"] !== "string" || effort === undefined) return undefined;
   return {

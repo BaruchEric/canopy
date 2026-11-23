@@ -191,7 +191,13 @@ export class RpcClient {
 
   constructor(
     private proc: RpcProc,
-    private opts: { stderrCap?: number; tap?: (dir: "in" | "out", line: string) => void } = {},
+    private opts: {
+      stderrCap?: number;
+      tap?: (dir: "in" | "out", line: string) => void;
+      /** Include the JSON-RPC 2.0 dialect marker on outbound messages.
+       *  Codex's app-server deliberately omits it; ACP requires it. */
+      jsonrpc?: boolean;
+    } = {},
   ) {
     const reading = this.read();
     const draining = this.drainStderr();
@@ -273,7 +279,8 @@ export class RpcClient {
   private send(msg: unknown): void {
     if (this.ended) return;
     try {
-      const text = JSON.stringify(msg);
+      const wire = this.opts.jsonrpc && isRecord(msg) ? { jsonrpc: "2.0", ...msg } : msg;
+      const text = JSON.stringify(wire);
       this.opts.tap?.("in", text);
       this.proc.stdin.write(text + "\n");
       const flushed = this.proc.stdin.flush?.();

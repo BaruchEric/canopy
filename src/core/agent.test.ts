@@ -116,3 +116,10 @@ describe("canopyTools", () => {
     expect(isDefaultAgent({ ...DEFAULT_AGENT, canopyTools: true })).toBe(false);
   });
 });
+
+test("Antigravity keeps Google model settings and drops gateway providers", () => {
+  expect(normalizeAgent({ harness: "antigravity", model: "gemini-pro", effort: "high", provider: "local", yolo: false })).toEqual({
+    ...DEFAULT_AGENT, harness: "antigravity", model: "gemini-pro", effort: "high", yolo: false,
+  });
+  expect(normalizeAgent({ harness: "antigravity", model: "--model", effort: "ultra" })).toMatchObject({ model: "default", effort: "default" });
+});

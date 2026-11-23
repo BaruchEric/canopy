@@ -339,7 +339,7 @@ export async function agentSessions(path: string, limit = SESSION_LIMIT): Promis
 
 /** whether `session` is a conversation of `harness` started in `path` */
 export const hasAgentSession = (harness: Harness, path: string, session: string): Promise<boolean> =>
-  harness === "codex" ? hasCodexSession(path, session) : hasClaudeSession(path, session);
+  harness === "antigravity" ? Promise.resolve(false) : harness === "codex" ? hasCodexSession(path, session) : hasClaudeSession(path, session);
 
 /**
  * The file the newest conversation of `harness` in `path` is kept in on
@@ -354,6 +354,7 @@ export async function newestTranscript(
   homes: { claude?: string; codex?: string } = {},
   now = new Date(),
 ): Promise<string | null> {
+  if (harness === "antigravity") return null;
   if (harness === "codex") {
     const [newest] = await codexRollouts(path, homes.codex ?? codexHome(), now);
     return newest?.file ?? null;
@@ -376,6 +377,7 @@ export async function transcriptFile(
   now = new Date(),
 ): Promise<{ file: string; name: string } | null> {
   if (!isSessionId(session)) return null;
+  if (harness === "antigravity") return null;
   if (harness === "codex") {
     const home = homes.codex ?? codexHome();
     const hit = (await codexRollouts(path, home, now)).find((x) => x.s.meta.id === session);

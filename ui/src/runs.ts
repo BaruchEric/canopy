@@ -13,7 +13,7 @@ import type { Harness, ProposalState, Run, RunAnswer, RunResult, RunStep } from 
 export const harnessOf = (run: { harness?: Harness }): Harness => run.harness ?? "claude";
 
 /** The agent's name in a heading or a sentence. */
-export const AGENT_NAME: Record<Harness, string> = { claude: "Claude Code", codex: "Codex" };
+export const AGENT_NAME: Record<Harness, string> = { claude: "Claude Code", codex: "Codex", antigravity: "Antigravity" };
 
 /** The agent's short word in a chip: "claude", "codex". */
 export const agentWord = (h: Harness): string => HARNESS[h].label;
