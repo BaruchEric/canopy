@@ -7908,6 +7908,7 @@ export async function startServer(opts: {
       treeRemoved: (path) => state.warm.poke(path),
       stopTree: (dir) => state.tasks.endTree(dir),
       treeBusy: (dir) => state.tasks.busy(dir),
+      sidesIn: (dir) => state.runner.sidesIn(dir),
       judge: hasGatewayKey() ? jevScenario : null,
       broadcast: (ev) => {
         broadcast(state, ev.type === "landing" ? { ...ev, landing: { ...ev.landing, groups: state.groups.info() } } : ev);

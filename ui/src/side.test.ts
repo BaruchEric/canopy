@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Run } from "../../src/core/types";
-import { modelWord, SIDE_BESIDE_MIN, sideAsked, sideBeside, sideGoes, sideModel, sideModels } from "./side";
+import { modelWord, readSideShown, SIDE_BESIDE_MIN, sideAsked, sideBeside, sideGoes, sideModel, sideModels, sideShownToKeep } from "./side";
 
 const run = (over: Partial<Run> = {}): Run => ({
   id: "r1",
@@ -97,5 +97,19 @@ describe("where the column sits", () => {
     expect(sideBeside(1240)).toBe(true);
     expect(sideBeside(760)).toBe(false);
     expect(sideBeside(390)).toBe(false);
+  });
+});
+
+describe("the columns a reload brings back", () => {
+  test("reads each run's side question and drops anything else", () => {
+    expect(readSideShown(JSON.stringify({ "mac:r1": "mac:s1", "mini:r2": "mini:s2" }))).toEqual({ "mac:r1": "mac:s1", "mini:r2": "mini:s2" });
+    expect(readSideShown(JSON.stringify({ "mac:r1": "mac:s1", bad: 3, empty: "", nested: { a: 1 } }))).toEqual({ "mac:r1": "mac:s1" });
+    for (const raw of [null, "", "not json", "[]", "null", "\"text\"", "7"]) expect(readSideShown(raw)).toEqual({});
+  });
+
+  test("keeps a column only while the page has its run and its side question", () => {
+    const has = (id: string) => ["r1", "s1", "r2"].includes(id);
+    expect(sideShownToKeep({ r1: "s1", r2: "s2", r3: "s1" }, has)).toEqual({ r1: "s1" });
+    expect(sideShownToKeep({}, has)).toEqual({});
   });
 });

@@ -186,6 +186,22 @@ export function boxNotes(o: {
   return [o.besideFlow, ...o.memberFlows, o.ownBranch ? ownBranchWords(o.branch) : null, o.chatHint].filter((line): line is string => line !== null);
 }
 
+/** What "fewer options" drops on the way from the full pre-flight back to
+ *  the box: the picks the box does not draw, in the pre-flight's words,
+ *  each changed from how a start has it. Empty when none was. */
+export function boxDrops(o: { times: number; pr: boolean; dev: boolean; tools: boolean }): string[] {
+  return [...(o.times > 1 ? [`${o.times} tries`] : []), ...(o.pr ? ["the PR"] : []), ...(o.dev ? ["the dev task"] : []), ...(o.tools ? ["the canopy tools pick"] : [])];
+}
+
+/** The hover words of the full pre-flight's way back to the box. */
+export function fewerTitle(drops: readonly string[]): string {
+  const kept = "Back to the one box, with the words and the picks it shows kept";
+  if (drops.length === 0) return kept;
+  const last = drops[drops.length - 1] ?? "";
+  const named = drops.length === 1 ? last : `${drops.slice(0, -1).join(", ")} and ${last}`;
+  return `${kept}. It drops ${named}`;
+}
+
 /** Why send is held on a branch run: every branch slot on the repo is in
  *  use. Null when the start can go. */
 export function boxHeld(o: { branchable: boolean; onBranch: boolean; free: number; slots: number }): string | null {

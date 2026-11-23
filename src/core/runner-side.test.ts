@@ -167,6 +167,13 @@ describe("a side question", () => {
     expect(side.branch).toBeUndefined();
     expect(side.sideOf?.run).toBe(parent.id);
     expect(side.steps[0]).toMatchObject({ kind: "note", text: sideNote("on a branch") });
+    // the worktree is the side question's folder until it ends, so a land keeps it
+    expect(runner.sidesIn("/scratch/b1")).toBe(1);
+    expect(runner.sidesIn("/tmp/r")).toBe(0);
+    ctx(1).result(OK, null);
+    expect(runner.sidesIn("/scratch/b1")).toBe(1);
+    runner.stop(side.id);
+    expect(runner.sidesIn("/scratch/b1")).toBe(0);
   });
 
   test("keeps the folders the parent's session reads beside its own", () => {

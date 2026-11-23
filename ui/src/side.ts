@@ -46,3 +46,26 @@ export const SIDE_BESIDE_MIN = 761;
 
 /** Whether a sheet `width` px wide has room for the two side by side. */
 export const sideBeside = (width: number): boolean => width >= SIDE_BESIDE_MIN;
+
+/** Where a browser keeps which side question shows beside which run, so a
+ *  reload or a phone's app opening again brings the column back. */
+export const SIDE_SHOWN_KEY = "canopy.sideShown";
+
+/** The saved columns: each a run's id and the side question's beside it.
+ *  Anything else in the saved text is dropped. */
+export function readSideShown(raw: string | null): Record<string, string> {
+  if (!raw) return {};
+  let saved: unknown;
+  try {
+    saved = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)) return {};
+  return Object.fromEntries(Object.entries(saved).filter((e): e is [string, string] => typeof e[1] === "string" && e[1] !== ""));
+}
+
+/** What to save: the columns whose run and side question the page still
+ *  has, so a run put away takes its column with it. */
+export const sideShownToKeep = (shown: Readonly<Record<string, string>>, has: (id: string) => boolean): Record<string, string> =>
+  Object.fromEntries(Object.entries(shown).filter(([run, side]) => has(run) && has(side)));

@@ -289,6 +289,18 @@ try {
   check((await guest.locator(".panel .guided-btn, .panel .agent-buttons, .panel .new-shell").count()) === 0, "nor a button that asks an agent, runs the app, saves the work or opens a shell");
   check((await guest.locator(".tour").count()) === 0, "nor the tour of asking an agent, running and saving");
   check(guestRefused.length === 0, `a viewer's page asks the backend for nothing its role refuses (${[...new Set(guestRefused)].join(", ") || "none"})`);
+  // the same at advanced: this new browser opened on intermediate, whose
+  // guided panel has no commit box, pull or push to leave out. It comes
+  // after the refusal check because a reload sends a few calls the role
+  // refuses before the page has read who it is (seen 2026-11-23).
+  await guest.evaluate(() => localStorage.setItem("canopy.settings", JSON.stringify({ level: "advanced", onboarded: true })));
+  await guest.reload({ waitUntil: "load" });
+  await guest.waitForFunction(() => document.querySelectorAll(".card").length === 3, null, { timeout: 20_000 });
+  if ((await guest.locator(".panel .panel-head").count()) === 0) await guest.locator(".card").first().click();
+  await guest.waitForSelector(".panel .panel-head", { timeout: 15_000 });
+  await guest.waitForTimeout(1500);
+  const advancedPanel = (await guest.locator(".panel .guided-panel").count()) === 0;
+  check(advancedPanel && (await guest.locator(".panel .commit-box, .panel .panel-sync").count()) === 0, `at advanced too, a viewer's panel has no commit box, pull or push (${advancedPanel ? "the advanced panel" : "still the guided panel"})`);
   await guest.screenshot({ path: `${shots}/08-viewer-dark.png` });
   await guest.goto(`${base}/?view=sessions`, { waitUntil: "load" });
   await guest.waitForSelector(".ss-side", { timeout: 20_000 });
@@ -325,7 +337,9 @@ try {
   await ((await panelStar.count()) > 0 ? panelStar : avery.locator(".card .star")).first().tap();
   const fav = await starred;
   check(fav?.status() === 200, `and a star stars again (${fav?.status() ?? "nothing sent"})`);
-  check((await avery.locator(".panel .panel-sync").count()) > 0, "and their open repo offers pull and push again");
+  // Avery is a new browser, so the open repo is intermediate's guided panel,
+  // whose run and save stand for the advanced panel's pull and push
+  check((await avery.locator(".panel .panel-sync, .panel .guided-btn").count()) > 0, "and their open repo offers its buttons again (the guided panel's run and save)");
   await avery.goto(`${base}/?view=people`, { waitUntil: "load" });
   await avery.waitForSelector(".people-view .people-list", { timeout: 20_000 });
 

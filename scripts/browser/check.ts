@@ -210,6 +210,9 @@ try {
     }
     await page.setViewportSize(PHONE.viewport);
     await page.screenshot({ path: `${shots}/phone.png` });
+    // section tabs are the advanced panel's; this new browser opened on
+    // intermediate, whose guided panel has none
+    await page.evaluate(() => localStorage.setItem("canopy.settings", JSON.stringify({ level: "advanced", onboarded: true })));
     await page.goto(`${base}/?repo=twin`, { waitUntil: "load" });
     const rail = page.locator(".section-rail").first();
     const shown = await rail.waitFor({ timeout: 15_000 }).then(() => true, () => false);
@@ -291,6 +294,23 @@ try {
     const lines = (page: Page) =>
       page.evaluate(() => [...document.querySelectorAll(".sheet-back .steps > li")].map((li) => [...li.classList].find((c) => c.startsWith("k-")) ?? ""));
 
+    {
+      // a new browser opens on intermediate and keeps it after a reload: the
+      // page writes its layout as it loads, which once made the next load
+      // take it for a browser from before levels and drop it on advanced
+      const page = await fresh();
+      await page.goto(`${base}/`, { waitUntil: "load" });
+      await page.waitForSelector(".card", { timeout: 20_000 });
+      await page.waitForTimeout(1500);
+      const first = await page.locator(".bar-more-btn").count();
+      await page.reload({ waitUntil: "load" });
+      await page.waitForSelector(".card", { timeout: 20_000 });
+      await page.waitForTimeout(500);
+      const again = await page.locator(".bar-more-btn").count();
+      check(first === 1 && again === 1, `a new browser opens on the quiet page and keeps it after a reload (its more menu ${first ? "there" : "missing"}, then ${again ? "there" : "missing"})`);
+      await page.close();
+    }
+
     for (const level of ["intermediate", "advanced"] as const) {
       const quiet = level === "intermediate";
       const page = await at(level);
@@ -353,6 +373,16 @@ try {
           got.join(" ") === "k-user k-fold k-text" && says === "worked for 40s · 3 steps" && opened.filter((k) => k === "k-tool").length === 3 && folded.join(" ") === got.join(" "),
           `at intermediate a turn's commands fold into one line, "${says}", that a click opens and a second folds (${got.join(" ")}; open: ${opened.join(" ")})`,
         );
+        // a fold left open stays open when the sheet closes and opens again
+        await fold.first().click();
+        await page.keyboard.press("Escape");
+        await page.waitForSelector(".sheet-back", { state: "detached", timeout: 5000 }).catch(() => undefined);
+        await page.locator(".card", { has: page.locator(".card-name", { hasText: /^demo$/ }) }).first().locator(".card-more button").first().click();
+        await page.locator('[role="menuitem"].live').first().click();
+        await page.waitForSelector(".sheet-back .steps", { timeout: 5000 });
+        const again = await lines(page);
+        await page.locator(".sheet-back .fold-line").first().click();
+        check(again.filter((k) => k === "k-tool").length === 3, `a fold left open is open when the run's sheet opens again (${again.join(" ")})`);
       } else {
         check(got.join(" ") === "k-user k-tool k-tool k-tool k-text", `at advanced the timeline shows every step (${got.join(" ")})`);
       }
@@ -382,6 +412,12 @@ try {
         await page.locator(".start-more").click();
         const kept = await page.evaluate(() => `${document.querySelector<HTMLTextAreaElement>(".sheet-body.plan .plan-note")?.value} / ${document.querySelector<HTMLInputElement>(".plan-branch input[type=checkbox]")?.checked}`);
         check(branch === "new worktree" && kept === "count the parts / true", `the branch chip's menu picks a new worktree ("${branch}"), and more options opens the pre-flight with the words and the pick kept (${kept})`);
+        // and fewer options goes back to the box with both
+        await page.locator(".sheet-foot .start-fewer").click();
+        const boxed = await page.waitForSelector(".start-box", { timeout: 5000 }).then(() => true, () => false);
+        const backWords = boxed ? await page.locator(".start-words").inputValue() : "";
+        const backBranch = boxed ? (await page.locator('.start-chip[data-chip="branch"]').innerText()).trim() : "";
+        check(boxed && backWords === "count the parts" && backBranch === "new worktree", `fewer options goes back to the box with the words and the pick kept ("${backWords}", ${backBranch || "no box"})`);
         // a checkout in use (FR-080): demo holds the chat, so a start there
         // opens on a worktree of its own and the box says why
         await page.keyboard.press("Escape");
@@ -570,6 +606,19 @@ try {
       check(closed && mark === "btw" && back === "visible" && (await column.count()) === 0, `closing the thread ${where} shows the run again and leaves the chat a tab marked btw: tab ${closed ? `"${mark}"` : "missing"}, the run ${back}`);
       await tab.click().catch(() => undefined);
       check(await column.waitFor({ timeout: 3000 }).then(() => true, () => false), `its tab brings the thread back ${where}`);
+      // the browser keeps which thread shows beside which run, so a reload
+      // finds the column open when the run's sheet opens again
+      await page.reload({ waitUntil: "load" });
+      await page.waitForSelector(".pill.runs", { timeout: 20_000 });
+      await page.locator(".pill.runs").click();
+      await rows.first().waitFor({ timeout: 5000 }).catch(() => undefined);
+      const listed = await rows.allInnerTexts();
+      const parent = listed.findIndex((t) => t.includes("billing"));
+      if (parent < 0) await page.screenshot({ path: `${shots}/side-question-reload${phone ? "-phone" : ""}.png` });
+      // on a phone the thread lies over the run, so the sheet, not the run's box, says it opened
+      const reopened = parent >= 0 && (await rows.nth(parent).click().then(() => sheet.waitFor({ timeout: 5000 })).then(() => true, () => false));
+      const kept = reopened && (await column.waitFor({ timeout: 3000 }).then(() => true, () => false));
+      check(kept, `after a reload the run's sheet opens with the thread beside it ${where} (${reopened ? "the sheet opened" : parent < 0 ? `no row for the run among ${listed.length}: ${listed.join(" | ").replace(/\s+/g, " ").slice(0, 160)}` : "its sheet did not open"})`);
     }
     await page.close();
   }

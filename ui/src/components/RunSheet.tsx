@@ -61,7 +61,7 @@ import { HARNESS } from "../../../src/core/harness";
 import { CENTERED } from "../pop";
 import { foldTurns } from "../turnfold";
 import { TurnFold } from "./TurnFold";
-import { NEW_WORKTREE, agentChip, boxFits, boxHeld, boxNotes, placeChips, routeWords } from "../startbox";
+import { NEW_WORKTREE, agentChip, boxDrops, boxFits, boxHeld, boxNotes, fewerTitle, placeChips, routeWords } from "../startbox";
 import { StartBox } from "./StartBox";
 import { PopGear, PopGrip, PopHere } from "./PopGrip";
 import { api } from "../api";
@@ -375,6 +375,21 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   // box, this same state drawn small; "more options" is the pre-flight below
   const quiet = useStore((s) => s.settings.level === "intermediate");
   const [more, setMore] = useState(false);
+  // "fewer options" goes back to the box, and the picks the box does not
+  // draw go back to how a start has them, so its send sends what it shows
+  const toolsDefault = loadout ? loadout.canopyTools : agent.canopyTools === true;
+  const drops = boxDrops({ times, pr, dev: startDev, tools: toolsPick !== null && toolsPick !== toolsDefault });
+  const fewer = () => {
+    setTimes(1);
+    setPicks([]);
+    setReviewers(1);
+    setAutoLand(false);
+    setRaised(false);
+    setAsPr(false);
+    setDevTask(false);
+    setToolsPick(null);
+    setMore(false);
+  };
 
   const go = async () => {
     if (!ready) return;
@@ -542,6 +557,11 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
               ? `Yolo is on for this repo: ${name} runs without asking.`
               : `${name} asks before running anything that is not part of the job.`}
         </span>
+        {quiet && more && boxFits(action) && (
+          <button type="button" className="mini start-fewer" title={fewerTitle(drops)} onClick={fewer}>
+            fewer options
+          </button>
+        )}
         <button type="button" className="mini" onClick={close}>
           cancel
         </button>
@@ -649,7 +669,7 @@ export function Timeline({
         {quiet
           ? foldTurns(nodes, { live: run.status === "working", end: run.status === "working" ? Date.now() : (run.endedAt ?? null) }).map((item) =>
               item.kind === "fold" ? (
-                <TurnFold key={`fold ${item.id}`} fold={item} renderStep={(n) => <Step key={n.step.id} step={n.step} kids={n.kids} />} />
+                <TurnFold key={`fold ${item.id}`} runId={run.id} fold={item} renderStep={(n) => <Step key={n.step.id} step={n.step} kids={n.kids} />} />
               ) : (
                 <Step key={item.node.step.id} step={item.node.step} kids={item.node.kids} />
               ),

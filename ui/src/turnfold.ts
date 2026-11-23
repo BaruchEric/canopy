@@ -23,6 +23,10 @@ export interface Fold {
   live: boolean;
 }
 
+/** The page's name for one fold of one run's timeline: the run, then the
+ *  fold's first step, which stays its id for as long as the fold grows. */
+export const foldKey = (runId: string, foldId: string): string => `${runId} ${foldId}`;
+
 /** One line of the timeline: a step as it is, or a fold. */
 export type TimelineItem = { kind: "step"; turn: number; node: StepNode } | Fold;
 

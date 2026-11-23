@@ -64,6 +64,7 @@ import { clamp, needsAttention } from "./util";
 import { beat } from "./live";
 import { ownRun, pickable, selectable } from "./flows";
 import { chatToSay, chatToShow, needsMore, runBesideFlow } from "./runs";
+import { readSideShown, SIDE_SHOWN_KEY, sideShownToKeep } from "./side";
 import { unreadProposals, withSession } from "./secrets";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
 import { anchorWord } from "./goals";
@@ -286,6 +287,24 @@ function readHarnessSaid(): string | null {
     return key && HARNESS_WEEK_KEY.test(key) ? key : null;
   } catch {
     return null;
+  }
+}
+
+/** the side columns this browser had open (FR-077), back after a reload */
+function loadSideShown(): Record<string, string> {
+  try {
+    return readSideShown(localStorage.getItem(SIDE_SHOWN_KEY));
+  } catch {
+    return {};
+  }
+}
+
+/** keeps the side columns for the next load, the ones whose runs the page has */
+function saveSideShown(shown: Record<string, string>, runs: Record<string, Run>): void {
+  try {
+    localStorage.setItem(SIDE_SHOWN_KEY, JSON.stringify(sideShownToKeep(shown, (id) => id in runs)));
+  } catch {
+    // a browser that keeps nothing reopens with the column shut
   }
 }
 
@@ -925,6 +944,9 @@ export interface CanopyState {
    *  the column its console draws. Closing the column drops the entry and
    *  leaves the chat open. */
   sideShown: Record<string, string>;
+  /** the timeline folds a person opened (FR-079), by `foldKey`: the page's,
+   *  so a fold stays open when its sheet closes and opens again */
+  foldsOpen: Record<string, true>;
   /** the user's own workflow file an accepted lesson named, until put away,
    *  with the backend whose machine it is on */
   adviceFile: (Extract<AdviceAccepted, { kind: "file" }> & { backend: string }) | null;
@@ -1708,6 +1730,8 @@ export interface CanopyState {
   /** shows a side question beside the run it was asked of, or closes that
    *  run's column with null; the chat stays open either way */
   showSide: (parentId: string, sideId: string | null) => void;
+  /** opens a timeline fold, or folds it away again */
+  toggleFold: (key: string) => void;
   /** brings a side question forward: beside the run it was asked of while
    *  that run is on the page, else in a console of its own */
   openSide: (sideId: string) => void;
@@ -2621,7 +2645,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   advice: {},
   harnessSaid: readHarnessSaid(),
   chatDrafts: {},
-  sideShown: {},
+  sideShown: loadSideShown(),
+  foldsOpen: {},
   adviceFile: null,
   inboxOpen: false,
   inboxFocus: null,
@@ -5686,12 +5711,23 @@ export const useStore = create<CanopyState>((set, get) => ({
     const side = await api.sideRun(runId, text, model);
     // the stream may have brought the new run already, a step or two on
     set((s) => ({ runs: s.runs[side.id] ? s.runs : { ...s.runs, [side.id]: side }, sideShown: { ...s.sideShown, [runId]: side.id } }));
+    saveSideShown(get().sideShown, get().runs);
   },
-  showSide: (parentId, sideId) =>
+  showSide: (parentId, sideId) => {
     set((s) => {
       if (sideId) return { sideShown: { ...s.sideShown, [parentId]: sideId } };
       const { [parentId]: _closed, ...sideShown } = s.sideShown;
       return { sideShown };
+    });
+    saveSideShown(get().sideShown, get().runs);
+  },
+  toggleFold: (key) =>
+    set((s) => {
+      if (s.foldsOpen[key]) {
+        const { [key]: _shut, ...foldsOpen } = s.foldsOpen;
+        return { foldsOpen };
+      }
+      return { foldsOpen: { ...s.foldsOpen, [key]: true } };
     }),
   openSide: (sideId) => {
     const parent = get().runs[sideId]?.sideOf?.run;

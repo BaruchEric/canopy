@@ -108,6 +108,27 @@ describe("the column beside a run", () => {
     expect(Object.keys(useStore.getState().runs)).toEqual(["p", "s1", "s2"]);
   });
 
+  test("the browser keeps which column is open, for the next load", async () => {
+    const kept = new Map<string, string>();
+    const real = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v) },
+    });
+    try {
+      useStore.setState({ runs: { p: run("p"), q: run("q"), s1: side("s1", "p") } });
+      useStore.getState().showSide("p", "s1");
+      expect(JSON.parse(kept.get("canopy.sideShown") ?? "null")).toEqual({ p: "s1" });
+      await useStore.getState().askSide("q", "and the port?");
+      expect(JSON.parse(kept.get("canopy.sideShown") ?? "null")).toEqual({ p: "s1", q: "s1" });
+      useStore.getState().showSide("p", null);
+      expect(JSON.parse(kept.get("canopy.sideShown") ?? "null")).toEqual({ q: "s1" });
+    } finally {
+      if (real) Object.defineProperty(globalThis, "localStorage", real);
+      else delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
+  });
+
   test("openSide shows it beside its run while that run is on the page", () => {
     useStore.setState({ runs: { p: run("p"), s1: side("s1", "p") } });
     useStore.getState().openSide("s1");

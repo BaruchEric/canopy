@@ -7810,6 +7810,18 @@ button.rtab:hover .rtab-pen {
 .mgr-view.phone .mgr-lane-title {
   min-height: 44px;
 }
+/* Safari keeps a select at its own control's height whatever min-height
+   says, 25px on 2026-11-23, so a phone's select drops the native look and
+   draws its arrow from two gradients in the ink's color */
+.mgr-view.phone select.settings-input {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 28px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-dim) 50%), linear-gradient(135deg, var(--ink-dim) 50%, transparent 50%);
+  background-position: right 15px center, right 10px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
 .mgr-view.phone .mgr-head-acts {
   width: 100%;
 }

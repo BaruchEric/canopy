@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { IN_CHECKOUT, NEW_WORKTREE, agentChip, boxFits, boxHeld, boxNotes, ownBranchWords, placeChips, routeWords, type BoxAgent, type BoxChip, type BoxPlace } from "./startbox";
+import { IN_CHECKOUT, NEW_WORKTREE, agentChip, boxDrops, boxFits, boxHeld, boxNotes, fewerTitle, ownBranchWords, placeChips, routeWords, type BoxAgent, type BoxChip, type BoxPlace } from "./startbox";
 
 const place = (over: Partial<BoxPlace> = {}): BoxPlace => ({ repo: "ripe", workspace: null, branch: "main", branchable: true, onBranch: false, beside: false, backend: "mac", host: null, ...over });
 const chip = (chips: readonly BoxChip[], id: BoxChip["id"]): BoxChip => {
@@ -182,5 +182,20 @@ describe("a start that is held", () => {
     expect(boxHeld({ branchable: true, onBranch: false, free: 0, slots: 3 })).toBeNull();
     expect(boxHeld({ branchable: true, onBranch: true, free: 1, slots: 3 })).toBeNull();
     expect(boxHeld({ branchable: false, onBranch: true, free: 0, slots: 3 })).toBeNull();
+  });
+});
+
+describe("the way back from the full pre-flight", () => {
+  const none = { times: 1, pr: false, dev: false, tools: false };
+  test("drops only the picks the box does not draw that were changed", () => {
+    expect(boxDrops(none)).toEqual([]);
+    expect(boxDrops({ ...none, times: 3 })).toEqual(["3 tries"]);
+    expect(boxDrops({ times: 2, pr: true, dev: true, tools: true })).toEqual(["2 tries", "the PR", "the dev task", "the canopy tools pick"]);
+  });
+
+  test("says what it keeps, and names what it drops", () => {
+    expect(fewerTitle([])).toBe("Back to the one box, with the words and the picks it shows kept");
+    expect(fewerTitle(["the PR"])).toBe("Back to the one box, with the words and the picks it shows kept. It drops the PR");
+    expect(fewerTitle(["3 tries", "the PR", "the dev task"])).toBe("Back to the one box, with the words and the picks it shows kept. It drops 3 tries, the PR and the dev task");
   });
 });

@@ -80,6 +80,9 @@ export interface LandingDeps {
   stopTree?: (dir: string) => Promise<string[]>;
   /** whether something still runs in a folder, which refuses its removal */
   treeBusy?: (dir: string) => boolean;
+  /** how many side questions (FR-077) still go in a folder: a landed
+   *  branch's worktree stays until the last of them ends */
+  sidesIn?: (dir: string) => number;
   /** the scan's repo by id */
   repo: (id: string) => Repo | undefined;
   /** the scan's repo by its absolute path */
@@ -158,6 +161,9 @@ export class LandingHub {
   private runs = new Map<string, LandingRun>();
   private entries: LandEntry[] = [];
   private orphans: LandingOrphan[] = [];
+  /** landed branches' worktrees kept for a side question still at work in
+   *  them, by folder; the last one's end removes the tree */
+  private held = new Map<string, { repoPath: string; branch: string }>();
   private notices: LandNotice[] = [];
   /** each branch's sort going now; the next waits for it */
   private sorting = new Map<string, Promise<RunReview | null>>();
@@ -218,6 +224,22 @@ export class LandingHub {
    *  did told to the branch's work item. */
   private async freeTree(id: string, dir: string): Promise<void> {
     for (const line of (await this.deps.stopTree?.(dir)) ?? []) this.tell(id, line);
+  }
+
+  /** Removes each landed worktree kept for a side question once none is
+   *  left at work in it. A removal that fails leaves the folder as an
+   *  orphan to clear, as a land's own does. */
+  private async releaseHeld(): Promise<void> {
+    for (const [dir, h] of this.held) {
+      if ((this.deps.sidesIn?.(dir) ?? 0) > 0 || this.deps.treeBusy?.(dir)) continue;
+      this.held.delete(dir);
+      try {
+        await removeRunTree(h.repoPath, dir, h.branch);
+        this.deps.treeRemoved?.(h.repoPath);
+      } catch (err) {
+        console.error(`landing: remove ${dir} after its side question: ${errText(err)}`);
+      }
+    }
   }
 
   /** refuses a worktree something still runs in */
@@ -431,7 +453,7 @@ export class LandingHub {
   }
 
   private async findOrphans(): Promise<void> {
-    const known = new Set([...this.runs.values()].map((r) => r.dir));
+    const known = new Set([...this.runs.values()].map((r) => r.dir).concat([...this.held.keys()]));
     const out: LandingOrphan[] = [];
     for (const dir of await listRunTreeDirs(this.deps.worktrees ?? worktreesRoot())) {
       if (known.has(dir)) continue;
@@ -549,6 +571,7 @@ export class LandingHub {
    *  ready is sorted and may join on its own; a "fix it" run that settles
    *  ready may take its sent-back entry back into the queue. */
   onRun(run: Run): void {
+    if (run.sideOf && !isRunActive(run) && this.held.size > 0) void this.releaseHeld();
     const b = run.branch;
     if (!b) return;
     if (this.recovery.kind === "records") { this.recovery.observed.set(run.id, structuredClone(run)); return; }
@@ -1263,7 +1286,12 @@ export class LandingHub {
       // orphan to clear, and undoes nothing
       await this.freeTree(e.id, e.dir).catch((err: unknown) => this.tell(e.id, `could not stop what runs in the worktree: ${err instanceof Error ? err.message : err}`));
       if (this.deps.treeBusy?.(e.dir)) this.tell(e.id, `a task still runs in ${e.dir}, so the worktree was kept`);
-      else {
+      else if (this.deps.sidesIn?.(e.dir)) {
+        // a side question asked beside the run works in its worktree
+        // (FR-077): the folder goes when the last of them ends
+        this.held.set(e.dir, { repoPath: e.repoPath, branch: e.branch });
+        this.tell(e.id, "a side question still works in the worktree, so it goes when that chat ends");
+      } else {
         await removeRunTree(e.repoPath, e.dir, e.branch);
         this.deps.treeRemoved?.(e.repoPath);
       }

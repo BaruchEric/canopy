@@ -503,6 +503,21 @@ describe("a fresh browser", () => {
   });
 });
 
+describe("a fresh browser's second load", () => {
+  test("keeps intermediate and the tour to come after the page wrote its layout", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    expect(loadSettings().level).toBe("intermediate");
+    store.set("canopy.layout", "{}");
+    const again = loadSettings();
+    expect(again.level).toBe("intermediate");
+    expect(again.onboarded).toBe(false);
+  });
+});
+
 describe("a browser from before levels that never saved a setting", () => {
   test("keeps the advanced panel when it has a saved layout", () => {
     const store = new Map<string, string>([["canopy.layout", "{}"]]);

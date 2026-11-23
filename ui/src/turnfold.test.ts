@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { RunStep, RunTool } from "../../src/core/types";
 import { nestSteps } from "./runs";
-import { failed, foldTurns, foldWords, stepInFlight, took, type Fold, type TimelineItem } from "./turnfold";
+import { failed, foldKey, foldTurns, foldWords, stepInFlight, took, type Fold, type TimelineItem } from "./turnfold";
 
 const T0 = 1_800_000_000_000;
 const at = (s: number) => T0 + s * 1000;
@@ -142,5 +142,12 @@ describe("the fold's line", () => {
     expect(took(95_000)).toBe("1m 35s");
     expect(took(3_600_000)).toBe("1h");
     expect(took(7_500_000)).toBe("2h 5m");
+  });
+});
+
+describe("a fold's name on the page", () => {
+  test("is its run's and its first step's, so two runs' folds never share one", () => {
+    expect(foldKey("mac:r1", "s4")).toBe("mac:r1 s4");
+    expect(foldKey("mac:r1", "s4")).not.toBe(foldKey("mac:r2", "s4"));
   });
 });

@@ -54,6 +54,8 @@ interface World {
   stopLines: string[];
   stopFails: boolean;
   busy: Set<string>;
+  /** side questions at work in a folder, as the runner counts them */
+  sides: Map<string, number>;
   held: Set<string>;
   /** where the scenario sets live */
   scenRoot: string;
@@ -103,6 +105,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
     stopLines: [],
     stopFails: false,
     busy: new Set(),
+    sides: new Map(),
     held: new Set(),
     scenRoot: join(root, `scen${n}`),
     scenarios: [],
@@ -129,6 +132,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
       return w.stopLines;
     },
     treeBusy: (dir) => w.busy.has(dir),
+    sidesIn: (dir) => w.sides.get(dir) ?? 0,
     repo: (id) => (id === repo.id ? repo : undefined),
     repoByPath: (p) => repoAtPath([repo], p),
     check: async (cwd, line) => {
@@ -1583,6 +1587,34 @@ test("a stop that fails undoes no landing: the branch stays landed and a busy wo
   expect(w.treeRemoved).toEqual([]);
   expect(w.notes).toContain("item3 could not stop what runs in the worktree: tmux said no");
   expect(w.notes).toContain(`item3 a task still runs in ${dir}, so the worktree was kept`);
+});
+
+test("a landed worktree stays while a side question works in it and goes when the last one ends (FR-077)", async () => {
+  const w = await world();
+  await readyRun(w, "sq1", "b.txt", "b\n", "item1");
+  const dir = runTreeDir(w.repo.path, "sq1", w.wts);
+  w.sides.set(dir, 2);
+  await w.hub.land("sq1");
+  await w.hub.idle();
+  expect(entryOf(w, "sq1")?.state).toBe("landed");
+  expect(existsSync(dir)).toBe(true);
+  expect(w.treeRemoved).toEqual([]);
+  expect(w.notes).toContain("item1 a side question still works in the worktree, so it goes when that chat ends");
+  const side = (status: Run["status"]): Run => ({ ...fakeRun(w.repo.id, { name: "x", target: "main", base: "x", dir, origin: "side1" }, "ready"), branch: undefined, chat: true, action: "chat", status, sideOf: { run: "sq1", title: "work sq1" } });
+  // one of the two ends: the other still works there
+  w.sides.set(dir, 1);
+  w.hub.onRun(side("stopped"));
+  await Bun.sleep(50);
+  expect(existsSync(dir)).toBe(true);
+  // a turn of the last one is no end
+  w.hub.onRun(side("working"));
+  await Bun.sleep(50);
+  expect(existsSync(dir)).toBe(true);
+  w.sides.set(dir, 0);
+  w.hub.onRun(side("stopped"));
+  for (let i = 0; i < 100 && w.treeRemoved.length === 0; i++) await Bun.sleep(20);
+  expect(existsSync(dir)).toBe(false);
+  expect(w.treeRemoved).toEqual([w.repo.path]);
 });
 
 test("a drop is refused while a task still runs in the worktree", async () => {

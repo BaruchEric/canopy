@@ -3,9 +3,14 @@
 // resolves; it is outside the repo's tsconfig for the same reason.
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { chromium, type Browser, type LaunchOptions } from "playwright";
+import { chromium, webkit, type Browser, type LaunchOptions } from "playwright";
 
 const dir = import.meta.dirname;
+
+// CANOPY_BROWSER_ENGINE=webkit drives Safari's engine instead, on a Mac
+// whose Playwright cache holds the WebKit build this Playwright names
+// (`bunx playwright install webkit` from the browser folder).
+const engine = process.env["CANOPY_BROWSER_ENGINE"] === "webkit" ? "webkit" : "chromium";
 
 // Playwright names the shell's folder by platform: linux64 in canopy's
 // containers, mac-arm64 or mac-x64 on a Mac whose `browsers` folder is
@@ -18,14 +23,15 @@ const builds = readdirSync(join(dir, "browsers"))
   .filter((d) => d.startsWith("chromium_headless_shell-"))
   .sort((a, b) => Number(b.split("-").pop()) - Number(a.split("-").pop()));
 const build = builds.find((b) => existsSync(exe(b)));
-if (!build) throw new Error(`no ${platform} headless shell under ${dir}/browsers; run scripts/browser/setup.sh`);
+if (!build && engine === "chromium") throw new Error(`no ${platform} headless shell under ${dir}/browsers; run scripts/browser/setup.sh`);
 
-export const executablePath = exe(build);
+export const executablePath = build ? exe(build) : "";
 
 // The container cannot make user namespaces, so the sandbox cannot start,
 // and its /dev/shm is 64 MB, too small for Chromium's shared memory.
 export const args = ["--no-sandbox", "--disable-dev-shm-usage"];
 
 export function launch(options: LaunchOptions = {}): Promise<Browser> {
+  if (engine === "webkit") return webkit.launch({ headless: true, ...options });
   return chromium.launch({ executablePath, headless: true, ...options, args: [...args, ...(options.args ?? [])] });
 }

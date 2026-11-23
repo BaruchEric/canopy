@@ -49,7 +49,8 @@ btw what does retryBackoff default to?
 - The box says the message is a side question and offers a model for it. **send it to the run instead** sends the words to the run as typed.
 - The answer comes in a thread beside the run, or over it on a phone. The thread starts with what the run knew when you asked, so it can answer about files the run has read. The run gets no message and keeps working.
 - Go on in the thread's own box. Its model select changes the model for the messages that follow.
-- Close the column to put the thread away. Its tab, marked `btw`, brings it back. **end chat** ends it, and ending the run leaves the thread open.
+- Close the column to put the thread away. Its tab, marked `btw`, brings it back. **end chat** ends it, and ending the run leaves the thread open. A reload keeps the column open where it was.
+- Beside a run on a branch of its own, the thread works in that branch's worktree. When the branch lands, the worktree stays until the thread ends.
 - The thread is told to answer and to change no file unless you ask. It counts as one of the checkout's runs.
 
 A run that has ended takes no side question; fork it from its replay instead. On the CLI, `canopy run side RUN_ID "your question"` starts one and prints the new chat's ID, and `canopy run say` goes on in it.

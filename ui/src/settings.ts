@@ -436,9 +436,16 @@ export function loadSettings(): Settings {
   try {
     rescaleOnce();
     const raw = localStorage.getItem(KEY);
-    // A browser that kept a layout but never changed a setting is one from
-    // before levels, not a new one: it keeps the panel it had.
-    if (!raw) return localStorage.getItem("canopy.layout") ? { ...DEFAULT_SETTINGS, ...levelOf({}) } : DEFAULT_SETTINGS;
+    if (!raw) {
+      // A browser that kept a layout but never changed a setting is one from
+      // before levels, not a new one: it keeps the panel it had.
+      if (localStorage.getItem("canopy.layout")) return { ...DEFAULT_SETTINGS, ...levelOf({}) };
+      // A new one notes its level and its tour now. The page writes a
+      // layout as it loads, so the next load would take this browser for
+      // one from before levels and drop it on advanced (seen 2026-11-23).
+      localStorage.setItem(KEY, JSON.stringify({ level: DEFAULT_SETTINGS.level, onboarded: DEFAULT_SETTINGS.onboarded }));
+      return DEFAULT_SETTINGS;
+    }
     const saved: Partial<Record<keyof Settings, unknown>> = withScreen(storedSettings(), slotsNow(), SCREEN_SETTINGS);
     // Every field is validated against its list: a value written by an older
     // build or edited by hand must not put the UI in a state it cannot render.

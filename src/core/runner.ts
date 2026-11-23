@@ -442,6 +442,15 @@ export class Runner {
     return false;
   }
 
+  /** How many side questions (FR-077) still go in `dir`. One asked beside
+   *  a branch run works in that run's worktree, so a land keeps the
+   *  worktree until the last of them ends. */
+  sidesIn(dir: string): number {
+    let n = 0;
+    for (const l of this.live.values()) if (l.ctx.run.sideOf && l.ctx.cwd === dir && !l.ctx.ending && isRunActive(l.ctx.run)) n++;
+    return n;
+  }
+
   /** `liveAny` for one seed: a stage run active on the repo at `path`, or
    *  a stage process `liveIn` it. On an isolated backend this alone holds
    *  canopy's git off a seed. */
