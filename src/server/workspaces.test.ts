@@ -127,11 +127,14 @@ test("a workspace run starts on the primary with the others added", async () => 
   expect(again.status).toBe(201);
   const second = (await again.json()) as Run;
   expect(second.repoId).toBe("analysis");
-  expect(second.steps[0]).toMatchObject({ kind: "note", text: "sharing the checkout with another run: look around" });
-  // it counts as a run on the primary alone: the other member takes its own
+  expect(second.steps[0]).toMatchObject({ kind: "note", text: "sharing its folders with another run: look around" });
+  // both count in the other member's checkout too: a run that starts
+  // there starts beside them and is told so
   const onApi = await call("POST", "/api/repos/run?id=api", { action: "ask", note: "meanwhile" });
   expect(onApi.status).toBe(201);
-  await stopRun(((await onApi.json()) as Run).id);
+  const meanwhile = (await onApi.json()) as Run;
+  expect(meanwhile.steps[0]).toMatchObject({ kind: "note", text: "sharing the checkout with 2 other runs: look around, again" });
+  await stopRun(meanwhile.id);
   await stopRun(second.id);
   await stopRun(run.id);
 });

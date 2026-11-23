@@ -310,6 +310,10 @@ interface Live {
   process: DriverProcess;
 }
 
+/** The repos whose checkouts a run works in: its own, and for a workspace
+ *  run the other members it holds as folders (FR-073). */
+const checkoutsOf = (l: Pick<Live, "repo" | "scope">): string[] => [l.repo.id, ...(l.scope?.otherIds ?? [])];
+
 export class Runner {
   private live = new Map<string, Live>();
   /** Logged processes keep ownership through final storage, even after UI dismiss/trim. */
@@ -343,11 +347,7 @@ export class Runner {
    *  turns, which takes no more turns and may be a long while exiting (its
    *  async hooks run first). */
   activeFor(repoId: string): Run | undefined {
-    for (const l of this.live.values()) {
-      const r = l.ctx.run;
-      if (r.repoId === repoId && !r.branch && !isCoordinate(r) && !l.ctx.ending && isRunActive(r)) return r;
-    }
-    return undefined;
+    return this.checkoutLives(repoId)[0]?.ctx.run;
   }
 
   /** Every run going in the repo's checkout, oldest first: `activeFor`'s
@@ -362,10 +362,13 @@ export class Runner {
     return this.activeRunsFor(repoId).find((r) => r.status !== "idle");
   }
 
+  /** The runs at work in the repo's checkout, oldest first. A workspace
+   *  run counts in its primary's and in every other member's it was given
+   *  as a folder, since it may write in each (FR-073). */
   private checkoutLives(repoId: string): Live[] {
     return [...this.live.values()].filter((l) => {
       const r = l.ctx.run;
-      return r.repoId === repoId && !r.branch && !isCoordinate(r) && !l.ctx.ending && isRunActive(r);
+      return checkoutsOf(l).includes(repoId) && !r.branch && !isCoordinate(r) && !l.ctx.ending && isRunActive(r);
     });
   }
 
@@ -547,6 +550,7 @@ export class Runner {
       this.nameFrom(run, note, !spec.unattended && !extras.group && !extras.parent && extras.priority !== "low");
     }
     if (scope) run.workspace = scope.workspace;
+    if (scope?.otherIds?.length) run.alsoIn = [...scope.otherIds];
     if (spec.flowStep) run.flowStep = { ...spec.flowStep };
     if (branch) run.branch = { ...branch.branch, state: "working", ...(group ? { group } : {}) };
     // a stage's run never takes a remembered rule (amendment 4, ruling 16):
@@ -655,22 +659,31 @@ export class Runner {
     return childRefusal(parent === undefined ? undefined : this.get(parent), live);
   }
 
-  /** The workflow going in the checkout beside `live`, by its verb. A
-   *  flow's own step is not beside its flow. */
-  private workflowBeside(live: Live): string | undefined {
-    return live.flowOwner === undefined ? this.opts.workflow?.(live.repo.id) : undefined;
+  /** The workflows going in the checkouts `live` works in, by their
+   *  verbs. A flow's own step is not beside its flow. */
+  private workflowsBeside(live: Live): string[] {
+    if (live.flowOwner !== undefined) return [];
+    const ask = this.opts.workflow;
+    return ask ? [...new Set(checkoutsOf(live).flatMap((id) => ask(id) ?? []))] : [];
+  }
+
+  /** The other runs going in the checkouts `live` works in, each once. */
+  private runsBeside(live: Live): Run[] {
+    const all = checkoutsOf(live).flatMap((id) => this.activeRunsFor(id));
+    return all.filter((r, i) => r.id !== live.ctx.run.id && all.findIndex((o) => o.id === r.id) === i);
   }
 
   /** Says on a run's timeline what it shares the checkout with, as its
    *  first turn begins: the workflow going there, by its verb and not step
-   *  by step, and the other runs by name. A branch run has a worktree of
-   *  its own and a coordinator no checkout, so neither is told. */
+   *  by step, and the other runs by name. A workspace run is told of every
+   *  member's it works in. A branch run has a worktree of its own and a
+   *  coordinator no checkout, so neither is told. */
   private noteBeside(live: Live): void {
     const run = live.ctx.run;
     if (run.branch || isCoordinate(run)) return;
-    const flow = this.workflowBeside(live);
-    const beside = this.activeRunsFor(live.repo.id).filter((r) => r.id !== run.id && !(flow && r.flowStep));
-    const text = sharingNote(flow, beside.map(runTitle));
+    const flows = this.workflowsBeside(live);
+    const beside = this.runsBeside(live).filter((r) => !(flows.length && r.flowStep));
+    const text = sharingNote(flows, beside.map(runTitle), live.scope?.otherIds?.length ? "its folders" : undefined);
     if (text) live.ctx.step({ kind: "note", text });
   }
 
@@ -682,7 +695,7 @@ export class Runner {
     // told only when others are in the checkout as it begins, a workflow
     // between two of its steps among them: the rule would be noise to a
     // run that has the checkout to itself
-    const shared = this.workflowBeside(live) !== undefined || this.activeRunsFor(live.repo.id).some((r) => r.id !== live.ctx.run.id);
+    const shared = this.workflowsBeside(live).length > 0 || this.runsBeside(live).length > 0;
     return buildPrompt(live.repo, live.spec, note, live.scope, this.opts.stage?.(live.repo) ?? false, shared);
   }
 

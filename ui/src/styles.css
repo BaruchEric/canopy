@@ -6338,6 +6338,22 @@ button.dl-gut.has {
   height: 7px;
   background: currentColor;
 }
+/* A workflow's words run long when a check waits for the runs beside it
+   and names them. The chip takes the room the head has, as it always did,
+   and past that it gives way with an ellipsis where it used to push the
+   head past the sheet's edge on a phone. Its title keeps the words. */
+.status-fit {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.status-fit .dot {
+  flex: none;
+}
+.status-word {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .clock {
   font-size: var(--t-md);
   color: var(--ink-faint);

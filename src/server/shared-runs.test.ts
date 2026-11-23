@@ -184,6 +184,31 @@ test("a workflow starts beside a run at work, and runs start beside the workflow
   await stopAll();
 });
 
+test("a workspace run starts beside a workflow going in another member, and each side hears of the other", async () => {
+  expect((await call("POST", "/api/workspaces", { name: "pair", repos: ["app", "lib"] })).status).toBe(200);
+  // the workflow goes in lib, a member that is not the primary
+  const started = await call("POST", "/api/repos/flow?id=lib", { workflow: "tidy" });
+  expect(started.status).toBe(201);
+  const flow = (await started.json()) as Flow;
+  const across = await call("POST", "/api/workspaces/run", { name: "pair", action: "ask", note: "rename the route" });
+  expect(across.status).toBe(201);
+  const ws = (await across.json()) as Run;
+  expect(ws.repoId).toBe("app");
+  expect(ws.alsoIn).toEqual(["lib"]);
+  expect(ws.steps[0]).toMatchObject({ kind: "note", text: "sharing its folders with the tidy workflow" });
+  // a job in lib shares its checkout with the workflow and the workspace run
+  const late = await start("lib", { action: "ask", note: "second task", name: "second task" });
+  expect(late.steps[0]?.text).toBe("sharing the checkout with the tidy workflow and another run: rename the route");
+  // and one in app, the primary, with the workspace run alone
+  const home = await start("app", { action: "ask", note: "third task", name: "third task" });
+  expect(home.steps[0]?.text).toBe("sharing the checkout with another run: rename the route");
+  expect((await call("POST", "/api/flows/stop", { id: flow.id })).status).toBe(200);
+  await until(async () => !((await (await fetch(url("/api/flows"))).json()) as Flow[]).some(isFlowActive), "the workflow to end");
+  expect((await runOf(ws.id))?.status).toBe("working");
+  await stopAll();
+  expect((await call("DELETE", "/api/workspaces", { name: "pair" })).status).toBe(200);
+});
+
 test("the checkout is full at the cap, and another repo's is not", async () => {
   for (let i = 0; i < CHECKOUT_RUNS_PER_REPO; i += 1) await start("lib", { action: "ask", note: `task ${i}` });
   const full = await call("POST", "/api/repos/run?id=lib", { action: "chat", note: "" });

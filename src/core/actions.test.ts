@@ -361,12 +361,15 @@ test("propose starts in plan mode with room for plan and build", () => {
 });
 
 test("the sharing note names the workflow by its verb and the other runs by name", () => {
-  expect(sharingNote(undefined, [])).toBeNull();
-  expect(sharingNote(undefined, ["peer sync"])).toBe("sharing the checkout with another run: peer sync");
-  expect(sharingNote(undefined, ["peer sync", "chat"])).toBe("sharing the checkout with 2 other runs: peer sync, chat");
-  expect(sharingNote("deploy", [])).toBe("sharing the checkout with the deploy workflow");
-  expect(sharingNote("deploy", ["peer sync"])).toBe("sharing the checkout with the deploy workflow and another run: peer sync");
-  expect(sharingNote("deploy", ["a", "b", "c"])).toBe("sharing the checkout with the deploy workflow and 3 other runs: a, b, c");
+  expect(sharingNote([], [])).toBeNull();
+  expect(sharingNote([], ["peer sync"])).toBe("sharing the checkout with another run: peer sync");
+  expect(sharingNote([], ["peer sync", "chat"])).toBe("sharing the checkout with 2 other runs: peer sync, chat");
+  expect(sharingNote(["deploy"], [])).toBe("sharing the checkout with the deploy workflow");
+  expect(sharingNote(["deploy"], ["peer sync"])).toBe("sharing the checkout with the deploy workflow and another run: peer sync");
+  expect(sharingNote(["deploy"], ["a", "b", "c"])).toBe("sharing the checkout with the deploy workflow and 3 other runs: a, b, c");
+  // a workspace run works in several checkouts, each with its own workflow
+  expect(sharingNote(["deploy", "tidy"], [], "its folders")).toBe("sharing its folders with the deploy and tidy workflows");
+  expect(sharingNote(["a", "b", "c"], ["chat"], "its folders")).toBe("sharing its folders with the a, b and c workflows and another run: chat");
 });
 
 test("the busy message names the run's kind without an article that depends on it", () => {

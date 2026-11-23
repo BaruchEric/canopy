@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { groupProfiles } from "../groups";
 import type { TabRef } from "../sectiontabs";
 import { ACTIONS, planWords, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
 import { parseIssueRef } from "../../../src/core/issue";
-import { activeFlowFor, agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, tasksOf, treeTasksOf, useStore, type Sheet } from "../store";
+import { activeFlowFor, agentFor, connOf, idText, landingAll, launchFor, memberFlowNotes, ownBranchBeside, prsAll, routesOf, tasksOf, treeTasksOf, useStore, type Sheet } from "../store";
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
-import { branchByDefault, runLanding, stoppedLandTitle } from "../landing";
+import { branchByDefault, freeBranchSlots, runLanding, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
 import { equipTitle, fromWord, inheritedLabel, loadoutLabel, loadoutsFor } from "../loadouts";
 import { planPriority, priorityTitle } from "../capacity";
@@ -37,8 +38,6 @@ import {
   AGENT_ROLES,
   DEFAULT_LAUNCH,
   isRunActive,
-  isFlowActive,
-  type Flow,
   type AgentRole,
   type Harness,
   type LaunchSettings,
@@ -53,7 +52,7 @@ import {
 } from "../../../src/core/types";
 import { forkLine, stepWords } from "../../../src/core/handoff";
 import { branchTask, branchTaskWords, devTask as devTaskOf, renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
-import { AGENT_NAME, harnessOf, hideTodoSteps, nestSteps, resultLine, runBesideFlow, runPanelLabel, settledProposal, tokenTitle, type SettledProposal } from "../runs";
+import { AGENT_NAME, CHAT_BRANCH_HINT, OWN_BRANCH_NOTE, harnessOf, hideTodoSteps, nestSteps, resultLine, runBesideFlow, runPanelLabel, settledProposal, tokenTitle, type SettledProposal } from "../runs";
 import { RunTabs } from "./RunTabs";
 import { HARNESS } from "../../../src/core/harness";
 import { CENTERED } from "../pop";
@@ -224,14 +223,6 @@ function Missing({ what, onClose }: { what: string; onClose: () => void }) {
 
 /* ---------- pre-flight ---------- */
 
-/** A branch workflow keeps its slot between steps, including reader steps and gates. */
-export function freeBranchSlots(repoId: string, runs: readonly Run[], flows: readonly Flow[]): number {
-  const origins = new Set<string>();
-  for (const run of runs) if (run.repoId === repoId && run.branch && isRunActive(run)) origins.add(run.branch.origin);
-  for (const flow of flows) if (flow.repoId === repoId && flow.branch && isFlowActive(flow)) origins.add(flow.branch.origin);
-  return Math.max(0, GROUP_MAX - origins.size);
-}
-
 /** The pre-flight's canopy tools toggle (FR-038): over the route's setting for
  *  this one start. A group, a coordinator and a workspace run start without
  *  them, so they get no toggle. */
@@ -333,13 +324,23 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const [error, setError] = useState<string | null>(null);
   // null follows the route's setting, which may arrive after this sheet opens
   const [toolsPick, setToolsPick] = useState<boolean | null>(null);
-  const noteReady = !busy && (!spec.noteRequired || note.trim().length > 0);
-  // a branch of its own: on for propose, off for the rest, never for a
-  // workspace run or a checkout on another host or the forge; a coordinator
-  // works from no checkout and branches through its cards
+  // a branch of its own: never for a workspace run or a checkout on another
+  // host or the forge; a coordinator works from no checkout and branches
+  // through its cards
   const branchable = !coordinate && !workspace && !repo.host && !repo.forge;
-  const byDefault = branchByDefault(action, workspace);
-  const [onBranch, setOnBranch] = useState(byDefault);
+  // what the backend does with a start that does not say: plan, then build
+  // goes on a branch, the rest in the checkout
+  const backendDefault = branchByDefault(action, workspace);
+  // FR-080: a job or a chat that starts while the checkout is in use gets a
+  // worktree of its own, given a branch slot; the box comes ticked and a
+  // line says why. A seed keeps its one run in the seed.
+  const beside = useStore((s) => ownBranchBeside(s, repo));
+  const ownBeside = branchable && !backendDefault && branchByDefault(action, workspace, beside);
+  const [onBranch, setOnBranch] = useState(backendDefault || ownBeside);
+  // a chat's branch and work item are named from its first message, so a
+  // chat on a branch does not start with nothing said
+  const chatOnBranch = action === "chat" && branchable && onBranch;
+  const noteReady = !busy && ((!spec.noteRequired && !chatOnBranch) || note.trim().length > 0);
   // FR-011: a PR in place of the landing queue, so only on a branch
   const [asPr, setAsPr] = useState(false);
   const pr = branchable && onBranch && asPr;
@@ -356,6 +357,8 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   // on a branch of its own and a coordinator share nothing with it
   const flowVerb = useStore((s) => activeFlowFor(s, repo.id)?.verb);
   const besideFlow = flowVerb && !coordinate && !(branchable && onBranch) ? runBesideFlow(flowVerb) : null;
+  // a workspace run works in its other members' checkouts too
+  const besideMemberFlows = useStore(useShallow((s) => memberFlowNotes(s, workspace, repo.id)));
   const ready = noteReady && (!branchable || !onBranch || times <= free);
   // a branch run whose note opens with #123 or an issue URL starts from
   // that GitHub issue; the backend reads it with gh (core/issue)
@@ -368,7 +371,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
     try {
       // the default is the backend's to apply, so a repo with no main yet keeps its propose in the checkout
       if (branchable && onBranch && times > 1) await startGroup(repo.id, action, note, times, groupProfiles(picks, times), autoLand, pr, reviewers === 2 ? 2 : undefined, raised ? "interactive" : undefined);
-      else await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr || startDev ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined, startDev ? true : undefined, toolsPick ?? undefined, sentLoadout));
+      else await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr || startDev ? true : branchable && onBranch !== backendDefault ? onBranch : undefined, pr ? true : undefined, startDev ? true : undefined, toolsPick ?? undefined, sentLoadout));
     } catch (err) {
       setError(errText(err));
       setBusy(false);
@@ -411,6 +414,11 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
         </div>
         <p className="blurb">{words.blurb}</p>
         {besideFlow && <p className="note">{besideFlow}</p>}
+        {besideMemberFlows.map((line) => (
+          <p key={line} className="note">
+            {line}
+          </p>
+        ))}
         <div className="mention-host">
           <textarea
             ref={noteBox}
@@ -444,7 +452,9 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
             on a branch of its own
           </label>
         )}
-        <GroupPreflight onBranch={branchable && onBranch} times={times} free={free} picks={picks} profiles={profiles} reviewers={reviewers} autoLand={autoLand} onTimes={setTimes} onPick={(member, picked) => setPicks(now => { const next = [...now]; next[member] = picked; return Array.from(next, p => p ?? ""); })} onReviewers={setReviewers} onAutoLand={setAutoLand} />
+        {ownBeside && onBranch && <p className="note">{OWN_BRANCH_NOTE}</p>}
+        {chatOnBranch && !note.trim() && <p className="note">{CHAT_BRANCH_HINT}</p>}
+        <GroupPreflight onBranch={branchable && onBranch && action !== "chat"} times={times} free={free} picks={picks} profiles={profiles} reviewers={reviewers} autoLand={autoLand} onTimes={setTimes} onPick={(member, picked) => setPicks(now => { const next = [...now]; next[member] = picked; return Array.from(next, p => p ?? ""); })} onReviewers={setReviewers} onAutoLand={setAutoLand} />
         {branchable && onBranch && (
           <label className="plan-branch" title="Once the run is ready, canopy pushes its branch and opens a PR on GitHub instead of landing it here, then watches its checks and reviews">
             <input type="checkbox" checked={asPr} onChange={(e) => setAsPr(e.target.checked)} />

@@ -211,8 +211,17 @@ export function flowBesideRuns(names: readonly string[]): string | null {
 
 /** What a run's plan sheet says of the workflow going in the checkout it is
  *  about to share (FR-073). */
-export const runBesideFlow = (verb: string): string =>
-  `The ${verb} workflow is going in this checkout. This run starts beside it, and the workflow's checks see what the run changes.`;
+export const runBesideFlow = (verb: string, where = "this checkout"): string =>
+  `The ${verb} workflow is going in ${where}. This run starts beside it, and the workflow's checks see what the run changes.`;
+
+/** What a job's or a chat's pre-flight says when its branch box came ticked
+ *  because the checkout is in use (FR-080). */
+export const OWN_BRANCH_NOTE =
+  "This checkout is in use, so the run starts in a worktree of its own, on a branch the landing queue lands on main once you say land. Untick the box to work in the checkout beside what is going there.";
+
+/** What the pre-flight says of a chat on a branch with nothing typed yet:
+ *  its branch and its work item are named from the first message. */
+export const CHAT_BRANCH_HINT = "A chat on a branch of its own starts from its first message. Say what it is for.";
 
 /** What a run's own panel or tab is called: the name it goes by, or its
  *  verb while it has none, and its repo. */

@@ -77,6 +77,9 @@ describe("shapes", () => {
   });
   test("runs, flows, fleets, jobs, shells, kept shells, devices", () => {
     expect(qRun(q, run)).toMatchObject({ id: "mac|r1", repoId: "mac|a/b" });
+    // a workspace run's other members are repo ids too (FR-073)
+    expect(qRun(q, { ...run, alsoIn: ["c/d"] }).alsoIn).toEqual(["mac|c/d"]);
+    expect(qRun(q, run).alsoIn).toBeUndefined();
     const coord = qRun(q, {
       ...run,
       tasks: [

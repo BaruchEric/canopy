@@ -8,7 +8,7 @@ import { isFlowActive, type Fleet, type Flow, type FlowChoice, type FlowStep, ty
 import { budgetWord, fleetCounts, flowWord, gateButtons, gateWords, oldestParked, rewindLines, stepWord } from "../flows";
 import { fit, flowGraphSteps, picture, stateWord } from "../flowgraph";
 import { PHONE, useMedia } from "../media";
-import { agentFor, idText, pickedIds, runsFor, useStore } from "../store";
+import { agentFor, checkoutRunsFor, idText, pickedIds, useStore } from "../store";
 import { termId } from "../term";
 import { BackendWord } from "./IdLabel";
 import { AGENT_NAME, flowBesideRuns, harnessOf, runsAtWork } from "../runs";
@@ -34,7 +34,7 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
   const verdictReady = useStore((s) => s.verdictReady);
   const entry = useStore((s) => s.workflows[repo.id]?.find((e) => e.ok && e.workflow.name === workflow));
   // the runs at work in the checkout the workflow will share (FR-073)
-  const beside = useStore((s) => flowBesideRuns(runsAtWork(runsFor(s, repo.id)).map(runTitle)));
+  const beside = useStore((s) => flowBesideRuns(runsAtWork(checkoutRunsFor(s, repo.id)).map(runTitle)));
   // one id for every try from this sheet: a retry after a lost answer finds
   // the flow the first try started (the sheet is keyed by repo and workflow)
   const [request] = useState(termId);
@@ -444,9 +444,9 @@ export function FlowConsole({ flowId }: { flowId: string }) {
           <div className="eyebrow">{run ? `with ${AGENT_NAME[harnessOf(run)]} · ` : ""}workflow{step?.profile ? ` · step on ${step.profile}` : ""}</div>
           <h2 className="sheet-title">{flow.verb} <span className="sheet-repo">{idText(flow.repoId)}</span></h2>
         </div>
-        <span className={`status st-${flow.status === "gated" ? "waiting" : flow.status}`}>
+        <span className={`status status-fit st-${flow.status === "gated" ? "waiting" : flow.status}`} title={flowWord(flow, true)}>
           <span className="dot" />
-          {flowWord(flow, true)}
+          <span className="status-word">{flowWord(flow, true)}</span>
         </span>
         <span className="clock" title="elapsed">{mmss(elapsed)}</span>
         <PopGear />

@@ -25,7 +25,8 @@ describe("run console actions", () => {
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Console, GroupPreflight, PriorityPreflight, RunPane, ToolsPreflight, freeBranchSlots } from "./RunSheet";
+import { Console, GroupPreflight, PriorityPreflight, RunPane, ToolsPreflight } from "./RunSheet";
+import { freeBranchSlots } from "../landing";
 import { DEFAULT_CAPACITY } from "../../../src/core/capacity";
 import { api } from "../api";
 import { useStore } from "../store";

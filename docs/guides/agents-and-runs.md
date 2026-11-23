@@ -29,7 +29,7 @@ With Codex, a provider value names an entry already configured on the backend. C
 
 1. Open the repo menu and choose a job or chat action.
 2. Read the pre-flight description and enter a concrete request. Include the expected behavior and how it should be checked.
-3. For a job that will edit files, decide whether to use **on a branch of its own**. This creates a separate worktree. Without it, the run works in the selected checkout.
+3. For a job that will edit files, decide whether to use **on a branch of its own**. This creates a separate worktree. Without it, the run works in the selected checkout. When a run or a workflow is already going in the checkout, the box comes ticked; untick it to work in the checkout beside them.
 4. Start the run. Follow the commands, output, and agent messages in its console.
 5. If it needs input, open the prompt in the console or **waiting on you**. Answer the question or choose the appropriate permission response.
 6. When the run finishes, inspect its result, changed files, and checks. A completed agent turn is not proof that the requested behavior works.
@@ -41,10 +41,12 @@ In chat, later messages continue the conversation. **end chat** closes it.
 A repo's checkout takes up to 8 runs at once, so an open chat does not stop a job or a second chat from starting. An incubator project is the exception and keeps one run at a time.
 
 - Each run has a name. Canopy cuts one from the first message, and a moment later your own `claude` writes a shorter one. Start a run under your own name with `--name` on the CLI.
-- The row of tabs under a run's head lists every run going on the repo. Press another tab to switch to that run. Press this run's tab to rename it; a name you type is never replaced. **+ chat** starts another chat. A run popped out into its own window has the same row: a tab there takes the window to that run.
+- The row of tabs under a run's head lists every run going on the repo. Press another tab to switch to that run. Press this run's tab to rename it; a name you type is never replaced. **+ chat** starts another chat; while the checkout is in use it opens the pre-flight first. A run popped out into its own window has the same row: a tab there takes the window to that run.
 - The repo menu lists each run with its name and state. The card's chip shows the run that most needs you, with `+N` for the others.
-- Runs in one checkout share its files. Each is told to leave the others' changes alone and to commit only its own files, and Canopy tells both when they have edited the same file. For a job that should not share, choose **on a branch of its own**.
-- A workflow and plain runs share a checkout too. Start a chat or a job while a workflow runs, or a workflow while a run is at work: the pre-flight says what the start will share the checkout with, and the run's first note names the workflow. A workflow's check reads the files as they are, another run's unfinished changes included, so a check that fails beside a run at work says which runs were there. A checkout takes one workflow at a time.
+- Runs in one checkout share its files. Each is told to leave the others' changes alone and to commit only its own files, and Canopy tells both when they have edited the same file.
+- A job or a chat that starts while the checkout is in use gets a branch of its own unless you untick **on a branch of its own** in its pre-flight. A chat on a branch needs a first message. It commits on its branch without pushing, so its work reaches main only when you land it after the chat ends, and it holds one of the repo's three branch slots while it is open.
+- A workflow and plain runs share a checkout too. Start a chat or a job while a workflow runs, or a workflow while a run is at work: the pre-flight says what the start will share the checkout with, and the run's first note names the workflow. A workflow's check reads the files as they are, another run's unfinished changes included, so a check first waits up to ten minutes for a run that is mid-turn, and the step says whom it waits for. A check that still fails beside a run at work says which runs were there. A checkout takes one workflow at a time.
+- A run across a workspace works in every member's folder, so it counts as a run in each member's checkout and starts beside a workflow going in any of them.
 
 ## Start from an issue
 

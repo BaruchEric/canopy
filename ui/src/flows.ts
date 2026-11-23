@@ -17,15 +17,34 @@ export const STEP_WORD: Record<FlowStep["status"], string> = {
   skipped: "skipped",
 };
 
-export const stepWord = (step: FlowStep): string => STEP_WORD[step.status];
+/** What a check held back says (FR-073): the runs mid-turn in the checkout
+ *  it waits for, by name. The check runs once their turns end. */
+export const checkWaitsWord = (names: readonly string[]): string =>
+  `the check waits for ${names.join(", ")} to end ${names.length === 1 ? "its turn" : "their turns"}`;
+
+/** the runs a step's check is waiting for, when it is */
+const waitsOf = (step: FlowStep | undefined): readonly string[] | null =>
+  step?.status === "checking" && step.waits?.length ? step.waits : null;
+
+export const stepWord = (step: FlowStep): string => {
+  const waits = waitsOf(step);
+  return waits ? checkWaitsWord(waits) : STEP_WORD[step.status];
+};
 
 /** The chip's word for a flow, short on a card and long in a panel. */
 export function flowWord(flow: Flow, long: boolean): string {
   const step = flow.steps[flow.current];
   const name = step?.name ?? "";
   switch (flow.status) {
-    case "working":
+    case "working": {
+      // a check held back for the runs beside the workflow: the panel says
+      // for whom, and the card that it waits. Kept short, since a sheet's
+      // head has little room on a phone; the step's own word (`stepWord`)
+      // is the whole sentence.
+      const waits = waitsOf(step);
+      if (waits) return long ? `${flow.verb}, step ${flow.current + 1} of ${flow.steps.length}: waits for ${waits.join(", ")}` : `${flow.verb}: ${name} waits`;
       return long ? `${flow.verb}, step ${flow.current + 1} of ${flow.steps.length}: ${name}` : `${flow.verb}: ${name}…`;
+    }
     case "waiting":
       return long ? `${flow.verb}: the agent needs you` : "needs you";
     case "gated":

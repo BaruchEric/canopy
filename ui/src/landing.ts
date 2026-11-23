@@ -1,4 +1,4 @@
-import type { RunGroup } from "../../src/core/group";
+import { GROUP_MAX, type RunGroup } from "../../src/core/group";
 /** The landing queue as the page shows it: every backend's queue as one,
  *  a repo's part of it, a run's word and buttons, the card chip. Pure; the
  *  words for an entry's state are `core/landing.ts`'s, shared with the CLI. */
@@ -6,7 +6,7 @@ import type { RunGroup } from "../../src/core/group";
 import { inQueue, landAllPick, landCounts, landWord, queueOf, reviewWord, SCORE_GATE, sentBack, stoppedWhole } from "../../src/core/landing";
 import { watchHolds } from "../../src/core/pr";
 import { withName } from "../../src/core/touch";
-import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, PrWatch, ReviewFile, Run, RunAction, ScenarioResult, ScenarioRun, WorktreeRepoInfo, WorktreesInfo } from "../../src/core/types";
+import { isFlowActive, isRunActive, type Flow, type LandEntry, type LandingInfo, type LandingOrphan, type LandingRun, type LandNotice, type PrWatch, type ReviewFile, type Run, type RunAction, type ScenarioResult, type ScenarioRun, type WorktreeRepoInfo, type WorktreesInfo } from "../../src/core/types";
 
 export const EMPTY_LANDING: LandingInfo = { runs: [], entries: [], orphans: [], notices: [], collisions: [] };
 
@@ -293,9 +293,25 @@ function ordinaryRunLanding(run: Run, info: LandingInfo): RunLanding | null {
   return { word: BRANCH_WORD[state], canLand, canFix: false, canPr: canLand && !stopped, ...sorted, ...(canLand && stopped ? { stopped: true } : {}), ...whole, scenarios: rec?.scenarios, ...overlapMark };
 }
 
-/** Whether a new run starts on a branch unless the toggle says otherwise:
- *  propose does, every other action does not, and a workspace run never. */
-export const branchByDefault = (action: RunAction, workspace?: string): boolean => action === "propose" && !workspace;
+/** How many of a repo's branch slots are free. A branch run holds one while
+ *  it is live, and a branch workflow keeps its slot between steps, reader
+ *  steps and gates included. */
+export function freeBranchSlots(repoId: string, runs: readonly Run[], flows: readonly Flow[]): number {
+  const origins = new Set<string>();
+  for (const run of runs) if (run.repoId === repoId && run.branch && isRunActive(run)) origins.add(run.branch.origin);
+  for (const flow of flows) if (flow.repoId === repoId && flow.branch && isFlowActive(flow)) origins.add(flow.branch.origin);
+  return Math.max(0, GROUP_MAX - origins.size);
+}
+
+/** Whether a new run starts on a branch unless the toggle says otherwise.
+ *  Plan, then build always does, and the backend applies that default
+ *  itself. A job or a chat does when it would otherwise work beside what
+ *  is going in the checkout (`beside`: the store's `ownBranchBeside`), so
+ *  two agents never work in one tree unless that was asked for (FR-080);
+ *  the page sends that choice. With the checkout free it works there. A
+ *  workspace run never does. */
+export const branchByDefault = (action: RunAction, workspace?: string, beside = false): boolean =>
+  !workspace && (action === "propose" || (beside && (action === "ask" || action === "chat")));
 
 /** A sent-back entry's reason in one line, for a list. */
 export function backLine(e: LandEntry): string {

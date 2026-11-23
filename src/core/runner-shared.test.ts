@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { ACTIONS, busyWith, checkoutFull, SHARED_CHECKOUT, type ActionSpec } from "./actions";
 import type { DriveCtx, RunDriver } from "./driver";
 import { CHECKOUT_RUNS_PER_REPO, Runner, SteerError, UnknownRunError, type RunnerOptions } from "./runner";
-import { DEFAULT_AGENT, type Harness, type Repo, type Run } from "./types";
+import { DEFAULT_AGENT, type Harness, type Repo, type Run, type WorkspaceScope } from "./types";
 
 /* Several runs in one checkout (FR-073): how many, which starts are still
  * refused, the name each run goes by, and what a run is told when it starts
@@ -206,6 +206,55 @@ describe("what a run is told about the others", () => {
     chat("r", "peer sync");
     const third = ask("r", "third");
     expect(third.steps[0]?.text).toBe("sharing the checkout with 2 other runs: tidy the imports, peer sync");
+  });
+});
+
+describe("a workspace run works in every member's checkout", () => {
+  const scope: WorkspaceScope = { workspace: "trips", primary: "/tmp/api", others: ["/tmp/web"], otherIds: ["web"], skipped: [] };
+  const across = (runner: Runner, note: string, over: WorkspaceScope = scope): Run => runner.start(repo("api"), "ask", ACTIONS.ask, note, DEFAULT_AGENT, undefined, over);
+
+  test("it is counted in a member's checkout, and a run that starts there is told of it", () => {
+    const { runner, ask, made } = setup();
+    const ws = across(runner, "rename the route");
+    expect(ws.alsoIn).toEqual(["web"]);
+    expect(runner.activeRunsFor("api").map((r) => r.id)).toEqual([ws.id]);
+    expect(runner.activeRunsFor("web").map((r) => r.id)).toEqual([ws.id]);
+    expect(runner.activeFor("web")?.id).toBe(ws.id);
+    expect(runner.busyFor("web")?.id).toBe(ws.id);
+    const job = ask("web", "tidy the imports");
+    expect(job.steps[0]?.text).toBe("sharing the checkout with another run: rename the route");
+    expect(made[1]?.started[0]).toContain(SHARED_CHECKOUT);
+    // a repo outside the workspace hears nothing of it
+    expect(ask("docs", "fix a typo").steps).toEqual([]);
+  });
+
+  test("it is told of the runs and the workflows in each member as it starts", () => {
+    const { runner, ask, made } = setup({ workflow: (id) => (id === "api" ? "ship" : id === "web" ? "tidy" : undefined) });
+    ask("web", "fix the footer");
+    const ws = across(runner, "rename the route");
+    expect(ws.steps[0]?.text).toBe("sharing its folders with the ship and tidy workflows and another run: fix the footer");
+    expect(made[1]?.started[0]).toContain(SHARED_CHECKOUT);
+    // with nothing going in any member it has them to itself
+    const { runner: quiet, made: alone } = setup();
+    expect(across(quiet, "rename the route").steps).toEqual([]);
+    expect(alone[0]?.started[0]).not.toContain(SHARED_CHECKOUT);
+  });
+
+  test("it takes a place under a member's cap, and frees it when it ends", () => {
+    const { runner, ask, end } = setup();
+    across(runner, "rename the route");
+    for (let i = 1; i < CHECKOUT_RUNS_PER_REPO; i++) ask("web", `task ${i}`);
+    expect(runner.checkoutRefusal(repo("web"))).toBe(checkoutFull("web", CHECKOUT_RUNS_PER_REPO));
+    end(0);
+    expect(runner.checkoutRefusal(repo("web"))).toBeNull();
+  });
+
+  test("a scope with no member ids counts on its primary alone", () => {
+    const { runner, ask } = setup();
+    const ws = across(runner, "rename the route", { workspace: "trips", primary: "/tmp/api", others: ["/tmp/web"], skipped: [] });
+    expect(ws.alsoIn).toBeUndefined();
+    expect(runner.activeRunsFor("web")).toEqual([]);
+    expect(ask("web", "tidy the imports").steps).toEqual([]);
   });
 });
 

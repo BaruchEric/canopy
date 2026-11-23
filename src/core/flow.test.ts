@@ -129,6 +129,8 @@ function setup(opts: {
   fingerprint?: (repo: Repo) => Promise<string | null>;
   now?: () => number;
   stopGraceMs?: number;
+  quietWaitMs?: number;
+  quietPollMs?: number;
 } = {}) {
   const runner = new FakeRunner();
   const changes: Flow[] = [];
@@ -158,6 +160,8 @@ function setup(opts: {
     fingerprint: opts.fingerprint,
     now: opts.now,
     ...(opts.stopGraceMs !== undefined ? { stopGraceMs: opts.stopGraceMs } : {}),
+    ...(opts.quietWaitMs !== undefined ? { quietWaitMs: opts.quietWaitMs } : {}),
+    ...(opts.quietPollMs !== undefined ? { quietPollMs: opts.quietPollMs } : {}),
     // the record is the one this hook was just handed; the round trip copies it
     save: (rec) => saved.push(JSON.parse(JSON.stringify(rec)) as FlowRecord),
     forget: (id) => forgotten.push(id),
@@ -877,7 +881,8 @@ describe("retries", () => {
   });
 
   test("a check that fails beside a run at work says so to the retry and to the reader", async () => {
-    const { runner, flows } = setup({ check: () => ({ exit: 1, output: "2 fail" }) });
+    // no wait: the check runs with the job still mid-turn, as it does at the wait's limit
+    const { runner, flows } = setup({ check: () => ({ exit: 1, output: "2 fail" }), quietWaitMs: 0 });
     const other = (id: string, status: Run["status"], name: string): Run => ({
       id, repoId: "r", action: "ask", verb: "ask", progress: "", expectsChange: false, chat: status === "idle", harness: "claude", note: "", name,
       status, startedAt: 0, steps: [], prompt: null,
@@ -911,6 +916,73 @@ describe("retries", () => {
     }
     expect(flows.get(flow.id)?.status).toBe("gated");
     expect(flows.get(flow.id)?.steps[1]?.reason).toBe("check failed with exit 1, with another run at work in the checkout");
+  });
+
+  describe("a check waits for the runs mid-turn beside the flow", () => {
+    const job = (status: Run["status"], name = "tidy the imports"): Run => ({
+      id: "job1", repoId: "r", action: "ask", verb: "ask", progress: "", expectsChange: false, chat: false, harness: "claude", note: "", name,
+      status, startedAt: 0, steps: [], prompt: null,
+    });
+    const until = async (done: () => boolean): Promise<void> => {
+      for (let i = 0; i < 200 && !done(); i++) await new Promise((r) => setTimeout(r, 5));
+    };
+
+    test("it runs once their turns end, and the step lists them meanwhile", async () => {
+      const { runner, flows, checks, changes } = setup({ quietPollMs: 5 });
+      const beside = job("working");
+      runner.beside = [beside];
+      const flow = flows.start(repo(), CHECKED_RETRY, "", DEFAULT_AGENT);
+      runner.end("run1", "done", "built");
+      await flush();
+      await new Promise((r) => setTimeout(r, 30));
+      expect(checks).toEqual([]);
+      expect(flows.get(flow.id)?.status).toBe("working");
+      expect(flows.get(flow.id)?.steps[1]).toMatchObject({ status: "checking", waits: ["tidy the imports"] });
+      // the job's turn ends: it sits between turns, and the check goes
+      beside.status = "idle";
+      await until(() => checks.length > 0);
+      await flush();
+      expect(checks).toEqual(["bun test"]);
+      expect(flows.get(flow.id)?.status).toBe("done");
+      expect(flows.get(flow.id)?.steps[1]?.waits).toBeUndefined();
+      expect(changes.some((f) => f.steps[1]?.waits?.[0] === "tidy the imports")).toBe(true);
+    });
+
+    test("at the limit it runs anyway, and a failure names the run still at work", async () => {
+      const { runner, flows, checks } = setup({ check: () => ({ exit: 1, output: "2 fail" }), quietWaitMs: 20, quietPollMs: 5 });
+      runner.beside = [job("working")];
+      flows.start(repo(), CHECKED_RETRY, "", DEFAULT_AGENT);
+      runner.end("run1", "done", "built");
+      await until(() => checks.length > 0);
+      await flush();
+      expect(checks).toEqual(["bun test"]);
+      expect(runner.specs[1]?.task ?? "").toContain(checkBeside(["tidy the imports"]));
+    });
+
+    test("a run waiting on a prompt and a chat between turns hold nothing back", async () => {
+      const { runner, flows, checks } = setup({ quietPollMs: 5 });
+      runner.beside = [job("waiting"), { ...job("idle", "peer sync"), id: "chat1", chat: true }];
+      const flow = flows.start(repo(), CHECKED_RETRY, "", DEFAULT_AGENT);
+      runner.end("run1", "done", "built");
+      await flush();
+      expect(checks).toEqual(["bun test"]);
+      expect(flows.get(flow.id)?.status).toBe("done");
+    });
+
+    test("a stop while it waits ends the flow, and the check never runs", async () => {
+      const { runner, flows, checks } = setup({ quietPollMs: 5 });
+      runner.beside = [job("working")];
+      const flow = flows.start(repo(), CHECKED_RETRY, "", DEFAULT_AGENT);
+      runner.end("run1", "done", "built");
+      await flush();
+      expect(flows.get(flow.id)?.steps[1]?.waits).toEqual(["tidy the imports"]);
+      flows.stop(flow.id);
+      await until(() => flows.get(flow.id)?.status === "stopped");
+      expect(flows.get(flow.id)?.status).toBe("stopped");
+      expect(flows.get(flow.id)?.steps[1]).toMatchObject({ status: "failed", reason: "stopped" });
+      expect(flows.get(flow.id)?.steps[1]?.waits).toBeUndefined();
+      expect(checks).toEqual([]);
+    });
   });
 
   test("out of retries, a failing check parks the flow", async () => {

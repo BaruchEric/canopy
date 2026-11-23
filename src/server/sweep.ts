@@ -452,18 +452,23 @@ export class SweepHub {
       case "chat": {
         const run = facts.runs.find((r) => r.id === id);
         if (!run?.session) return { key, result: "failed", why: "it has no session to resume" };
+        // A chat on a branch of its own (FR-080) is carried on from its
+        // branch's landing record, which holds its session and its worktree.
+        // A swept record would resume the session in the checkout, where
+        // Claude has no such conversation, so it gets none.
+        const record = !run.branch;
         // the record goes first, so a stopped chat can always be resumed
-        await addSweptChat({ runId: id, repoId: run.repoId, harness: run.harness, session: run.session, title: item.title, sweptAt: this.now(), ...(run.equip ? { equip: run.equip } : {}), ...(run.name ? { name: run.name } : {}) });
+        if (record) await addSweptChat({ runId: id, repoId: run.repoId, harness: run.harness, session: run.session, title: item.title, sweptAt: this.now(), ...(run.equip ? { equip: run.equip } : {}), ...(run.name ? { name: run.name } : {}) });
         // the record's write gave a message time to start a turn: a chat
         // that is not idle this moment is in use, and a stop would cut it off
         if (this.deps.runStatus(id) !== "idle") {
-          await takeSweptChat(id);
+          if (record) await takeSweptChat(id);
           return { key, result: "in use now" };
         }
         try {
           this.deps.stopChat(id);
         } catch (err) {
-          await takeSweptChat(id);
+          if (record) await takeSweptChat(id);
           throw err;
         }
         return { key, result: "closed" };

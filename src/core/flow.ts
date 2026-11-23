@@ -204,6 +204,26 @@ export const FLOW_ID = /^[0-9a-f]{8}$/;
 /** what the browser mints for a flow or fleet start: 32 hex digits */
 export const isRequestId = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{32}$/.test(v);
 
+/** How long a step's check waits for the runs mid-turn beside it in the
+ *  checkout before it runs anyway (FR-073). A check reads the tree as it
+ *  is, so one that starts mid-turn reads another run's half-made change. */
+export const CHECK_QUIET_WAIT = 10 * 60_000;
+/** how often a waiting check looks again */
+const CHECK_QUIET_POLL = 2_000;
+
+/** Resolves after `ms`, or as soon as `signal` aborts. */
+const pause = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise((done) => {
+    if (signal.aborted) return done();
+    const end = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", end);
+      done();
+    };
+    const timer = setTimeout(end, ms);
+    signal.addEventListener("abort", end);
+  });
+
 /** What a failed check's retry is told when other runs were at work in the
  *  checkout while it ran (FR-073): the failure may be theirs, and their
  *  files are not this workflow's to fix. */
@@ -262,6 +282,10 @@ export interface FlowHooks {
   now?: () => number;
   /** `STOP_GRACE` unless a test shortens it */
   stopGraceMs?: number;
+  /** how long a check waits for the runs mid-turn beside it, and how often
+   *  it looks again; `CHECK_QUIET_WAIT` and two seconds when unset */
+  quietWaitMs?: number;
+  quietPollMs?: number;
   /** keeps a flow on disk; called on every change with the live objects, so
    *  it must serialize at once */
   save?: (rec: FlowRecord) => void;
@@ -1500,25 +1524,37 @@ export class Flows {
     const step = live.flow.steps[i];
     if (!def?.check || !step || !this.ownsAttempt(live, i, attempt)) return;
     step.status = "checking";
+    // a wait a restart cut off: this attempt waits afresh, or not at all
+    delete step.waits;
     this.emit(live);
     const ctl = new AbortController();
     live.checking.set(i, ctl);
-    const besideAtStart = this.atWorkBeside(live);
-    let r: CheckResult;
+    let besideAtStart: string[] = [];
+    let r: CheckResult | undefined;
     try {
-      r = await this.hooks.check(workRepo(live), def.check, ctl.signal, def.checkMinutes === undefined ? undefined : def.checkMinutes * 60_000);
-      if (live.checking.get(i) !== ctl) return;
+      // the runs mid-turn in the checkout first: the check reads the tree
+      // as it is, and theirs is half made until the turn ends
+      const wait = this.quiet(live, step, ctl.signal, () => live.checking.get(i) === ctl);
+      if (wait) {
+        await wait;
+        if (live.checking.get(i) !== ctl) return;
+      }
+      if (!ctl.signal.aborted) {
+        besideAtStart = this.atWorkBeside(live);
+        r = await this.hooks.check(workRepo(live), def.check, ctl.signal, def.checkMinutes === undefined ? undefined : def.checkMinutes * 60_000);
+        if (live.checking.get(i) !== ctl) return;
+      }
     } finally {
       if (live.checking.get(i) === ctl) live.checking.delete(i);
     }
-    // stopped while it ran: the check has exited now, so the stop lands
+    // stopped while it waited or ran: the check has exited now, so the stop lands
     if (live.pending && "end" in live.pending && live.pending.end === "stopped") {
       step.status = "failed";
       step.reason = "stopped";
       this.advance(live);
       return;
     }
-    if (!this.ownsAttempt(live, i, attempt) || step.status !== "checking") return;
+    if (!r || !this.ownsAttempt(live, i, attempt) || step.status !== "checking") return;
     if (r.away && isSeedId(live.repo.id)) {
       // the check never ran: it waits for the stage runner, and no retry is spent
       this.park(live, i, r.output || STAGE_AWAY, "gated", { kind: "stage", check: true });
@@ -1549,12 +1585,51 @@ export class Flows {
     await this.gate(live, i, attempt);
   }
 
-  /** The names of the runs at work in the flow's checkout that are not its
-   *  own steps. None for a flow on a branch, whose worktree is its own. */
-  private atWorkBeside(live: LiveFlow): string[] {
+  /** The runs going in the flow's checkout that are not its own steps, a
+   *  workspace run that holds the checkout as one of its folders among
+   *  them. None for a flow on a branch, whose worktree is its own. */
+  private besideRuns(live: LiveFlow): Run[] {
     if (live.flow.branch) return [];
     const own = new Set(live.flow.steps.map((s) => s.runId));
-    return this.runner.activeRunsFor(live.repo.id).filter((r) => r.status !== "idle" && !own.has(r.id)).map(runTitle);
+    return this.runner.activeRunsFor(live.repo.id).filter((r) => !own.has(r.id));
+  }
+
+  /** The names of the runs at work beside the flow: mid-turn, or waiting
+   *  on a prompt with a turn half done. */
+  private atWorkBeside(live: LiveFlow): string[] {
+    return this.besideRuns(live).filter((r) => r.status !== "idle").map(runTitle);
+  }
+
+  /** Holds a step's check back while runs beside the flow are mid-turn
+   *  (FR-073), and lists them on the step as `waits` while it does. Null
+   *  when none is, so the check starts in the same tick as it always did.
+   *  The wait ends once their turns end, at the limit (the check then runs
+   *  anyway, and a failure says who was at work), when `signal` aborts, or
+   *  when `mine` says the check is no longer this attempt's. A run waiting
+   *  on a prompt and a chat between turns are not waited for: nobody may
+   *  be there to move them on. The flow's working time stops meanwhile. */
+  private quiet(live: LiveFlow, step: FlowStep, signal: AbortSignal, mine: () => boolean): Promise<void> | null {
+    const turning = (): string[] => this.besideRuns(live).filter((r) => r.status === "working").map(runTitle);
+    const limit = this.hooks.quietWaitMs ?? CHECK_QUIET_WAIT;
+    if (limit <= 0 || turning().length === 0) return null;
+    const until = this.now() + limit;
+    const hold = async (): Promise<void> => {
+      this.clock(live, false);
+      try {
+        for (let names = turning(); names.length > 0 && mine() && !signal.aborted && this.now() < until; names = turning()) {
+          if (step.waits?.join("\n") !== names.join("\n")) {
+            step.waits = names;
+            this.emit(live);
+          }
+          await pause(this.hooks.quietPollMs ?? CHECK_QUIET_POLL, signal);
+        }
+      } finally {
+        delete step.waits;
+        if (mine() && !signal.aborted) this.clock(live, true);
+        this.emit(live);
+      }
+    };
+    return hold();
   }
 
   private async gate(live: LiveFlow, i: number, attempt: symbol): Promise<void> {

@@ -25,7 +25,7 @@ The workflow sheet shows a step list and run timeline. Start workflows from the 
 3. Review the preflight sheet: repo, branch facts, workflow description, ordered steps, checks, gates, and agent profile.
 4. Add a note if the workflow needs one or you want to give the agent more context.
 5. Choose the workflow's action button, named by its verb, to start.
-6. Follow the run sheet. Click a step in the strip to inspect its run or check output.
+6. Follow the run sheet. Click a step in the strip to inspect its run or check output. When another run is mid-turn in the same checkout, a step's check waits for that turn to end, up to ten minutes, and the step says whom it waits for.
 
 The workflow menu refreshes when you open it. If a workflow file has an error, its menu item is disabled and marked `will not parse`.
 

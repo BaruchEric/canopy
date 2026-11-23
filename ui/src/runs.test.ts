@@ -163,6 +163,8 @@ describe("several runs on one repo (FR-073)", () => {
     expect(flowBesideRuns(["peer sync"])).toBe("A run is at work in this checkout (peer sync). The workflow starts beside it, and its steps and checks see that run's changes, finished or not.");
     expect(flowBesideRuns(["peer sync", "chat"])).toStartWith("2 runs are at work in this checkout (peer sync, chat). The workflow starts beside them");
     expect(runBesideFlow("deploy")).toBe("The deploy workflow is going in this checkout. This run starts beside it, and the workflow's checks see what the run changes.");
+    // a workspace run's pre-flight names the member the workflow goes in
+    expect(runBesideFlow("deploy", "api")).toStartWith("The deploy workflow is going in api. This run starts beside it");
   });
 
   test("a menu row says the name with the verb and state beside it, or the old words without one", () => {

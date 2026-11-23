@@ -148,6 +148,16 @@ describe("a run's word and buttons", () => {
     expect(branchByDefault("propose", "ws")).toBe(false);
     expect(branchByDefault("ask")).toBe(false);
   });
+
+  test("a job or a chat starts on a branch of its own when the checkout is in use (FR-080)", () => {
+    expect(branchByDefault("ask", undefined, true)).toBe(true);
+    expect(branchByDefault("chat", undefined, true)).toBe(true);
+    expect(branchByDefault("chat", undefined, false)).toBe(false);
+    // a workspace run works in its folders, and a coordinator in none
+    expect(branchByDefault("ask", "ws", true)).toBe(false);
+    expect(branchByDefault("coordinate", undefined, true)).toBe(false);
+    expect(branchByDefault("propose", undefined, true)).toBe(true);
+  });
 });
 
 const sorted = (verdict: RunReview["verdict"], files: RunReview["files"] = [], over: Partial<RunReview> = {}): RunReview => ({ verdict, files, base: "b0", head: "h1", at: 1, ...over });

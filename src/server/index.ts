@@ -6086,13 +6086,13 @@ async function handleApi(
     broadcast(state, { type: "workspaces", workspaces });
     return json(workspaces);
   }
-  // One run on the primary, the other local members added as folders. A
-  // member whose checkout has no room for another run refuses it (FR-073),
-  // and so does a workflow going in a member other than the primary: the
-  // run counts on the primary alone, so neither it nor that workflow could
-  // be told of the other, as a run and a workflow in one checkout are. A seed's agents run only through the incubator, behind
-  // its git guards and in its stage, so a seed primary refuses the run and a
-  // seed member is left out like one on another host.
+  // One run on the primary, the other local members added as folders. The
+  // run is counted in every member's checkout (`otherIds`), so a member
+  // with no room for another run refuses it, and the runs and workflows
+  // going in any member are told of it as it is of them (FR-073). A seed's
+  // agents run only through the incubator, behind its git guards and in its
+  // stage, so a seed primary refuses the run and a seed member is left out
+  // like one on another host.
   if (path === "/api/workspaces/run" && method === "POST") {
     const b = await objectBody(req);
     if (typeof b.name !== "string") return json({ error: "missing workspace name" }, 400);
@@ -6109,10 +6109,9 @@ async function handleApi(
     for (const r of others) {
       const full = state.runner.checkoutRefusal(r);
       if (full) throw new HttpError(409, full);
-      if (state.flows.activeFor(r.id)) throw new HttpError(409, `a workflow is running in ${r.name}`);
     }
     const note = typeof b.note === "string" ? b.note : "";
-    const scope: WorkspaceScope = { workspace: ws.name, primary: primary.path, others: others.map((r) => r.path), skipped };
+    const scope: WorkspaceScope = { workspace: ws.name, primary: primary.path, others: others.map((r) => r.path), otherIds: others.map((r) => r.id), skipped };
     return json(await startRepoRun(state, primary, b.action, note, b.client, scope), 201);
   }
   if (path === "/api/workspaces/open" && method === "POST") {

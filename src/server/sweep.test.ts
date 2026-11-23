@@ -304,6 +304,15 @@ describe("the sweep hub", () => {
     expect(chats[0]).toMatchObject({ runId: "c1", repoId: "app", harness: "claude", session: "sess-c1", sweptAt: NOW });
   });
 
+  test("a chat on a branch of its own is stopped with no record: its branch carries it on", async () => {
+    const w = world();
+    w.runs = [{ ...idleChat("c1"), branch: { name: "run/w1-fix-the-footer", target: "main", base: "abc", dir: "/trees/b1", state: "working", origin: "b1" } }];
+    const hub = new SweepHub(w.deps);
+    expect(await hub.close(["chat:c1"], "eric")).toEqual([{ key: "chat:c1", result: "closed" }]);
+    expect(w.calls.stopChat).toEqual(["c1"]);
+    expect(await readSweptChats()).toEqual([]);
+  });
+
   test("a key the plan no longer has is \"gone\"", async () => {
     const w = world();
     const hub = new SweepHub(w.deps);

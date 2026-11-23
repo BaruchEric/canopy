@@ -58,7 +58,7 @@ export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
 import { beat } from "./live";
 import { ownRun, pickable, selectable } from "./flows";
-import { chatToSay, chatToShow, needsMore } from "./runs";
+import { chatToSay, chatToShow, needsMore, runBesideFlow } from "./runs";
 import { unreadProposals, withSession } from "./secrets";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
 import { anchorWord } from "./goals";
@@ -71,7 +71,7 @@ import { cardOfPanel } from "./agentpanel";
 import { isReservedPanel, panelOfItem, runOfPanel, runPanel } from "./itempanel";
 import type { Delivery, TriggersInfo } from "../../src/core/trigger";
 import type { WorkInfo } from "../../src/core/work";
-import { mergeLanding } from "./landing";
+import { freeBranchSlots, mergeLanding } from "./landing";
 import { isCoordinator, type CoordEdit } from "./coord";
 import { isSeedId } from "../../src/core/sprout";
 import { mergePrs } from "./prs";
@@ -5803,6 +5803,47 @@ export function runsFor(s: CanopyState, repoId: string): Run[] {
   return Object.values(s.runs)
     .filter((r) => r.repoId === repoId && isRunActive(r) && !isCoordinator(r) && ownRun(s.flowRuns, r))
     .sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+}
+
+/** The runs that work in a repo's checkout, oldest first: its own that are
+ *  not on a branch, and a workspace run that holds the repo as one of its
+ *  folders (FR-073). A new array each call: select it with useShallow. */
+export function checkoutRunsFor(s: CanopyState, repoId: string): Run[] {
+  return Object.values(s.runs)
+    .filter((r) => (r.repoId === repoId || r.alsoIn?.includes(repoId) === true) && !r.branch && isRunActive(r) && !isCoordinator(r) && ownRun(s.flowRuns, r))
+    .sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+}
+
+/** What a workspace run's pre-flight says of the workflows going in the
+ *  workspace's other members, a line each: the run works in those
+ *  checkouts too and starts beside each workflow (FR-073). A new array
+ *  each call: select it with useShallow. */
+export function memberFlowNotes(s: CanopyState, workspace: string | undefined, primaryId: string): string[] {
+  const ws = workspace === undefined ? undefined : s.workspaces.find((w) => w.name === workspace);
+  if (!ws) return [];
+  return s.repos
+    .filter((r) => isHome(r.id) && r.id !== primaryId && ws.repos.includes(r.path))
+    .flatMap((r) => {
+      const flow = activeFlowFor(s, r.id);
+      return flow ? [runBesideFlow(flow.verb, r.name)] : [];
+    });
+}
+
+/** Whether something is going in a repo's checkout: a run, a chat between
+ *  turns among them, or a workflow. A run that starts now gets a worktree
+ *  of its own unless it is told to share (FR-080). */
+export function checkoutInUse(s: CanopyState, repoId: string): boolean {
+  return activeFlowFor(s, repoId) !== undefined || checkoutRunsFor(s, repoId).length > 0;
+}
+
+/** Whether a job or a chat that starts on a repo now gets a worktree of its
+ *  own unless it is told to share (FR-080): something is going in the
+ *  checkout, the repo is a local folder that is no seed, and one of its
+ *  branch slots is free. The pre-flight ticks its branch box by this, and
+ *  the menu's chat row and a tab row's "+ chat" open the pre-flight by it. */
+export function ownBranchBeside(s: CanopyState, repo: Pick<Repo, "id" | "host" | "forge">): boolean {
+  if (repo.host || repo.forge || isSeedId(repo.id)) return false;
+  return checkoutInUse(s, repo.id) && freeBranchSlots(repo.id, Object.values(s.runs), Object.values(s.flows)) > 0;
 }
 
 export function activeRunFor(s: CanopyState, repoId: string): Run | undefined {

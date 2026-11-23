@@ -1360,6 +1360,10 @@ export interface WorkspaceScope {
   primary: string;
   /** the other local members, absolute paths, passed with --add-dir */
   others: string[];
+  /** those members' repo ids, in `others`' order: the run works in each
+   *  one's checkout too, so it is counted there and each side is told of
+   *  the other (FR-073). Unset on a scope from before that. */
+  otherIds?: string[];
   /** members left out, in words: "ssh://mini/x (on mini)" */
   skipped: string[];
 }
@@ -1412,6 +1416,9 @@ export interface Run {
   flowStep?: FlowStepName;
   /** the workspace this run spans, when it was started from one */
   workspace?: string;
+  /** the other repos a workspace run works in, by id: it is counted in
+   *  each one's checkout beside the runs and workflows there (FR-073) */
+  alsoIn?: string[];
   status: RunStatus;
   /** unix ms */
   startedAt: number;
@@ -2995,6 +3002,9 @@ export interface FlowStep {
   summary?: string;
   /** why a gate parked or a step failed, for the sheet */
   reason?: string;
+  /** the runs mid-turn in the checkout that the step's check waits for, by
+   *  name (FR-073): it runs once their turns end, or at the wait's limit */
+  waits?: string[];
   /** the step's run's session and the harness that named it, kept so a
    *  restart can resume a Claude session instead of starting over */
   session?: string;

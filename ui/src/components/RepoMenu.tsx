@@ -12,7 +12,7 @@ import { AGENT_NAME, RUN_DOT, menuRun } from "../runs";
 import { describeLaunch } from "../../../src/core/launch";
 import { flowWord } from "../flows";
 import { useShallow } from "zustand/react/shallow";
-import { activeFlowFor, agentFor, capsFor, cardOf, connOf, coordinatorFor, isFavorite, isHarness, isOnline, launchFor, multi, routesOf, runsFor, useStore } from "../store";
+import { activeFlowFor, agentFor, capsFor, cardOf, connOf, coordinatorFor, isFavorite, isHarness, isOnline, launchFor, multi, ownBranchBeside, routesOf, runsFor, useStore } from "../store";
 import { coordCheckout } from "../coord";
 import { oneMenu } from "../menus";
 import { backendOf } from "../registry";
@@ -277,6 +277,8 @@ export function RepoMenuItems({
   const seed = isSeedId(repo.id);
   // and a seed takes one run at a time, where any other repo takes several
   const seedBusy = seed && live.length > 0;
+  // FR-080: a chat that would start beside what is going in the checkout
+  const ownBranch = useStore((s) => ownBranchBeside(s, repo));
 
   const agentShell = (pick: { harness: (typeof HARNESSES)[number] } | { profile: string }) => {
     onDone();
@@ -290,6 +292,9 @@ export function RepoMenuItems({
 
   const chat = async (fresh: boolean) => {
     onDone();
+    // FR-080: with the checkout in use the pre-flight opens with its branch
+    // box ticked, so the chat gets a worktree of its own or is told to share
+    if (ownBranch) return plan(repo.id, "chat");
     try {
       await openChat(repo.id, "", fresh);
     } catch (err) {
@@ -447,6 +452,8 @@ export function RepoMenuItems({
                   ? "a seed takes one run at a time"
                   : missing
                     ? `${HARNESS[chatAgent.harness].label} is not installed on ${backendOf(repo.id)}`
+                    : ownBranch
+                      ? `Start ${another ? "another" : "a"} chat with ${AGENT_NAME[chatAgent.harness]}. The checkout is in use, so it starts in a worktree of its own unless you untick that`
                     : another
                       ? `Start another chat with ${AGENT_NAME[chatAgent.harness]} beside the ones going here`
                       : `Talk with ${AGENT_NAME[chatAgent.harness]} about this repo, here in canopy (the repo's chat route)`
@@ -462,7 +469,7 @@ export function RepoMenuItems({
                 {another ? `new ${ACTIONS.chat.label}` : ACTIONS.chat.label}
               </span>
               <span className="menu-fact">
-                {seedBusy ? "one run at a time" : missing ? "not installed" : "in canopy"}
+                {seedBusy ? "one run at a time" : missing ? "not installed" : ownBranch ? "own branch" : "in canopy"}
               </span>
             </button>
           );

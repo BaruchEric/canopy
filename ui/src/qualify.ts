@@ -75,6 +75,8 @@ export const qRun = (q: Q, r: Run): Run => ({
   // a coordinator's child names it, and its cards name their repos, runs,
   // groups, flows and branches (after names cards, which are not ids)
   ...(r.parent !== undefined ? { parent: q(r.parent) } : {}),
+  // a workspace run names the other members it works in (FR-073)
+  ...(r.alsoIn ? { alsoIn: r.alsoIn.map(q) } : {}),
   // a fork names the run it was forked from (FR-043 plan 3)
   ...(r.forkOf ? { forkOf: { ...r.forkOf, run: q(r.forkOf.run) } } : {}),
   ...(r.tasks

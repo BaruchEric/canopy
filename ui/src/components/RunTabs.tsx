@@ -6,7 +6,7 @@ import type { Repo, Run } from "../../../src/core/types";
 import { isCoordinator } from "../coord";
 import { ownRun } from "../flows";
 import { runWord } from "../runs";
-import { runsFor, useStore } from "../store";
+import { ownBranchBeside, runsFor, useStore } from "../store";
 
 /** What the row is at. One value, so a field cannot be open while a chat
  *  starts, and a save always has the name it is saving. */
@@ -44,6 +44,8 @@ export function RunTabs({ run, repo, go }: { run: Run; repo: Repo | undefined; g
   const showRun = useStore((s) => s.showRun);
   const openChat = useStore((s) => s.openChat);
   const renameRun = useStore((s) => s.renameRun);
+  const plan = useStore((s) => s.plan);
+  const beside = useStore((s) => repo !== undefined && ownBranchBeside(s, repo));
   const [mode, setMode] = useState<Mode>(TABS);
 
   if (isCoordinator(run) || !own) return null;
@@ -67,7 +69,12 @@ export function RunTabs({ run, repo, go }: { run: Run; repo: Repo | undefined; g
       (err: unknown) => setMode({ kind: "naming", draft, error: nameFailure(words(err)) }),
     );
   };
+  // FR-080: on the page a chat beside what is going in the checkout opens
+  // the pre-flight, its branch box ticked. A window of its own has no sheet
+  // for that, so there the chat starts in the checkout.
+  const asks = beside && !go;
   const another = () => {
+    if (asks) return plan(run.repoId, "chat");
     setMode({ kind: "starting" });
     openChat(run.repoId, "", true).then(
       (id) => {
@@ -140,7 +147,7 @@ export function RunTabs({ run, repo, go }: { run: Run; repo: Repo | undefined; g
         </button>
       ))}
       {canChat && !field && (
-        <button type="button" className="rtab add" disabled={mode.kind === "starting"} title="Start another chat on this repo, beside the runs going" onClick={another}>
+        <button type="button" className="rtab add" disabled={mode.kind === "starting"} title={asks ? "Start another chat on this repo: in a worktree of its own, or beside the runs going" : "Start another chat on this repo, beside the runs going"} onClick={another}>
           {mode.kind === "starting" ? "starting…" : "+ chat"}
         </button>
       )}

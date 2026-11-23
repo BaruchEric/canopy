@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { budgetWord, continueWord, fleetCounts, flowWord, gateButtons, gateWords, namedFlowWord, oldestParked, ownRun, rewindLines, selectable, stepWord } from "./flows";
+import { budgetWord, checkWaitsWord, continueWord, fleetCounts, flowWord, gateButtons, gateWords, namedFlowWord, oldestParked, ownRun, rewindLines, selectable, stepWord } from "./flows";
 import type { Fleet, Flow, FlowStep, Repo, Run } from "../../src/core/types";
 
 const flow = (o: Partial<Flow> = {}): Flow => ({
@@ -13,6 +13,24 @@ describe("namedFlowWord", () => {
     expect(namedFlowWord(flow({ status: "gated" }))).toBe("ship · needs you");
     expect(namedFlowWord(flow({ status: "waiting" }))).toBe("ship · needs you");
     expect(namedFlowWord(flow())).toBe("ship: Commit…");
+  });
+});
+
+describe("a check held back for the runs beside the workflow (FR-073)", () => {
+  const held = flow({ steps: [{ name: "Gates", status: "passed" }, { name: "Commit", status: "checking", waits: ["peer sync"] }, { name: "Push", status: "pending" }] });
+  test("the step and the panel say whom it waits for, the card that it waits", () => {
+    expect(checkWaitsWord(["peer sync"])).toBe("the check waits for peer sync to end its turn");
+    expect(checkWaitsWord(["peer sync", "top bar"])).toBe("the check waits for peer sync, top bar to end their turns");
+    expect(stepWord({ name: "Commit", status: "checking", waits: ["peer sync"] })).toBe("the check waits for peer sync to end its turn");
+    expect(flowWord(held, true)).toBe("ship, step 2 of 3: waits for peer sync");
+    expect(flowWord(held, false)).toBe("ship: Commit waits");
+    expect(namedFlowWord(held)).toBe("ship: Commit waits");
+  });
+  test("a check that runs, and a list left on a step that is no longer checking, read as before", () => {
+    expect(stepWord({ name: "Commit", status: "checking" })).toBe("running the check");
+    expect(stepWord({ name: "Commit", status: "checking", waits: [] })).toBe("running the check");
+    expect(stepWord({ name: "Commit", status: "failed", waits: ["peer sync"] })).toBe("failed");
+    expect(flowWord(flow({ steps: [{ name: "Gates", status: "passed" }, { name: "Commit", status: "checking" }] }), false)).toBe("ship: Commit…");
   });
 });
 

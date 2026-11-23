@@ -2,8 +2,8 @@
  *  shows, where a chat's message goes, and what a run going there no longer
  *  stops. The backend is a fetch that answers the three routes used. */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { Repo, Run } from "../../src/core/types";
-import { runFor, runsFor, useStore } from "./store";
+import type { Flow, Repo, Run } from "../../src/core/types";
+import { checkoutInUse, checkoutRunsFor, memberFlowNotes, ownBranchBeside, runFor, runsFor, useStore } from "./store";
 
 const pristine = useStore.getState();
 const realFetch = globalThis.fetch;
@@ -143,6 +143,64 @@ describe("starting beside the runs going", () => {
     expect(useStore.getState().sheet).toEqual({ kind: "plan", repoId: "app", action: "ask" });
     useStore.getState().plan("_incubator/seed", "ask");
     expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "seeded" });
+  });
+
+  test("a checkout is in use while a run, a chat between turns or a workflow is going in it (FR-080)", () => {
+    const branch = { name: "run/x", target: "main", base: "b", dir: "/w", origin: "o", state: "working" as const };
+    const going = (over: Partial<Flow> = {}): Flow => ({ id: "f1", repoId: "app", workflow: "ship", verb: "ship", note: "", status: "working", steps: [], current: 0, startedAt: 1, ...over });
+    const s = () => useStore.getState();
+    expect(checkoutInUse(s(), "app")).toBe(false);
+    // a run on a branch has a worktree of its own, and an ended run is gone
+    useStore.setState({ runs: byId(run("onbranch", { branch }), run("done", { status: "done" })) });
+    expect(checkoutInUse(s(), "app")).toBe(false);
+    useStore.setState({ runs: byId(chat("c1", "idle", 2)) });
+    expect(checkoutInUse(s(), "app")).toBe(true);
+    expect(checkoutInUse(s(), "lib")).toBe(false);
+    // a workspace run works in its other members' checkouts too
+    useStore.setState({ runs: byId(run("across", { repoId: "lib", workspace: "pair", alsoIn: ["app"] }), run("onbranch", { branch })) });
+    expect(checkoutRunsFor(s(), "app").map((r) => r.id)).toEqual(["across"]);
+    expect(runsFor(s(), "app").map((r) => r.id)).toEqual(["onbranch"]);
+    expect(checkoutInUse(s(), "app")).toBe(true);
+    // a workflow in the checkout, not one on a branch or one that ended
+    useStore.setState({ runs: {}, flows: { f1: going() } });
+    expect(checkoutInUse(s(), "app")).toBe(true);
+    useStore.setState({ flows: { f1: going({ status: "done" }) } });
+    expect(checkoutInUse(s(), "app")).toBe(false);
+    useStore.setState({ flows: { f1: going({ branch }) } });
+    expect(checkoutInUse(s(), "app")).toBe(false);
+  });
+
+  test("a run that starts beside what is going gets a branch of its own while a slot is free (FR-080)", () => {
+    const on = (origin: string) => ({ name: `run/${origin}`, target: "main", base: "b", dir: `/w/${origin}`, origin, state: "working" as const });
+    const app = repo("app");
+    const s = () => useStore.getState();
+    expect(ownBranchBeside(s(), app)).toBe(false);
+    useStore.setState({ runs: byId(chat("c1", "idle", 2)) });
+    expect(ownBranchBeside(s(), app)).toBe(true);
+    // a checkout on another host or the forge takes no branch run, and a seed keeps its one run
+    expect(ownBranchBeside(s(), { ...app, host: "mini" })).toBe(false);
+    expect(ownBranchBeside(s(), { ...app, forge: { kind: "forgejo", slug: "o/app", clone: "ssh://git.example/o/app.git", branch: "main", updated: 0, private: true, empty: false } })).toBe(false);
+    useStore.setState({ runs: byId(run("seeded", { repoId: "_incubator/seed" })) });
+    expect(ownBranchBeside(s(), repo("_incubator/seed"))).toBe(false);
+    // every branch slot taken: the run shares the checkout, as before
+    useStore.setState({ runs: byId(chat("c1", "idle", 2), run("b1", { branch: on("o1") }), run("b2", { branch: on("o2") }), run("b3", { branch: on("o3") })) });
+    expect(ownBranchBeside(s(), app)).toBe(false);
+    useStore.setState({ runs: byId(chat("c1", "idle", 2), run("b1", { branch: on("o1") }), run("b2", { branch: on("o2") })) });
+    expect(ownBranchBeside(s(), app)).toBe(true);
+  });
+
+  test("a workspace run's pre-flight lists the workflows going in the other members", () => {
+    const going: Flow = { id: "f1", repoId: "lib", workflow: "tidy", verb: "tidy", note: "", status: "gated", steps: [], current: 0, startedAt: 1 };
+    useStore.setState({
+      repos: [repo("app"), repo("lib"), repo("docs")],
+      workspaces: [{ name: "pair", repos: ["/dev/app", "/dev/lib"] }],
+      flows: { f1: going, f2: { ...going, id: "f2", repoId: "app", verb: "ship" }, f3: { ...going, id: "f3", repoId: "docs" } },
+    });
+    const s = useStore.getState();
+    // the primary's own workflow has its own line on the sheet, and docs is no member
+    expect(memberFlowNotes(s, "pair", "app")).toEqual(["The tidy workflow is going in lib. This run starts beside it, and the workflow's checks see what the run changes."]);
+    expect(memberFlowNotes(s, undefined, "app")).toEqual([]);
+    expect(memberFlowNotes(s, "gone", "app")).toEqual([]);
   });
 
   test("a workflow's plan opens beside the runs going, one at work among them; a seed shows its run", () => {
