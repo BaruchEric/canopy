@@ -623,8 +623,10 @@ export type InboxAnswer =
   | { landing: "fix" | "drop" | "land" }
   /** a PR with a red check: turn auto-fix on */
   | { pr: "auto-fix" }
-  /** a pair request: let it in, or turn it away */
-  | { pair: "allow" | "deny" }
+  /** a pair request: let it in, as the approver or as the person `as` names
+   *  (FR-074), or turn it away */
+  | { pair: "allow"; as?: string }
+  | { pair: "deny" }
   /** the sweep's ask: close its ticked items, or drop it closing nothing */
   | { sweep: "close" | "dismiss" }
   /** a reminder: mark its note done, or move it an hour on (FR-020) */

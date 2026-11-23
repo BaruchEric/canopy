@@ -79,6 +79,7 @@ import { PUSH_WORDS, pushCommand } from "./push";
 import { isLibrarySync, librarySyncCommand } from "./libsync";
 import { sweepCommand } from "./sweep";
 import { noteCommand } from "./notes";
+import { peopleCommand } from "./people";
 import { clipCommand } from "./clips";
 import { secretsCommand } from "./secrets";
 import { groupsCommand } from "./groups";
@@ -129,6 +130,7 @@ export const COMMANDS = new Set([
   "sweep",
   "note",
   "notes",
+  "people",
   "clip",
   "clips",
   "awake",
@@ -880,6 +882,8 @@ export async function main(argv: string[]): Promise<void> {
       return mcpCommand(args, { fail });
     case "auth":
       return authCommand(args, { fail });
+    case "people":
+      return peopleCommand(args, { fail });
     case "land":
     case "queue":
     case "collisions":

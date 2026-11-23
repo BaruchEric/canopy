@@ -15,6 +15,8 @@ export interface Stream {
   platform: DevicePlatform;
   address: string;
   since: number;
+  /** the person the stream's caller is, by id (FR-074) */
+  person?: string;
 }
 
 const isPlatform = (v: string): v is DevicePlatform => (DEVICE_PLATFORMS as readonly string[]).includes(v);
@@ -36,7 +38,7 @@ export function devicesOf(streams: Iterable<Stream>): Device[] {
   for (const s of streams) {
     const d = byId.get(s.id);
     if (!d) {
-      byId.set(s.id, { id: s.id, name: s.name, platform: s.platform, address: s.address, since: s.since, streams: 1, named: s.since });
+      byId.set(s.id, { id: s.id, name: s.name, platform: s.platform, address: s.address, since: s.since, streams: 1, named: s.since, ...(s.person !== undefined ? { person: s.person } : {}) });
       continue;
     }
     d.streams += 1;
@@ -44,6 +46,9 @@ export function devicesOf(streams: Iterable<Stream>): Device[] {
     if (s.since >= d.named) {
       d.name = s.name;
       d.named = s.since;
+      // the newest window says whose browser it is, as it says its name
+      if (s.person !== undefined) d.person = s.person;
+      else delete d.person;
     }
   }
   return [...byId.values()]

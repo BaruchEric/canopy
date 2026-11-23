@@ -116,6 +116,14 @@ const RULES: readonly Rule[] = [
   // for (shell, helper or the event stream's read); a helper token has no read
   // right to pass this table with
   { methods: POST, paths: ["auth/pair", "auth/claim", "auth/first", "auth/ticket"], right: "open" },
+  // an invite is traded for a session before its holder has a token, and a
+  // session ends itself whatever its role, since revoke is admin's (FR-074);
+  // both handlers check who is calling
+  { methods: POST, paths: ["auth/join", "auth/signout"], right: "open" },
+  // where a person is and what they call themselves are their own to say,
+  // a viewer included; everything else about people is the admin's
+  { methods: POST, paths: ["people/at", "people/me"], right: "read" },
+  { methods: POST, paths: ["people/add", "people/set", "people/remove", "people/invite", "people/uninvite", "people/team", "people/team/remove"], right: "admin" },
   // a trigger's hook comes from Sentry or Linear, which send no token; the hub checks
   // the delivery's signature against the rule's secret before it reads a word
   { methods: POST, paths: ["hooks/*"], right: "open" },

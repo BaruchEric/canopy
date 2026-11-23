@@ -13,6 +13,7 @@ const LOADS = {
   secrets: () => import("./Secrets"),
   kit: () => import("./Kit"),
   plugins: () => import("./Plugins"),
+  people: () => import("./People"),
   costs: () => import("./Costs"),
   triggers: () => import("./Triggers"),
   clock: () => import("./Clock"),
@@ -51,6 +52,7 @@ export const SessionsView = view(LOADS.sessions, (m) => m.SessionsView);
 export const SecretsView = view(LOADS.secrets, (m) => m.SecretsView);
 export const KitView = view(LOADS.kit, (m) => m.KitView);
 export const PluginsView = view(LOADS.plugins, (m) => m.PluginsView);
+export const PeopleView = view(LOADS.people, (m) => m.PeopleView);
 export const CostsView = view(LOADS.costs, (m) => m.CostsView);
 export const TriggersView = view(LOADS.triggers, (m) => m.TriggersView);
 export const ClockView = view(LOADS.clock, (m) => m.ClockView);

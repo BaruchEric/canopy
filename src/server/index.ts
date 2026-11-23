@@ -70,7 +70,7 @@ import { unattendedRefusal } from "../core/workflow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sayTo, sendKeys, sendLine, LINE_END, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
 import { choiceOnScreen, codexAgentListOnScreen, steerWords } from "../core/steer";
-import { allows, isPerson } from "../core/callers";
+import { isPerson } from "../core/callers";
 import { cardAsks } from "../core/agentstatus";
 import { cardSession, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, resumeLine as resumeKeptLine, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
@@ -281,6 +281,9 @@ import { dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles,
 import { cardFilesLine, coordWorkflows, GOAL_LIMITS, goalAnchor, goalFileNames, goalRepoLine, goalTopLine, isGoalAnchor, isRunCard, treeBusyWords, treeMakingWords, treeStep, withStandingRules, type ChildBranch } from "../core/coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
+import { PeopleHub } from "./people";
+import { actor, asActor, type Actor } from "./actor";
+import { activityWords } from "../core/people";
 import { bodyUpTo } from "./body";
 import { ClipsHub } from "./clips";
 import { DiskRunLogger, closeOpen, dropKept, listKept as listKeptRuns, pruneKept, readKeptRun, readWire, runsDir, RUN_ID, type RunLogger } from "../core/runlog";
@@ -457,6 +460,8 @@ interface ServerState {
   callers: CallerBook;
   /** the caller check at the top of route(), and what it refused */
   gate: CallerGate;
+  /** who is on this backend, their roles and teams, where each is and who did what (server/people, FR-074) */
+  people: PeopleHub;
   /** every open shell and helper socket that came with a caller, so a
    *  dropped caller's sockets close at once rather than outliving its token */
   callerSockets: Set<ServerWebSocket<Socket>>;
@@ -1054,7 +1059,7 @@ async function startSweptChat(state: ServerState, c: SweptChat): Promise<Run> {
   const agent = equipped?.agent ?? routed;
   try {
     await needHarness(state, agent.harness, repo.path);
-    return state.runner.start(repo, "chat", ACTIONS.chat, "", agent, undefined, undefined, undefined, equipped?.extras ?? base);
+    return state.runner.start(repo, "chat", ACTIONS.chat, "", agent, undefined, undefined, undefined, { ...(equipped?.extras ?? base), ...byWhom() });
   } catch (err) {
     await equipped?.release();
     throw err;
@@ -1328,15 +1333,17 @@ async function startRepoRun(
     await needHarness(state, agent.harness, repo.path);
     // the device it was started from, when the browser said and is on the stream
     const by = how.by ?? deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+    // the person who asked, unless it is started in another's name (FR-074)
+    const who = how.by ? {} : byWhom();
     needCapacity(state, agent.harness, priority);
     if (how.tools === true && refused) throw new HttpError(400, refused);
     if (!loaded && withTools) tools = await runTools(state, repo, base);
     if (onBranch) {
       const resolved = await issueNoteFor(repo, note);
-      return await startBranchRun(state, repo, action, resolved.note, agent, by, pr, ACTIONS[action], { ...tools.extras, ...(how.devTask ? { devTask: true } : {}) }, resolved.work);
+      return await startBranchRun(state, repo, action, resolved.note, agent, by, pr, ACTIONS[action], { ...tools.extras, ...(how.devTask ? { devTask: true } : {}), ...who }, resolved.work);
     }
-    if (how.custom) return state.runner.start(repo, how.custom.action, how.custom.spec, note, agent, by, scope, undefined, { ...tools.extras, ...how.custom.extras });
-    return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope, undefined, tools.extras);
+    if (how.custom) return state.runner.start(repo, how.custom.action, how.custom.spec, note, agent, by, scope, undefined, { ...tools.extras, ...how.custom.extras, ...who });
+    return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope, undefined, { ...tools.extras, ...who });
   } catch (err) {
     await tools.release();
     throw err;
@@ -1579,7 +1586,7 @@ function toolsRefusal(state: ServerState, repo: Repo): string | null {
  *  A loadout's `servers` go in the same file beside canopy's. */
 async function runTools(state: ServerState, repo: Repo, extras: StartExtras, servers: Readonly<Record<string, KitMcpEntry>> = {}): Promise<{ extras: StartExtras; release: () => Promise<void> }> {
   const id = extras.id ?? crypto.randomUUID().slice(0, 8);
-  const { token } = state.callers.mint("run", { label: `run ${repo.id}`, run: id });
+  const { token } = state.callers.mint("run", { label: `run ${repo.id}`, run: id, ...(actor() ? { user: actor()?.person } : {}) });
   const release = (): Promise<void> => dropRunTools(state, id);
   const names = Object.keys(servers);
   try {
@@ -1615,9 +1622,12 @@ async function dropFlowTools(flowId: string): Promise<void> {
  *  off the flow and the step's agent alone, so a restart's step and a
  *  pick-up's get them too. None for any other flow. */
 function flowStepExtras(flow: Flow, step: FlowStep, agent: AgentSettings): StepExtras | undefined {
-  if (!flow.equip) return undefined;
+  // each step's run is its flow's starter's (FR-074)
+  const who = flow.who ? { who: flow.who } : {};
+  if (!flow.equip) return flow.who ? who : undefined;
   const id = flowToolsId(flow.id);
   return {
+    ...who,
     settings: settingsPath(id),
     equip: step.profile ? { ...flow.equip, model: agent.model, effort: agent.effort } : flow.equip,
     ...(flow.equip.mcp.length > 0 ? { mcpConfig: mcpConfigPath(id), servers: [...flow.equip.mcp] } : {}),
@@ -1846,6 +1856,7 @@ async function startGroup(state: ServerState, repo: Repo, action: RunAction, not
     const items: string[] = [];
     const runs: Run[] = [];
     const by = extra.by ?? deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+    const who = extra.by ? {} : byWhom();
     /** each member's loadout files, removed again if the group does not start */
     const releases: (() => Promise<void>)[] = [];
     try {
@@ -1871,7 +1882,7 @@ async function startGroup(state: ServerState, repo: Repo, action: RunAction, not
         if (!member) throw new Error("a group member has no agent");
         const own = extra.loadout ? equipped[i] : { agent: member.agent, extras: {} };
         if (!own) throw new Error("a group member has no loadout");
-        const run = state.runner.start(repo, action, ACTIONS[action], resolved.note, own.agent, by, undefined, cut, { ...own.extras, group: group.id, priority, ...(extra.parent ? { parent: extra.parent } : {}) });
+        const run = state.runner.start(repo, action, ACTIONS[action], resolved.note, own.agent, by, undefined, cut, { ...own.extras, group: group.id, priority, ...(extra.parent ? { parent: extra.parent } : {}), ...who });
         runs.push(run);
         await state.groups.addMember(group.id, { run: run.id, origin: cut.branch.origin, profile: member.profile });
       }
@@ -2072,9 +2083,9 @@ async function startCoordinator(state: ServerState, repo: Repo, goal: string, cl
       }
       wrote = true;
     }
-    const { token, caller } = state.callers.mint("coordinator", { label: `coordinator ${repo.id}`, run: id });
+    const { token, caller } = state.callers.mint("coordinator", { label: `coordinator ${repo.id}`, run: id, ...(actor() ? { user: actor()?.person } : {}) });
     minted = caller.id;
-    return state.runner.start(repo, "coordinate", spec, goal, agent, by, undefined, undefined, { id, cwd, env: { CANOPY_API: api, CANOPY_TOKEN: token }, ...(filesDir ? { addDirs: [filesDir] } : {}) });
+    return state.runner.start(repo, "coordinate", spec, goal, agent, by, undefined, undefined, { id, cwd, env: { CANOPY_API: api, CANOPY_TOKEN: token }, ...(filesDir ? { addDirs: [filesDir] } : {}), ...byWhom() });
   } catch (err) {
     if (minted) state.callers.revoke(minted).catch(() => {});
     await rm(cwd, { recursive: true, force: true }).catch(() => {});
@@ -2420,7 +2431,7 @@ async function startForkRun(state: ServerState, b: Record<string, unknown>, clie
         ...start,
         ...(message !== undefined ? { message } : {}),
         ...(resume !== undefined ? { resume, fork: true as const } : {}),
-      }, equipped?.extras ?? base);
+      }, { ...(equipped?.extras ?? base), ...byWhom() });
     } catch (err) {
       await release?.();
       const text = err instanceof Error ? err.message : String(err);
@@ -2502,7 +2513,7 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
       branch: b,
       message,
       ...(resume ? { resume } : {}),
-    }, tools.extras);
+    }, { ...tools.extras, ...byWhom() });
   } catch (err) {
     await tools.release();
     if (err instanceof Error && err.name === "StageAwayError") throw err;
@@ -3248,7 +3259,7 @@ async function acceptAdvice(state: ServerState, entry: AdviceEntry): Promise<Adv
   await needHarness(state, agent.harness, repo.path);
   // the bundled file as the checkout holds it, not where this process runs from
   const file = wf ? join("lib", "workflows", relative(BUNDLED_DIR, wf.file)) : null;
-  const run = state.runner.start(repo, "chat", ACTIONS.chat, "", agent);
+  const run = state.runner.start(repo, "chat", ACTIONS.chat, "", agent, undefined, undefined, undefined, byWhom());
   // the run itself, so the page shows the chat before its event lands
   return { kind: "chat", runId: run.id, repoId: repo.id, run, draft: adviceMessage(entry, file) };
 }
@@ -3603,8 +3614,11 @@ function canopyEnv(state: ServerState, repoId: string, path: string, id: string)
 function newProcessEnv(state: ServerState, repoId: string, path: string, id: string): Record<string, string> {
   const env = canopyEnv(state, repoId, path, id);
   if (parseLocator(path).host !== null) return env;
+  // the shell is its opener's (FR-074); one started again with nobody
+  // asking (a restore at start) stays whose it was
+  const user = actor()?.person ?? state.callers.userOfTerm(id);
   dropTermToken(state, id);
-  return { ...env, CANOPY_TOKEN: state.callers.mint("shell", { label: `shell ${repoId}`, term: id }).token };
+  return { ...env, CANOPY_TOKEN: state.callers.mint("shell", { label: `shell ${repoId}`, term: id, ...(user ? { user } : {}) }).token };
 }
 
 /** What a new tmux session's environment adds to `newProcessEnv`: canopy's own
@@ -3680,7 +3694,15 @@ function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): Live
   };
   state.terms.set(id, live);
   tellTerms(state);
+  noteShell(state, repo);
   return live;
+}
+
+/** a shell someone opened, as a line of who did what (FR-074); a restore
+ *  with nobody asking leaves none */
+function noteShell(state: ServerState, repo: Repo): void {
+  const who = actor();
+  if (who) state.people.note(who, "opened a shell", repo.name);
 }
 
 /** A socket onto a shell on tmux: the session made when this is the first
@@ -3702,6 +3724,7 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
     };
     state.terms.set(id, live);
     tellTerms(state);
+    noteShell(state, repo);
     const start = ws.data.start;
     if (start) void typeAgent(state, live, repo, start, ws.data.prompt).catch(() => {});
   } else if (!(await hasSession(tmux, id))) {
@@ -3987,12 +4010,12 @@ function send(state: ServerState, c: ReadableStreamDefaultController<Uint8Array>
 function broadcastPairs(state: ServerState, pending: PendingPair[]): void {
   const whole = enc.encode(`data: ${JSON.stringify({ type: "auth", pending } satisfies ServerEvent)}\n\n`);
   const none = enc.encode(`data: ${JSON.stringify({ type: "auth", pending: [] } satisfies ServerEvent)}\n\n`);
-  const kinds = new Map(state.callers.list().map((c) => [c.id, c.kind]));
   const open = state.gate.mode !== "enforce";
   for (const c of state.clients) {
     const id = state.streamCallers.get(c);
-    const kind = (id !== undefined ? kinds.get(id) : undefined) ?? "none";
-    send(state, c, open || allows(kind, "admin") ? whole : none);
+    // admin by the caller's kind and its person's role, both (FR-074)
+    const admin = id !== undefined && state.gate.can(state.callers.byId(id), "admin");
+    send(state, c, open || admin ? whole : none);
   }
 }
 
@@ -4020,6 +4043,8 @@ function tellDevices(state: ServerState): void {
     setTimeout(() => {
       state.timers.delete("devices");
       broadcast(state, { type: "devices", devices: deviceList(state) });
+      // who is on, and where, follows the browsers (FR-074)
+      state.people.sawDevices();
     }, 300),
   );
 }
@@ -4032,7 +4057,51 @@ function termInfo(state: ServerState, t: LiveTerm): TermInfo {
     const name = deviceNameOf(state, ws.data.device);
     if (name && !viewers.includes(name)) viewers.push(name);
   }
-  return { ...t.info, attached: t.sockets.size > 0, viewers };
+  // whose shell it is, off its token, which a restart keeps (FR-074)
+  const who = state.callers.userOfTerm(t.info.id);
+  return { ...t.info, attached: t.sockets.size > 0, viewers, ...(who ? { who } : {}) };
+}
+
+/** who a caller is, for the request or the socket being handled (server/actor) */
+const actorOf = (state: ServerState, caller: Caller | null): Actor => ({ person: state.people.idOf(caller), kind: caller?.kind ?? "none" });
+
+/** The person a start is made for, as a run's `who`: the caller's own, read
+ *  only where a person's call starts the run. A start made in another's name
+ *  (a coordinator's card, a trigger) passes none. */
+const byWhom = (): { who?: string } => {
+  const person = actor()?.person;
+  return person ? { who: person } : {};
+};
+
+/** The repo a write named, for its line of activity: an id in the query or
+ *  in a small JSON body, or a run's. The body is read off a clone, so the
+ *  route still reads its own. */
+async function repoNamed(state: ServerState, req: Request, url: URL): Promise<string | undefined> {
+  const refs: string[] = [];
+  for (const k of ["id", "repo", "repoId"]) {
+    const v = url.searchParams.get(k);
+    if (v) refs.push(v);
+  }
+  const size = Number(req.headers.get("content-length") ?? "0");
+  if ((req.headers.get("content-type") ?? "").includes("json") && size > 0 && size <= 64 * 1024) {
+    const body: unknown = await req.clone().json().catch(() => null);
+    if (typeof body === "object" && body !== null) {
+      for (const k of ["id", "repo", "repoId", "primary", "run"]) {
+        const v: unknown = Reflect.get(body, k);
+        if (typeof v === "string" && v) refs.push(v);
+      }
+    }
+  }
+  for (const ref of refs) {
+    const repo = state.result.repos.find((r) => r.id === ref);
+    if (repo) return repo.name;
+  }
+  for (const ref of refs) {
+    const run = state.runner.get(ref);
+    const repo = run ? state.result.repos.find((r) => r.id === run.repoId) : undefined;
+    if (repo) return repo.name;
+  }
+  return undefined;
 }
 
 /** the shells to every stream: after a start, an end, a join or a leave.
@@ -5147,6 +5216,8 @@ async function handleApi(
   if (workRes) return workRes;
   const notesRes = await state.notes.handle(req, url);
   if (notesRes) return notesRes;
+  const peopleRes = await state.people.handle(req, url, caller);
+  if (peopleRes) return peopleRes;
   const clipsRes = await state.clips.handle(req, url);
   if (clipsRes) return clipsRes;
   const healthRes = await state.health.handle(req, url);
@@ -6639,7 +6710,7 @@ async function handleApi(
       if (refused) return json({ error: refused }, 400);
       await needStepHarnesses(state, cfg, wf, [repo.path]);
       try {
-        const flow = state.flows.start(repo, await withRepoModes(repo, wf), note, (profile) => stepAgentFor(cfg, repo.path, profile, wf.name), { ...(request ? { request } : {}), ...(flowPriority ? { priority: flowPriority } : {}) });
+        const flow = state.flows.start(repo, await withRepoModes(repo, wf), note, (profile) => stepAgentFor(cfg, repo.path, profile, wf.name), { ...(request ? { request } : {}), ...(flowPriority ? { priority: flowPriority } : {}), ...byWhom() });
         await state.flows.whenStarted(flow.id);
         return json(flow, 201);
       } catch (err) {
@@ -7854,6 +7925,13 @@ export async function startServer(opts: {
       onRefused: () => {
         if (state.gate.refused.count === 1) void state.health.probeNow(CALLERS_CHECK);
       },
+      // a caller's rights are its kind's and its person's role's, both (FR-074)
+      roleOf: (c) => state.people.roleOf(c),
+    }),
+    people: new PeopleHub({
+      broadcast: (ev) => broadcast(state, ev),
+      dropUser: (id) => callers.dropUser(id),
+      devices: () => deviceList(state),
     }),
     prs: new PrHub({
       ...opts.prs,
@@ -8378,9 +8456,21 @@ export async function startServer(opts: {
       return json({ error: "Foreign origin" }, 403);
     }
     const key = clientKey(srv.requestIP(req)?.address ?? "127.0.0.1");
-    const auth = await authRoute(state.callers, state.gate, req, url, caller, key);
-    if (auth) return auth;
-    if (url.pathname === "/api/events") return sse(state, parseStream(url.searchParams, key), caller?.id ?? null);
+    // a write worth a line of who did what (FR-074), with the repo it names
+    const did = activityWords(req.method, url.pathname);
+    const named = did ? await repoNamed(state, req, url) : undefined;
+    const said = (res: Response): Response => {
+      if (did && res.ok) state.people.note(actorOf(state, caller), did, named);
+      return res;
+    };
+    const auth = await authRoute(state.callers, state.gate, req, url, caller, key, state.people);
+    if (auth) return said(auth);
+    if (url.pathname === "/api/events") {
+      // the stream says whose browser it is, for who is on (FR-074)
+      const stream = parseStream(url.searchParams, key);
+      const me = state.people.me(caller, state.gate.mode);
+      return sse(state, stream && me ? { ...stream, person: me.id } : stream, caller?.id ?? null);
+    }
     if (url.pathname === "/api/helper") {
       // a helper dialling in from a client machine: its registration
       // rides in the query, one helper per name (a newer one wins)
@@ -8443,7 +8533,7 @@ export async function startServer(opts: {
     }
     if (url.pathname.startsWith("/api/")) {
       try {
-        return await handleApi(state, req, url, clientKey(srv.requestIP(req)?.address ?? "127.0.0.1"), caller);
+        return said(await asActor(actorOf(state, caller), () => handleApi(state, req, url, clientKey(srv.requestIP(req)?.address ?? "127.0.0.1"), caller)));
       } catch (err) {
         // a start the governor held (FR-036): a 409 with when it may go
         if (isCapacityHeld(err)) return json({ error: err.message, until: err.until }, 409);
@@ -8506,6 +8596,8 @@ export async function startServer(opts: {
         // a full-screen program repaints. One that asked only to rejoin and
         // names a shell not here is told so and closed.
         open(ws) {
+          // a shell this socket starts is its caller's person's (FR-074)
+          asActor(actorOf(state, ws.data.caller), () => {
           if (ws.data.caller) state.callerSockets.add(ws);
           if (ws.data.kind === "helper") {
             const { info } = ws.data;
@@ -8593,6 +8685,7 @@ export async function startServer(opts: {
           } catch (err) {
             failed(err);
           }
+          });
         },
         message(ws, msg) {
           if (ws.data.kind === "helper") {

@@ -199,6 +199,20 @@ describe("needs", () => {
     for (const a of ["pair", "claim", "first"]) expect(needs("POST", `/api/auth/${a}`)).toBe("open");
   });
 
+  test("the people routes (FR-074): the roster and the log are reads, a place and one's own name a read's, the rest the admin's", () => {
+    expect(needs("GET", "/api/people")).toBe("read");
+    expect(needs("GET", "/api/people/activity")).toBe("read");
+    for (const p of ["at", "me"]) expect({ p, need: needs("POST", `/api/people/${p}`) }).toEqual({ p, need: "read" });
+    for (const p of ["add", "set", "remove", "invite", "uninvite", "team", "team/remove"]) expect({ p, need: needs("POST", `/api/people/${p}`) }).toEqual({ p, need: "admin" });
+    // a route nobody has filed yet is the admin's, as every unfiled write is
+    expect(needs("POST", "/api/people/anything")).toBe("admin");
+  });
+
+  test("an invite's trade and a session's own sign-out are open: each handler checks who is calling", () => {
+    expect(needs("POST", "/api/auth/join")).toBe("open");
+    expect(needs("POST", "/api/auth/signout")).toBe("open");
+  });
+
   test("a trigger's hook is open, since it checks the sender's signature itself", () => {
     expect(needs("POST", "/api/hooks/sentry/shop")).toBe("open");
     expect(needs("GET", "/api/hooks/sentry/shop")).toBe("read");

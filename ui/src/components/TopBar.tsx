@@ -20,12 +20,14 @@ import { PAGE_BUILD } from "../build";
 import { TUCK_START, nextTuck, rowOver, scrollEdges, type Tuck } from "../topbar";
 import { buildMoved, versionLine } from "../../../src/core/version";
 import { isOwnCode } from "../callerToken";
+import { inviteCode } from "../../../src/core/people";
 import { FilterMenu } from "./Filters";
 import { PickMenu, type PickGroup, type PickOption } from "./PickMenu";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
 import { SettingsMenu } from "./Settings";
 import { BackendMenu } from "./BackendMenu";
 import { IdLabel } from "./IdLabel";
+import { PeopleChip } from "./PeopleChip";
 import { ChanChip } from "./Chan";
 import { InboxChip } from "./Inbox";
 import { NotesChip } from "./Notes";
@@ -573,7 +575,8 @@ function ReloadChip() {
  *  page. Pressing it asks the backend to let this page in; while that waits
  *  the chip shows the code to match where it is approved, and a box for the
  *  first sign-in code from the server's log, for when no page is signed in
- *  to approve it. */
+ *  to approve it. The same box takes an invite (FR-074), which signs the
+ *  page in as the person it was made for with nobody to approve it. */
 export function SignInChips() {
   const names = useStore(useShallow((s) => s.backendOrder.filter((n) => wantsSignIn(s.authByBackend[n]) || s.signIns[n]?.state === "waiting")));
   return (
@@ -601,12 +604,11 @@ export function SignInChip({ backend }: { backend: string }) {
       if (!code.trim() || own) return;
       setBusy(true);
       setErr(null);
-      useStore
-        .getState()
-        .useFirstCode(backend, code)
-        .then(() => setCode(""))
-        .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
-        .finally(() => setBusy(false));
+      const invite = inviteCode(code);
+      const st = useStore.getState();
+      // an invite ends this strip when it is taken; why it was not shows in the page's note
+      const sent = invite ? st.joinWith(invite, backend).then((ok) => (ok ? undefined : setCode(""))) : st.useFirstCode(backend, code).then(() => setCode(""));
+      sent.catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e))).finally(() => setBusy(false));
     };
     return (
       <span className="signin-strip" role="status" aria-label={`Signing in to ${backend}`}>
@@ -615,15 +617,15 @@ export function SignInChip({ backend }: { backend: string }) {
           {signIn.code}
         </span>
         <span className="signin-hint">in a signed-in page's inbox</span>
-        <span className="signin-hint signin-or">or enter the first code from {backend}'s server log</span>
+        <span className="signin-hint signin-or">or enter an invite, or the first code from {backend}'s server log</span>
         <input
           className="signin-input"
           value={code}
           disabled={busy}
           spellCheck={false}
           autoComplete="off"
-          placeholder="first code"
-          aria-label={`The first sign-in code from ${backend}'s server log`}
+          placeholder="invite or first code"
+          aria-label={`An invite to ${backend}, or the first sign-in code from its server log`}
           onChange={(e) => setCode(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") send();
@@ -909,6 +911,7 @@ function PhoneBar({ nav }: { nav?: ReactNode }) {
               <RangerChip compact />
             </Cluster>
             <Cluster label="Health">
+              <PeopleChip />
               <CapacityChip />
               <HealthChip />
             </Cluster>
@@ -993,6 +996,7 @@ function WideBar({ nav }: { nav?: ReactNode }) {
             <RangerChip compact={narrow} />
           </Cluster>
           <Cluster label="This backend">
+            <PeopleChip />
             <CapacityChip />
             <HealthChip />
             <BackendMenu />

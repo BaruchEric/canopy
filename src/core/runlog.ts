@@ -83,7 +83,7 @@ function isPrompt(v: unknown): boolean {
 function isRun(v: unknown): v is Run {
   if (!record(v) || !strFields(v, ["id", "repoId", "action", "verb", "progress", "note"]) || !harness(v["harness"]) || !terminal(v["status"]) ||
     !boolean(v["expectsChange"]) || !boolean(v["chat"]) || !number(v["startedAt"]) || !optional(v, "endedAt", number) || !Array.isArray(v["steps"]) || !v["steps"].every(isStep) || !isPrompt(v["prompt"])) return false;
-  return optStrFields(v, ["session", "by", "workspace", "proposal", "error", "awayWhy", "parent", "group", "name"]) && optional(v, "nameBy", (x) => oneOf(x, ["words", "model", "hand"])) &&
+  return optStrFields(v, ["session", "by", "who", "workspace", "proposal", "error", "awayWhy", "parent", "group", "name"]) && optional(v, "nameBy", (x) => oneOf(x, ["words", "model", "hand"])) &&
     optional(v, "kept", (x) => x === true) && optional(v, "away", boolean) &&
     optional(v, "depth", number) && optional(v, "canopyTools", (x) => x === true) && optional(v, "unattended", (x) => x === true) &&
     optional(v, "priority", (x) => oneOf(x, PRIORITIES)) &&
@@ -143,7 +143,7 @@ function snapshot(run: Run, privacy: RunLogPrivacy): Run {
       } } : {}),
     })), prompt: null,
   };
-  const strings: (keyof Pick<Run, "session" | "by" | "workspace" | "proposal" | "error" | "awayWhy" | "name">)[] = ["session", "by", "workspace", "proposal", "error", "awayWhy", "name"];
+  const strings: (keyof Pick<Run, "session" | "by" | "who" | "workspace" | "proposal" | "error" | "awayWhy" | "name">)[] = ["session", "by", "who", "workspace", "proposal", "error", "awayWhy", "name"];
   for (const key of strings) { const value = run[key]; if (value !== undefined) safe[key] = r(value); }
   if (run.nameBy) safe.nameBy = t(run.nameBy);
   if (run.endedAt !== undefined) safe.endedAt = run.endedAt;

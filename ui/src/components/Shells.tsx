@@ -8,6 +8,7 @@ import { PopGrip } from "./PopGrip";
 import { POPUP_WORD } from "../sectiontabs";
 import { eachOf, stillPicked, unwatched } from "../kept";
 import { BackendWord } from "./IdLabel";
+import { ByWho } from "./PeopleChip";
 import { HARNESS } from "../../../src/core/harness";
 import type { AgentSession } from "../../../src/core/types";
 
@@ -335,6 +336,7 @@ export function ShellsPopBody({ onDone }: { onDone?: () => void }) {
                         {shown ? " · open here" : hidden.includes(t.id) ? " · hidden here" : ""}
                         {others.length > 0 && ` · on ${others.join(", ")}`}
                         {t.viewers.length === 0 && " · nobody watching"}
+                        <ByWho id={t.id} who={t.who} className="kept-by" />
                       </span>
                       {t.handle && chan?.ready && (
                         <span className="kept-fact" title="The tailchan handle this shell runs under (TAILCHAN_AS)">

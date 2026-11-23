@@ -61,6 +61,7 @@ import { runPanel } from "./itempanel";
 import { itemTabId } from "./sectiontabs";
 import { DEFAULT_CAPACITY, emptyCapacity } from "../../src/core/capacity";
 import { needs } from "../../src/core/callers";
+import type { PersonHere, Role } from "../../src/core/people";
 import {
   DEFAULT_AGENT,
   type AdviceOffer,
@@ -1223,6 +1224,7 @@ describe("several backends", () => {
         "/api/terms/kept",
         "/api/history",
         "/api/peers",
+        "/api/people",
         "/api/prs",
         "/api/triggers",
         "/api/work",
@@ -2208,6 +2210,131 @@ describe("several backends", () => {
     expect(a.every(([, t]) => t === "cnp_page_a")).toBe(true);
     expect(b.every(([, t]) => t === null)).toBe(true);
     expect(useStore.getState().authByBackend["a"]?.you).toBe("page");
+  });
+
+  /* ---------- people (FR-074) ---------- */
+
+  const INVITE = `cnv_${"a".repeat(24)}`;
+  const person = (id: string, name: string, role: Role, extra: Partial<PersonHere> = {}): PersonHere => ({ id, name, role, teams: [], created: 1, devices: [], at: [], invited: 0, ...extra });
+  /** a page at `search`, with what its storage holds and every URL its history was handed */
+  function pageAt(search: string, kept = new Map<string, string>()): { kept: Map<string, string>; replaced: string[]; done: () => void } {
+    const h = globalThis as unknown as { history?: unknown };
+    const replaced: string[] = [];
+    g.location = { origin: "http://a.test", protocol: "http:", host: "a.test", href: `http://a.test/${search}`, search };
+    g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) };
+    h.history = { state: null, replaceState: (_s: unknown, _t: string, url: string) => void replaced.push(url) };
+    return { kept, replaced, done: () => delete h.history };
+  }
+
+  test("an invite in the link is traded before the first read, leaves the URL, and the page loads as that person", async () => {
+    const page = pageAt(`?view=people&join=${INVITE}`);
+    try {
+      const sent: [string, string | null][] = [];
+      const answers = backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": { self: "a", backends: [] }, "/api/auth/join": { token: "cnp_page_avery", person: "Avery" } });
+      await start(
+        (path, init) => {
+          sent.push([path.split("?")[0] ?? "", new Headers(init?.headers).get("x-canopy-token")]);
+          if (path === "/api/auth/join") expect(JSON.parse(String(init?.body))).toMatchObject({ code: INVITE, kind: "page" });
+          return answers(path, init);
+        },
+        () => {
+          throw new Error("b asked");
+        },
+      );
+      await settle();
+      expect(sent[0]).toEqual(["/api/auth/join", null]);
+      expect(sent.slice(1).every(([, token]) => token === "cnp_page_avery")).toBe(true);
+      expect(page.replaced).toEqual(["/?view=people"]);
+      expect(page.kept.get("canopy.token.http://a.test")).toBe("cnp_page_avery");
+      expect(useStore.getState().joined).toEqual({ ok: true, words: "Signed in as Avery." });
+    } finally {
+      page.done();
+    }
+  });
+
+  test("a page the backend already knows keeps its session and leaves the invite unused", async () => {
+    const page = pageAt(`?join=${INVITE}`, new Map([["canopy.token.http://a.test", "cnp_page_eric"]]));
+    try {
+      const auth = { mode: "enforce", refused: { count: 0, recent: [] }, callers: [], pending: [], you: "page", youId: "c1", person: { id: "owner", name: "Eric", role: "owner" }, rights: ["read", "admin"] };
+      await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": { self: "a", backends: [] }, "/api/auth": auth }), () => {
+        throw new Error("b asked");
+      });
+      await settle();
+      expect(calls).not.toContain("/api/auth/join");
+      expect(page.replaced).toEqual(["/"]);
+      expect(page.kept.get("canopy.token.http://a.test")).toBe("cnp_page_eric");
+      expect(useStore.getState().joined?.ok).toBe(false);
+      expect(useStore.getState().joined?.words).toContain("already signed in as Eric");
+    } finally {
+      page.done();
+    }
+  });
+
+  test("an invite the backend refuses says why and leaves the page as it was", async () => {
+    const page = pageAt(`?join=${INVITE}`);
+    try {
+      const refused = new Response(JSON.stringify({ error: "that invite is not known, or was used or has run out" }), { status: 403 });
+      await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": { self: "a", backends: [] }, "/api/auth/join": refused }), () => {
+        throw new Error("b asked");
+      });
+      await settle();
+      expect(page.kept.has("canopy.token.http://a.test")).toBe(false);
+      expect(useStore.getState().joined?.ok).toBe(false);
+      expect(useStore.getState().joined?.words).toContain("was used or has run out");
+      expect(useStore.getState().loaded).toBe(true);
+    } finally {
+      page.done();
+    }
+  });
+
+  test("the page tells each backend which of its repos are open, once per change", async () => {
+    const roster = { people: [person("owner", "Eric", "owner")], teams: [], invites: [] };
+    const said: unknown[] = [];
+    const answers = backendAnswers(scanOf("/a", [repo("proj"), repo("other")]), [], { "/api/backends": { self: "a", backends: [] }, "/api/people": roster });
+    await start(
+      (path, init) => {
+        if (path === "/api/people/at") said.push(JSON.parse(String(init?.body)).repos);
+        return answers(path, init);
+      },
+      () => {
+        throw new Error("b asked");
+      },
+    );
+    await settle();
+    expect(said).toEqual([]);
+    useStore.getState().openRepo("proj");
+    await settle();
+    expect(said).toEqual([["proj"]]);
+    // a people event that moves nothing here says nothing again
+    useStore.getState().applyEvent({ type: "people", people: roster.people, teams: [] });
+    await settle();
+    expect(said).toEqual([["proj"]]);
+    useStore.getState().closePanel("proj");
+    await settle();
+    expect(said).toEqual([["proj"], []]);
+  });
+
+  test("my teams only keeps the repos under the person's team folders, and counts as a filter", async () => {
+    await start(backendAnswers(scanOf("/a", [repo("rio", { path: "/srv/rio/app" }), repo("other", { path: "/srv/other" })]), [], { "/api/backends": { self: "a", backends: [] } }), () => {
+      throw new Error("b asked");
+    });
+    await settle();
+    const team = { id: "t-aaaaaaaa", name: "Rio", folders: ["/srv/rio"], created: 1 };
+    const auth: BackendAuth = { mode: "enforce", refused: { count: 0, recent: [] }, callers: [], pending: [], you: "page", youId: "c1", hasToken: true, needed: false, person: { id: "p-aaaaaaaa", name: "Avery", role: "member" }, rights: ["read", "plan", "operate"] };
+    useStore.setState({
+      people: { a: { people: [person("owner", "Eric", "owner"), person("p-aaaaaaaa", "Avery", "member", { teams: ["t-aaaaaaaa"] })], teams: [team], invites: [] } },
+      authByBackend: { a: auth },
+    });
+    useStore.getState().setFocusOnly(false);
+    expect(visibleCards(useStore.getState()).map((c) => c.key).length).toBe(2);
+    useStore.getState().setFocusOnly(true);
+    expect(visibleRepos(useStore.getState()).map((r) => r.name)).toEqual(["rio"]);
+    expect(activeFilterCount(useStore.getState())).toBe(1);
+    // a person on no team with folders has no focus, and sees all there is
+    useStore.setState({ authByBackend: { a: { ...auth, person: { id: "owner", name: "Eric", role: "owner" } } } });
+    expect(visibleRepos(useStore.getState()).length).toBe(2);
+    useStore.getState().clearFilters();
+    expect(useStore.getState().focusOnly).toBe(false);
   });
 
   test("a refusal that names the right it wanted marks the backend's sign-in, not the gate's", async () => {

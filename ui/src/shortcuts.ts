@@ -90,6 +90,7 @@ export const GO: readonly { key: string; view: string; what: string }[] = [
   { key: "c", view: "costs", what: "costs" },
   { key: "k", view: "kit", what: "the kit" },
   { key: "e", view: "plugins", what: "plugins" },
+  { key: "u", view: "people", what: "people: who is here, roles, teams and invites" },
   { key: "w", view: "work", what: "the work ledger" },
   { key: "m", view: "manager", what: "the manager: goals, and the incubator's projects" },
 ];

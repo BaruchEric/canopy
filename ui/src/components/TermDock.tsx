@@ -6,7 +6,7 @@ import { loadXterm, xtermHere, type Xterm } from "../xterm";
 import { api, reachable, socketUrl as backendSocket } from "../api";
 import { copyText } from "../share";
 import { backendOf, baseOf, plainOf, qual } from "../registry";
-import { dialPlan, originOf, readToken } from "../callerToken";
+import { dialPlan, holds, originOf, readToken } from "../callerToken";
 import { groveUrl, nameShellHere, parseRoute, popShell } from "../routes";
 import {
   PANEL_TERM,
@@ -340,7 +340,8 @@ export function TermView({
     // said once per spell away, when the shell's machine is what went
     let saidAway = false;
     // said once per wait for this page to sign in to the shell's backend
-    let saidSignIn = false;
+    // the words last said while the shell waits to be let in
+    let saidWait: string | null = null;
     // only for a machine known to be away, not one still being reached
     const sayAway = () => {
       const s = useStore.getState();
@@ -381,8 +382,12 @@ export function TermView({
       // /api/auth as a page caller) mints one too, so its shell opens with
       // no sign-in. On an enforcing backend with no such caller, you stays
       // "none" and the tab still says to sign in.
-      const you = useStore.getState().authByBackend[b]?.you;
-      if (readToken(originOf(baseOf(b))) || (you !== undefined && you !== "none")) {
+      const auth = useStore.getState().authByBackend[b];
+      const you = auth?.you;
+      // a role that reads only is refused every ticket (FR-074), so none is
+      // asked for; the tab says why and looks again until the role changes
+      const reads = auth?.mode === "enforce" && auth.person != null && !holds(auth, "shell");
+      if (!reads && (readToken(originOf(baseOf(b))) || (you !== undefined && you !== "none"))) {
         try {
           ticket = await api.ticket(b, "term");
         } catch (err) {
@@ -393,14 +398,15 @@ export function TermView({
       if (gone || ended) return;
       const plan = dialPlan(useStore.getState().authByBackend[b]?.mode, ticket, refused);
       if (plan.kind === "wait") {
-        if (!saidSignIn) {
-          saidSignIn = true;
-          note(`[sign in to ${b} to open this shell]`);
+        const words = reads ? `[a viewer opens no shell on ${b}]` : `[sign in to ${b} to open this shell]`;
+        if (saidWait !== words) {
+          saidWait = words;
+          note(words);
         }
         retry = setTimeout(() => void connect(), SIGNIN_WAIT);
         return;
       }
-      saidSignIn = false;
+      saidWait = null;
       const socketTab = currentTermForSocket(useStore.getState().terms, tab);
       if (!rejoin) {
         const label = joinsOnly(socketTab, rejoin) ? null : socketTab.label ?? null;

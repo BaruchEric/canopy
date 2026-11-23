@@ -1,5 +1,7 @@
 import type { RunGroup } from "../../src/core/group";
 import type { QuickNote, QuickNotesInfo } from "../../src/core/notes";
+import type { ActivityLine, Person, Role, Team } from "../../src/core/people";
+import { isRoster, type Roster } from "./people";
 import type { Clip, ClipDevice, ClipIn, ClipSource, ClipsInfo } from "../../src/core/clips";
 import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
 import type { CostReport } from "../../src/core/costs";
@@ -1075,7 +1077,38 @@ export const api = {
     req<{ token: string } | { waiting: true }>(b, "/api/auth/claim", { method: "POST", body: JSON.stringify({ id, secret }) }),
   /** approves a waiting pair with the first sign-in code from the server's log */
   firstCode: (b: string, id: string, code: string) => req<{ ok: true }>(b, "/api/auth/first", { method: "POST", body: JSON.stringify({ id, code }) }),
-  approvePair: (b: string, id: string) => req<{ ok: true }>(b, "/api/auth/approve", { method: "POST", body: JSON.stringify({ id }) }),
+  /** `person` is whose session the pair becomes; none is the approver's own (FR-074) */
+  approvePair: (b: string, id: string, person?: string) => req<{ ok: true }>(b, "/api/auth/approve", { method: "POST", body: JSON.stringify({ id, ...(person ? { person } : {}) }) }),
+  /** an invite traded for this page's token, of the person it was made for */
+  /** `pair` is the asker's own waiting pair, which the backend drops once the invite is taken */
+  join: (code: string, label: string, b: string = homeName(), pair?: { id: string; secret: string }) =>
+    req<{ token: string; person: string }>(b, "/api/auth/join", { method: "POST", body: JSON.stringify({ code, label, kind: "page", ...pair }) }),
+  /** ends this page's own session, which any role may */
+  signOut: (b: string) => req<{ ok: true }>(b, "/api/auth/signout", { method: "POST", body: "{}" }),
+  /** one backend's people, teams and waiting invites; null from a backend older than people */
+  people: async (b: string = homeName()): Promise<Roster | null> => {
+    const r = await req<unknown>(b, "/api/people");
+    return isRoster(r) ? r : null;
+  },
+  peopleActivity: async (b: string, person?: string, limit = 100): Promise<ActivityLine[]> => {
+    const q = new URLSearchParams({ limit: String(limit), ...(person ? { person } : {}) }).toString();
+    const r = await req<{ lines?: ActivityLine[] }>(b, `/api/people/activity?${q}`);
+    return Array.isArray(r.lines) ? r.lines : [];
+  },
+  /** the repos this browser has open on a backend, by the ids it knows */
+  peopleAt: (b: string, client: string, repos: string[]) => req<{ ok: true }>(b, "/api/people/at", { method: "POST", body: JSON.stringify({ client, repos }) }),
+  peopleMe: (b: string, change: { name?: string; color?: number | null }) => req<{ person: Person }>(b, "/api/people/me", { method: "POST", body: JSON.stringify(change) }),
+  addPerson: (b: string, want: { name: string; role: Role; teams: string[]; invite: boolean }) =>
+    req<{ person: Person; invite?: { code: string; expires: number } }>(b, "/api/people/add", { method: "POST", body: JSON.stringify(want) }),
+  setPerson: (b: string, id: string, change: { name?: string; role?: Role; teams?: string[]; off?: boolean; color?: number | null }) =>
+    req<{ person: Person }>(b, "/api/people/set", { method: "POST", body: JSON.stringify({ id, ...change }) }),
+  removePerson: (b: string, id: string) => req<{ ok: true }>(b, "/api/people/remove", { method: "POST", body: JSON.stringify({ id }) }),
+  invitePerson: (b: string, id: string, hours?: number) =>
+    req<{ code: string; expires: number }>(b, "/api/people/invite", { method: "POST", body: JSON.stringify({ id, ...(hours !== undefined ? { hours } : {}) }) }),
+  uninvitePerson: (b: string, id: string) => req<{ dropped: number }>(b, "/api/people/uninvite", { method: "POST", body: JSON.stringify({ id }) }),
+  /** makes a team, or with `id` renames it or sets its folders */
+  saveTeam: (b: string, team: { id?: string; name?: string; folders?: string[] }) => req<{ team: Team }>(b, "/api/people/team", { method: "POST", body: JSON.stringify(team) }),
+  removeTeam: (b: string, id: string) => req<{ ok: true }>(b, "/api/people/team/remove", { method: "POST", body: JSON.stringify({ id }) }),
   denyPair: (b: string, id: string) => req<{ ok: true }>(b, "/api/auth/deny", { method: "POST", body: JSON.stringify({ id }) }),
   revokeCaller: (b: string, id: string) => req<{ ok: true }>(b, "/api/auth/revoke", { method: "POST", body: JSON.stringify({ id }) }),
   /** a one-use ticket for a socket or a stream the browser cannot put a header on */

@@ -34,6 +34,7 @@ import { Star } from "./Star";
 import { RepoMenu } from "./RepoMenu";
 import { Rings } from "./Rings";
 import { FlowChip, RunChip } from "./RunChip";
+import { HereFaces } from "./PeopleChip";
 import { TaskChip } from "./Tasks";
 import { NoteChip } from "./Notes";
 import { RepoHealthChip } from "./Health";
@@ -257,6 +258,7 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
         )}
         <span className="glyph">{GLYPH[state]}</span>
         <span className="card-name">{repo.name}</span>
+        <HereFaces repoId={repo.id} />
         <Star repoId={repo.id} name={repo.name} onError={setMenuErr} />
         {ws && isPrimary(ws, repo.path) && (
           <span className="chip primary" title={`New code for the ${ws.name} workspace goes here`}>

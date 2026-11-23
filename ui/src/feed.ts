@@ -573,6 +573,8 @@ export function describeEvent(
     case "clips":
     // a pair request is answered where callers are listed, not in the feed
     case "auth":
+    // who is on and where shows as faces, and what they did has its own log (FR-074)
+    case "people":
       return [];
   }
 }

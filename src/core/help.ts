@@ -16,7 +16,16 @@ usage:
     --pair [--code CODE]            first get a helper token from the backend (approve it in the inbox)
     --no-emulators                  offer no iOS simulators or Android emulators for previews
   canopy auth login [--backend URL] [--code CODE]   sign this CLI in to a backend
-  canopy auth logout | status       sign out (revokes this CLI's session) | show mode and who you are
+  canopy auth logout | status       sign out (ends this CLI's session) | show the mode, who you are and what your token holds
+  canopy auth join <invite code>    sign this CLI in with an invite, as the person it was made for
+  canopy people [list]              who is on the backend: id, name, role, teams, who is on now and invites waiting
+  canopy people add "<name>"        add a person and print their invite; --role owner|admin|member|viewer (member), --team <team>, --no-invite, --hours N
+  canopy people invite <person>     a new invite for a person (good once, 72 hours unless --hours N); uninvite <person> drops theirs
+  canopy people role <person> <role>   change a role; rename <person> "<name>"; team <person> <team>[,<team>] | none
+  canopy people off | on | remove <person>   sign a person out of everything and hold them off | let them back | remove them
+  canopy people me [--name "<name>"]   who this token is held for and what it holds; --name renames you
+  canopy people teams               the teams; teams add "<name>" [--folder <path>]..., teams set <team> [--name N] [--folder P]..., teams remove <team>
+  canopy people activity            who did what, newest first; --person <person>, --limit N
   canopy commit <repo> -m "msg"     commit staged changes
   canopy commit <repo> --ai [--all] [--push]   AI message; --all stages everything
   canopy suggest <repo>              print an AI-suggested commit message

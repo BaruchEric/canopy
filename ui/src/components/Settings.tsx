@@ -11,6 +11,10 @@ import { deviceName } from "../../../src/core/presence";
 import { sameBuild, shortCommit, versionLine } from "../../../src/core/version";
 import type { About } from "../../../src/core/types";
 import { api } from "../api";
+import { holds } from "../callerToken";
+import { openView } from "../clirun";
+import { nameOf } from "../people";
+import { OWNER_ID } from "../../../src/core/people";
 import { maskKey } from "../answerKey";
 import { PAGE_BUILD } from "../build";
 import { ago } from "../util";
@@ -799,6 +803,7 @@ function AnswerKeyRow() {
  */
 function SignedInRow({ name }: { name: string }) {
   const auth = useStore((s) => s.authByBackend[name]);
+  const roster = useStore((s) => s.people[name]);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   if (!auth) return null;
@@ -811,7 +816,19 @@ function SignedInRow({ name }: { name: string }) {
       .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(null));
   };
-  const admin = auth.you === "page" || auth.you === "cli";
+  // revoking is an auth write, which takes the admin right in every mode
+  const admin = auth.you !== "none" && holds(auth, "admin");
+  const who = auth.person && auth.you !== "none" ? `, for ${auth.person.name} (${auth.person.role})` : "";
+  const several = (roster?.people.length ?? 0) > 1;
+  const signOut = () => {
+    setBusy("out");
+    setErr(null);
+    useStore
+      .getState()
+      .signOut(name)
+      .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(null));
+  };
   return (
     <section className="settings-row">
       <h3 className="panel-label">signed in</h3>
@@ -819,14 +836,29 @@ function SignedInRow({ name }: { name: string }) {
         {name} checks callers in <b>{auth.mode}</b> mode
         {auth.mode === "off" ? ": it lets every call through and keeps no count" : auth.mode === "log" ? ": it lets every call through and counts the ones enforce would refuse" : ": it refuses a call without the right token"}
         . {auth.refused.count} {auth.refused.count === 1 ? "call" : "calls"} {auth.mode === "enforce" ? "refused" : "would have been refused"} since it started. This page is{" "}
-        {auth.you === "none" ? "not signed in" : `signed in as a ${auth.you}`}.
+        {auth.you === "none" ? "not signed in" : `signed in as a ${auth.you}${who}`}.
       </p>
+      {(auth.hasToken && auth.you !== "none") || several ? (
+        <div className="key-row">
+          {auth.hasToken && auth.you !== "none" && (
+            <button type="button" className="mini" disabled={busy !== null} title="End this browser's session here. Signing in again takes an invite, an approval or the first code" onClick={signOut}>
+              {busy === "out" ? "signing out…" : "sign out"}
+            </button>
+          )}
+          <button type="button" className="mini" title="Who is on this backend, their roles, the teams and the invites" onClick={() => openView("people")}>
+            people
+          </button>
+        </div>
+      ) : null}
       {auth.callers.length > 0 && (
         <ul className="callers">
           {auth.callers.map((c) => (
             <li key={c.id} className="caller-row">
               <span className="caller-label">{c.label}</span>
-              <span className="caller-kind">{c.kind}</span>
+              <span className="caller-kind">
+                {c.kind}
+                {several && ` · ${nameOf(roster?.people, c.user ?? OWNER_ID)}`}
+              </span>
               <span className="caller-used" title={new Date(c.used).toLocaleString()}>
                 {c.id === auth.youId ? "this page" : `used ${ago(Math.floor(c.used / 1000))}`}
               </span>

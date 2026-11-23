@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { countFacets, FILTER_INFO, REPO_FILTERS } from "../filters";
-import { activeFilterCount, archivedCount, favoriteCount, healthBad, scopedRepos, specStale, useStore } from "../store";
+import { activeFilterCount, archivedCount, favoriteCount, focusCount, hasFocus, healthBad, scopedRepos, specStale, useStore } from "../store";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
 
@@ -20,6 +20,10 @@ export function FilterMenu() {
   const favorites = useStore(favoriteCount);
   const favoritesOnly = useStore((s) => s.favoritesOnly);
   const setFavoritesOnly = useStore((s) => s.setFavoritesOnly);
+  const focused = useStore(hasFocus);
+  const focusOnly = useStore((s) => s.focusOnly);
+  const inTeams = useStore((s) => (hasFocus(s) ? focusCount(s) : 0));
+  const setFocusOnly = useStore((s) => s.setFocusOnly);
   const hideArchived = useStore((s) => s.settings.hideArchived);
   const setSetting = useStore((s) => s.setSetting);
   const [open, setOpen] = useState(false);
@@ -129,6 +133,17 @@ export function FilterMenu() {
               </button>
             </div>
           </section>
+          {(focused || focusOnly) && (
+            <section className="settings-row">
+              <h3 className="panel-label">teams</h3>
+              <div className="chips" role="group" aria-label="Your teams' repos">
+                <button type="button" className={focusOnly ? "chip on" : "chip"} aria-pressed={focusOnly} title="Only the repos under the folders your teams work in. The rest are still yours to open: turn this off to see them" onClick={() => setFocusOnly(!focusOnly)}>
+                  my teams only
+                  <span className="chip-n">{inTeams}</span>
+                </button>
+              </div>
+            </section>
+          )}
           <section className="settings-row">
             <h3 className="panel-label">archived</h3>
             <div className="chips" role="group" aria-label="Archived repos">

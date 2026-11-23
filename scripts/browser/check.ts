@@ -26,9 +26,9 @@ if (!base || !shots) {
 }
 mkdirSync(shots, { recursive: true });
 
-const VIEWS = ["library", "ports", "sessions", "agents", "manager", "health", "costs", "triggers", "clock", "work", "kit", "secrets"];
+const VIEWS = ["library", "ports", "sessions", "agents", "manager", "health", "costs", "triggers", "clock", "work", "kit", "secrets", "people"];
 /** the chunks the page loads on demand, by the name vite gives each */
-const LAZY = ["Sessions", "Secrets", "Kit", "Costs", "Triggers", "Clock", "Library", "AgentsView", "ManagerView", "Work", "xterm"];
+const LAZY = ["Sessions", "Secrets", "Kit", "Costs", "Triggers", "Clock", "Library", "AgentsView", "ManagerView", "Work", "People", "xterm"];
 
 const browser = await launch();
 const failures: string[] = [];

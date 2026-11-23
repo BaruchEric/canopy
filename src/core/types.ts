@@ -4,6 +4,7 @@ import type { TriggerDigest } from "./digest";
 import type { Capacity, CapacitySettings, CapacityWindow } from "./capacity";
 import type { WorkItem } from "./work";
 import type { QuickNote } from "./notes";
+import type { PeopleInfo } from "./people";
 import type { Collision } from "./touch";
 import type { RunGroup } from "./group";
 import type { PaneSizes } from "./panesizes";
@@ -412,6 +413,9 @@ export interface Device {
   since: number;
   /** how many event streams (windows, tabs) it has open */
   streams: number;
+  /** the person whose browser it is, by id (FR-074); absent on a backend
+   *  from before there were people, where it is the owner's */
+  person?: string;
 }
 
 export const DEVICE_PLATFORMS = ["mac", "android", "windows", "linux", "ios", "other"] as const;
@@ -1412,6 +1416,10 @@ export interface Run {
   nameBy?: RunNameBy;
   /** the device it was started from, when the request said */
   by?: string;
+  /** the person who started it, by id (FR-074): set for a start a person's
+   *  page, CLI or shell asked for, absent for a trigger's, a flow's later
+   *  step's or the ranger's */
+  who?: string;
   /** a flow's step run: its workflow and step, a remembered rule's scope */
   flowStep?: FlowStepName;
   /** the workspace this run spans, when it was started from one */
@@ -2130,6 +2138,9 @@ export type ServerEvent =
   | { type: "terms"; terms: TermInfo[] }
   /** the browsers on the event stream, whenever one comes or goes */
   | { type: "devices"; devices: Device[] }
+  /** everyone on this backend with what they have on and where, and the
+   *  teams, whole, whenever the roster or anyone's place changes (FR-074) */
+  | ({ type: "people" } & PeopleInfo)
   /** the shells left behind by a backend that went down, whenever the list
    *  changes: one is kept, restored or forgotten */
   | { type: "kept"; kept: KeptShell[] }
@@ -3032,6 +3043,8 @@ export interface Flow {
   workflow: string;
   verb: string;
   fleetId?: string;
+  /** the person who started it, by id (FR-074); each step's run carries it */
+  who?: string;
   note: string;
   status: FlowStatus;
   steps: FlowStep[];
@@ -3209,6 +3222,9 @@ export interface TermInfo {
   /** the name a tab gave the shell by hand, kept with the shell so every
    *  device's tab says it and a hidden shell keeps it */
   label?: string;
+  /** the person who opened it, by id (FR-074); whoever joins it later, the
+   *  shell's token stays its opener's */
+  who?: string;
 }
 
 /** the longest name a shell takes by hand */

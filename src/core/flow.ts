@@ -236,7 +236,7 @@ export const STOP_GRACE = 10_000;
 /** What a step's run starts with beside the flow's own: a coordinator's
  *  card's loadout, as the flow's settings file, its `mcp.json` and servers,
  *  and the equip they came from (`FlowHooks.stepExtras`). */
-export type StepExtras = Pick<StartExtras, "settings" | "mcpConfig" | "servers" | "equip">;
+export type StepExtras = Pick<StartExtras, "settings" | "mcpConfig" | "servers" | "equip" | "who">;
 
 /** What Flows needs from the Runner; the real one satisfies it. A flow on a
  *  branch passes the branch as the runner's last argument. */
@@ -502,9 +502,9 @@ export class Flows {
     workflow: Workflow,
     note: string,
     agent: AgentSettings | StepAgent,
-    opts: { fleetId?: string; request?: string; branch?: BranchStart; priority?: Priority; id?: string; equip?: RunEquip } = {},
+    opts: { fleetId?: string; request?: string; branch?: BranchStart; priority?: Priority; id?: string; equip?: RunEquip; who?: string } = {},
   ): Flow {
-    const { fleetId, request, branch, priority, id, equip } = opts;
+    const { fleetId, request, branch, priority, id, equip, who } = opts;
     if (request) {
       const again = this.forRequest(request);
       if (again) {
@@ -541,6 +541,7 @@ export class Flows {
       ...(branch ? { branch: branchOf(branch.branch, "working") } : {}),
       ...(priority ? { priority } : {}),
       ...(equip ? { equip } : {}),
+      ...(who ? { who } : {}),
     };
     const live: LiveFlow = {
       flow,

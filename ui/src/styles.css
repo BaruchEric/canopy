@@ -15173,7 +15173,7 @@ span.effective-flag:not(:first-child) {
   min-width: 0;
 }
 .signin-input {
-  width: 7.5em;
+  width: 13.5em;
   padding: 1px 6px;
   font: inherit;
   font-family: var(--mono);
@@ -18805,5 +18805,356 @@ button.clock-job + .clock-lane {
   }
   .mgr-equip-find {
     min-height: 44px;
+  }
+}
+
+/* ---------- people (FR-074) ---------- */
+/* A face: two letters on the person's own hue. The hue is theirs, not a
+   palette's, so the pair is set in oklch, where one lightness reads the
+   same at every hue: the letters clear 7:1 on their ground, light and dark. */
+.avatar {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: light-dark(oklch(0.32 0.09 var(--hue, 150)), oklch(0.93 0.05 var(--hue, 150)));
+  background: light-dark(oklch(0.9 0.06 var(--hue, 150)), oklch(0.38 0.07 var(--hue, 150)));
+  user-select: none;
+}
+.avatar-sm {
+  width: 20px;
+  height: 20px;
+  font-size: 9.5px;
+}
+/* on now: a moss ring a hair off the face */
+.avatar.on {
+  outline: 1.5px solid var(--moss);
+  outline-offset: 1.5px;
+}
+.people-chip {
+  gap: 5px;
+  padding-inline: 6px;
+}
+.people-chip .avatar:not(.on) {
+  opacity: 0.85;
+}
+.people-more {
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+}
+.people-limit {
+  color: var(--lichen);
+  font-size: var(--t-sm);
+}
+.here-faces {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-inline: 2px;
+}
+.kept-by {
+  color: var(--ink-dim);
+}
+.pair-as {
+  width: auto;
+  max-width: 100%;
+}
+/* what became of an invite: one line under the bar, on a tint */
+.joined-note {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 6px var(--gutter);
+  font-size: var(--t-md);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--moss) 12%, transparent);
+}
+.joined-note.failed {
+  background: color-mix(in srgb, var(--rust) 12%, transparent);
+}
+.signin-first .joined-note {
+  max-width: 560px;
+  border-radius: var(--r);
+  text-align: left;
+}
+
+.people-view .panel-label {
+  align-items: center;
+}
+.people-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.people-row,
+.people-team-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1.1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 8px 0;
+  font-size: var(--t-md);
+}
+.people-row + .people-row,
+.people-team-row + .people-team-row {
+  border-top: 1px solid var(--hair);
+}
+.people-team-row {
+  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.4fr) minmax(0, 1fr) auto;
+}
+.people-row.off .people-who,
+.people-row.off .avatar {
+  opacity: 0.55;
+}
+.people-who {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.people-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.people-state {
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+.people-state.here {
+  color: var(--moss);
+}
+.people-holds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.people-role {
+  width: auto;
+  flex: none;
+}
+.people-role-word {
+  color: var(--ink-dim);
+}
+.people-role-word.role-owner {
+  color: var(--moss);
+}
+.people-role-word.role-viewer {
+  color: var(--ink-faint);
+}
+.people-teams {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.people-team {
+  padding: 1px 8px;
+  border-radius: var(--r);
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+button.people-team:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--wash);
+}
+.people-team.on {
+  color: var(--sky);
+  background: color-mix(in srgb, var(--sky) 12%, transparent);
+}
+.people-row-acts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.people-err {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--rust);
+}
+.people-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hair);
+}
+.people-add-name {
+  flex: 1 1 160px;
+  width: auto;
+  min-width: 0;
+  max-width: 280px;
+}
+.people-team-folders {
+  flex: 2 1 240px;
+  width: auto;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+}
+.people-team-name {
+  width: auto;
+  min-width: 0;
+}
+.people-add-hint,
+.people-add .people-err {
+  flex: 1 0 100%;
+}
+.people-folders {
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+/* an invite just made: a callout on a moss rail, its link in a well */
+.people-invite {
+  display: grid;
+  gap: 6px;
+  margin: 4px 0 10px;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--moss);
+}
+.people-invite-head,
+.people-invite-cli {
+  margin: 0;
+  font-size: var(--t-md);
+  color: var(--ink-dim);
+}
+.people-invite-link {
+  display: block;
+  padding: 6px 8px;
+  border-radius: var(--r);
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  color: var(--ink);
+  background: var(--well);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.people-invite .people-row-acts {
+  justify-content: flex-start;
+}
+.people-me {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.people-hue {
+  flex: 0 1 190px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+.people-hue input {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--moss);
+}
+.people-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+  font-size: var(--t-md);
+}
+.people-log li {
+  display: grid;
+  grid-template-columns: 9.5em minmax(0, 8em) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+.people-log time {
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.people-log-who {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.people-log li > span:last-child {
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+  /* a phone: the face and the name, then what they hold, then what can be
+     done, each on a row of its own; a thumb gets 44px to press */
+  .people-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .people-row > .people-holds,
+  .people-row > .people-row-acts {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+  .people-team-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .people-team-row > .people-row-acts {
+    justify-content: flex-start;
+  }
+  /* what a thumb presses is 44px tall; a team's name that is only read stays a label */
+  .people-view .mini,
+  .people-view button.people-team,
+  .people-view .seg button {
+    min-height: 44px;
+    align-items: center;
+  }
+  .people-view button.people-team {
+    display: inline-flex;
+    padding-inline: 12px;
+  }
+  .people-view .settings-input {
+    min-height: 44px;
+    font-size: var(--t-xl);
+  }
+  .people-add-name,
+  .people-team-folders {
+    flex-basis: 100%;
+    max-width: none;
+  }
+  /* your own name sits beside your face */
+  .people-me .people-add-name {
+    flex: 1 1 0;
+  }
+  .people-hue {
+    flex: 1 1 100%;
+    min-height: 44px;
+  }
+  .people-log li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .people-log li > span:last-child {
+    grid-column: 1 / -1;
+  }
+  .pair-as {
+    min-height: 44px;
+    font-size: var(--t-xl);
   }
 }

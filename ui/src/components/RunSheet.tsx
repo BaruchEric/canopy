@@ -63,6 +63,7 @@ import { nextGap, REPLAY_SPEEDS, replayClock, replayEnd, replayTime, replayTimel
 
 import { GROUP_MAX } from "../../../src/core/group";
 import { runRepoId, runRepoName } from "../goals";
+import { ByWho } from "./PeopleChip";
 import { isGoalAnchor } from "../../../src/core/coordinator";
 
 const STATUS_WORD: Record<Run["status"], string> = {
@@ -750,6 +751,7 @@ export function Console({ run, repo, onClose, go }: { run: Run; repo: Repo | und
             with {name}
             {run.workspace && <span className="run-by" title="it works in this repo and sees the workspace's other members"> · in workspace {run.workspace}</span>}
             {run.by && <span className="run-by" title="the device that started it"> · from {run.by}</span>}
+            <ByWho id={run.id} who={run.who} />
             {run.priority && <span className="run-by" title={`Started as ${run.priority} work, which waits while the plan's usage window runs low; a retry after a limit waits the same way`}> · {run.priority} priority</span>}
             {run.kept && <span className="run-by" title="Served from the run's record on disk; the live run is gone. Nothing here can be answered or stopped."> · kept</span>}
           </div>

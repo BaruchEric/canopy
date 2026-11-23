@@ -1,5 +1,7 @@
 import type { RunGroup } from "../../src/core/group";
 import type { QuickNote } from "../../src/core/notes";
+import { MOST_PLACES, type Role } from "../../src/core/people";
+import { focusFor, inFocus, joinCodeIn, startsFocused, withoutJoin, type Roster } from "./people";
 import { applyClips, looksSecret, type Clip } from "../../src/core/clips";
 import type { Copied } from "./clipsink";
 import { copyText } from "./share";
@@ -901,6 +903,12 @@ export interface CanopyState {
   authByBackend: Record<string, BackendAuth>;
   /** a sign-in on its way, or one that failed, by backend */
   signIns: Record<string, SignIn>;
+  /** each backend's people, teams and waiting invites (server/people,
+   *  FR-074); a backend older than people is missing */
+  people: Record<string, Roster>;
+  /** what became of an invite this page traded (`?join=`, or one typed on
+   *  the sign-in screen), until dismissed */
+  joined: { ok: boolean; words: string } | null;
   /** the retro lessons each backend has on offer, by backend name, their
    *  keys qualified; the inbox shows each backend's as one item (FR-062) */
   advice: Record<string, AdviceOffer[]>;
@@ -930,6 +938,9 @@ export interface CanopyState {
   dirtyOnly: boolean;
   /** leaves only the starred repos on the board */
   favoritesOnly: boolean;
+  /** only the repos under this page's person's team folders (FR-074); on
+   *  from the first load for a member or a viewer whose teams name folders */
+  focusOnly: boolean;
   /** lit status facets; a repo shows when it matches any of them */
   filters: RepoFilter[];
   /** lit git identities, as userKey strings (NOBODY for repos with none) */
@@ -1128,6 +1139,7 @@ export interface CanopyState {
   setFilter: (f: string) => void;
   setDirtyOnly: (v: boolean) => void;
   setFavoritesOnly: (v: boolean) => void;
+  setFocusOnly: (v: boolean) => void;
   toggleFilter: (f: RepoFilter) => void;
   toggleUser: (key: string) => void;
   /** turns every facet and identity chip off, and favorites only; the text
@@ -1436,8 +1448,26 @@ export interface CanopyState {
   /** approves this page's own waiting sign-in with the first code from the
    *  backend's log */
   useFirstCode: (backend: string, code: string) => Promise<void>;
-  approvePair: (backend: string, id: string) => Promise<void>;
+  /** `person` is whose session the pair becomes; none is this page's own person */
+  approvePair: (backend: string, id: string, person?: string) => Promise<void>;
   denyPair: (backend: string, id: string) => Promise<void>;
+  /** reads one backend's people, home by default (FR-074) */
+  loadPeople: (backend?: string) => Promise<void>;
+  /** trades an invite for this page's token on a backend (the one that
+   *  served the page when none is named); true when it was taken */
+  joinWith: (code: string, backend?: string) => Promise<boolean>;
+  dismissJoined: () => void;
+  /** ends this page's own session on a backend */
+  signOut: (backend: string) => Promise<void>;
+  addPerson: (backend: string, want: { name: string; role: Role; teams: string[]; invite: boolean }) => Promise<{ name: string; invite?: { code: string; expires: number } }>;
+  setPerson: (backend: string, id: string, change: { name?: string; role?: Role; teams?: string[]; off?: boolean; color?: number | null }) => Promise<void>;
+  removePerson: (backend: string, id: string) => Promise<void>;
+  invitePerson: (backend: string, id: string) => Promise<{ code: string; expires: number }>;
+  uninvitePerson: (backend: string, id: string) => Promise<void>;
+  saveTeam: (backend: string, team: { id?: string; name?: string; folders?: string[] }) => Promise<void>;
+  removeTeam: (backend: string, id: string) => Promise<void>;
+  /** renames or recolours this page's own person on a backend */
+  setMe: (backend: string, change: { name?: string; color?: number | null }) => Promise<void>;
   /** ends a caller's token; this page's own forgets it here too */
   revokeCaller: (backend: string, id: string) => Promise<void>;
   /** each backend's secret store, by backend name: names, sinks and
@@ -2042,6 +2072,10 @@ const triggersEvents = new Map<string, number>();
 const workEvents = new Map<string, number>();
 /* and the notes', so a read that lands after an event never puts an older list back */
 const quickNotesEvents = new Map<string, number>();
+/* and the people's */
+const peopleEvents = new Map<string, number>();
+/* the open repos each backend was last told this browser has, as one string */
+const placesSaid = new Map<string, string>();
 /* and the clipboard's: a read that lands after an event is read again, since
    the event carries ids, not a list to put back */
 const clipsEvents = new Map<string, number>();
@@ -2064,6 +2098,9 @@ const authEvents = new Map<string, number>();
 /* each sign-in's poll, by backend, so one in flight is not started twice
    (a backend holds at most three pair requests) and a hide stops it */
 const signingIn = new Map<string, number>();
+/** whether the "my teams" filter has had its first setting: the default a
+ *  member starts on, or a choice made in the filter menu */
+let focusChosen = false;
 let signInSeq = 0;
 /** each backend's last pair request, offered with the next one as a renewal
  *  so the server replaces it instead of keeping both; gone once signed in */
@@ -2233,6 +2270,29 @@ function authOf(b: string, info: AuthInfo, needed: boolean, sent: string | null)
   return { ...info, hasToken: readToken(origin) !== null, needed: needed && info.you === "none" };
 }
 
+/** Tells each backend which of its repos this browser has open (FR-074), so
+ *  the others see who is where. Said only when it changed since the last
+ *  telling. A backend older than people has no roster here and is not told. */
+function sayPlaces(s: Pick<CanopyState, "panels" | "backendOrder" | "people">): void {
+  // a solo or shell window holds the grove's panels, not panels of its own
+  if (dockless()) return;
+  for (const b of s.backendOrder) {
+    if (!s.people[b]) continue;
+    const mine: string[] = [];
+    for (const id of s.panels) {
+      const [name, plain] = split(registry(), id);
+      if (name === b && mine.length < MOST_PLACES) mine.push(plain);
+    }
+    const said = mine.join("\n");
+    if ((placesSaid.get(b) ?? "") === said) continue;
+    placesSaid.set(b, said);
+    void api.peopleAt(b, clientId(), mine).catch(() => {
+      // not told: the next change says it again
+      placesSaid.delete(b);
+    });
+  }
+}
+
 /** What a backend's stream coming back after a drop re-reads: the server
  *  replays nothing. Its tree and records, the shells it holds, the ones a
  *  reboot left to restore (worked out before it listened, so never
@@ -2268,6 +2328,10 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadQuickNotes(b);
   void get().loadClips(b);
   void get().loadAuth(b);
+  void get().loadPeople(b);
+  // the server forgot this browser's place with its stream
+  placesSaid.delete(b);
+  sayPlaces(get());
   // a sign-in this tab left waiting before a reload picks up where it was
   void get().signIn(b, true);
   void get().loadSecrets(b);
@@ -2529,6 +2593,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   clipsSeen: 0,
   authByBackend: {},
   signIns: {},
+  people: {},
+  joined: null,
   secrets: {},
   advice: {},
   harnessSaid: readHarnessSaid(),
@@ -2544,6 +2610,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   filter: "",
   dirtyOnly: false,
   favoritesOnly: false,
+  focusOnly: false,
   filters: [],
   users: [],
   activeWs: null,
@@ -2627,6 +2694,21 @@ export const useStore = create<CanopyState>((set, get) => ({
   setFeedQuiet: (feedQuiet) => set({ feedQuiet }),
 
   init: async () => {
+    // An invite in the link (`?join=`, FR-074) is traded for this page's
+    // token before the first read, so the page loads as the person it was
+    // made for. It leaves the URL first: a reload or a copied address never
+    // spends it twice.
+    const invite = typeof location === "undefined" ? null : joinCodeIn(location.search);
+    if (invite) {
+      history.replaceState(history.state, "", withoutJoin(location.href));
+      // A page the backend already knows keeps its session: trading the
+      // invite would turn this browser into the invited person and drop the
+      // token it held, which an owner trying their own link would not get back.
+      const held = readToken(originOf("")) === null ? null : await api.auth().catch(() => null);
+      if (held && held.you !== "none") {
+        set({ joined: { ok: false, words: `This page is already signed in${held.person ? ` as ${held.person.name}` : ""}, so the invite in the link was left unused. Open the link in the browser it is for, or sign out here first.` } });
+      } else await get().joinWith(invite);
+    }
     // Which backends there are comes first: every id and URL hangs off it.
     // A server from before there were several has no list, and is home alone.
     // A backend that refuses this first read refuses the rest of the load
@@ -2791,6 +2873,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadQuickNotes();
     void get().loadClips();
     void get().loadAuth();
+    void get().loadPeople();
     void get().signIn(get().home, true);
     void get().loadSecrets();
     // the screen layouts, which a backend from before them does not have
@@ -3007,6 +3090,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadQuickNotes(name);
     void get().loadClips(name);
     void get().loadAuth(name);
+    void get().loadPeople(name);
     void get().signIn(name, true);
     void get().loadSecrets(name);
     void api
@@ -3083,6 +3167,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     clipsEvents.set(name, (clipsEvents.get(name) ?? 0) + 1);
     const { [name]: _auth, ...authByBackend } = s.authByBackend;
     const { [name]: _signIn, ...signIns } = s.signIns;
+    const { [name]: _people, ...people } = s.people;
+    peopleEvents.set(name, (peopleEvents.get(name) ?? 0) + 1);
+    placesSaid.delete(name);
     signingIn.delete(name);
     const { [name]: _secrets, ...secrets } = s.secrets;
     const backendOrder = applyRegistry(s.home, registryEntries, hiddenBackends);
@@ -3124,6 +3211,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       clips,
       authByBackend,
       signIns,
+      people,
       secrets,
       agents,
       launchers,
@@ -3242,6 +3330,10 @@ export const useStore = create<CanopyState>((set, get) => ({
   setFilter: (filter) => set({ filter }),
   setDirtyOnly: (dirtyOnly) => set({ dirtyOnly }),
   setFavoritesOnly: (favoritesOnly) => set({ favoritesOnly }),
+  setFocusOnly: (focusOnly) => {
+    focusChosen = true;
+    set({ focusOnly });
+  },
   toggleFilter: (f) =>
     set((s) => ({
       filters: s.filters.includes(f)
@@ -3254,7 +3346,10 @@ export const useStore = create<CanopyState>((set, get) => ({
         ? s.users.filter((x) => x !== key)
         : [...s.users, key],
     })),
-  clearFilters: () => set({ filters: [], users: [], favoritesOnly: false }),
+  clearFilters: () => {
+    focusChosen = true;
+    set({ filters: [], users: [], favoritesOnly: false, focusOnly: false });
+  },
   setActiveWs: (activeWs) => set({ activeWs }),
 
   loadScreenProfiles: async () => {
@@ -3712,6 +3807,16 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (ev.type === "prs") {
       prsEvents.set(b, (prsEvents.get(b) ?? 0) + 1);
       set((st) => ({ prs: { ...st.prs, [b]: ev.prs } }));
+      return;
+    }
+    if (ev.type === "people") {
+      peopleEvents.set(b, (peopleEvents.get(b) ?? 0) + 1);
+      // the event carries no invites: those are an admin's read, kept as they were
+      set((st) => ({ people: { ...st.people, [b]: { people: ev.people, teams: ev.teams, invites: st.people[b]?.invites ?? [] } } }));
+      // this page's own person renamed, re-roled or turned off: ask who it is now
+      const me = get().authByBackend[b]?.person;
+      const now = me ? ev.people.find((p) => p.id === me.id) : undefined;
+      if (me && (!now || now.off || now.role !== me.role || now.name !== me.name)) void get().loadAuth(b);
       return;
     }
     if (ev.type === "auth") {
@@ -4532,9 +4637,100 @@ export const useStore = create<CanopyState>((set, get) => ({
     // the poll picks the token up on its next claim
     await api.firstCode(backend, s.id, code.trim());
   },
-  approvePair: async (backend, id) => {
-    await api.approvePair(backend, id);
+  approvePair: async (backend, id, person) => {
+    await api.approvePair(backend, id, person);
     await get().loadAuth(backend);
+  },
+  loadPeople: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = peopleEvents.get(b) ?? 0;
+    try {
+      const roster = await api.people(b);
+      if (!roster || !isShown(get(), b)) return;
+      // an event that came while the read was out is newer than its people;
+      // the invites are the read's alone
+      set((s) => {
+        const was = s.people[b];
+        const fresh = (peopleEvents.get(b) ?? 0) === mark || !was;
+        return { people: { ...s.people, [b]: fresh ? roster : { ...was, invites: roster.invites } } };
+      });
+    } catch {
+      // an older backend has no people, and a page not signed in reads none
+    }
+  },
+  joinWith: async (code, backend) => {
+    const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+    // before the first load the registry is empty, and its home is this page's own backend
+    const b = backend ?? homeName();
+    const origin = originOf(baseOf(b));
+    try {
+      // the pair this page was waiting on goes with the join, so it does not sit in an inbox
+      const got = await api.join(code, pairLabel(get().settings.device || deviceName(ua)), b, lastPairs.get(b));
+      if (!writeToken(origin, got.token)) throw new Error("this browser would not keep the token");
+      signingIn.delete(b);
+      lastPairs.delete(b);
+      writePair(origin, null);
+      set((s) => {
+        const { [b]: _was, ...rest } = s.signIns;
+        return { signIns: rest, joined: { ok: true, words: `Signed in as ${got.person}.` } };
+      });
+      // An invite in the link is traded before the first load, which then
+      // reads everything as this person. One typed later says who the page
+      // is now: home's load goes again from the sign-in screen (App), and
+      // another backend that told this page nothing loads here.
+      if (get().loaded || get().signInFirst) {
+        await get().loadAuth(b);
+        if (b === get().home) void get().loadSweep();
+        else if (!streams.has(b)) void get().connect(b);
+        void get().loadPeople(b);
+      }
+      return true;
+    } catch (err) {
+      set({ joined: { ok: false, words: `That invite did not sign this page in: ${err instanceof Error ? err.message : String(err)}` } });
+      return false;
+    }
+  },
+  dismissJoined: () => set({ joined: null }),
+  signOut: async (backend) => {
+    await api.signOut(backend);
+    writeToken(originOf(baseOf(backend)), null);
+    // what the page read as that person leaves the screen with the session
+    if (backend === get().home && typeof location !== "undefined") location.reload();
+    else await get().loadAuth(backend);
+  },
+  addPerson: async (backend, want) => {
+    const made = await api.addPerson(backend, want);
+    await get().loadPeople(backend);
+    return { name: made.person.name, ...(made.invite ? { invite: made.invite } : {}) };
+  },
+  setPerson: async (backend, id, change) => {
+    await api.setPerson(backend, id, change);
+    await get().loadPeople(backend);
+  },
+  removePerson: async (backend, id) => {
+    await api.removePerson(backend, id);
+    await get().loadPeople(backend);
+  },
+  invitePerson: async (backend, id) => {
+    const made = await api.invitePerson(backend, id);
+    await get().loadPeople(backend);
+    return made;
+  },
+  uninvitePerson: async (backend, id) => {
+    await api.uninvitePerson(backend, id);
+    await get().loadPeople(backend);
+  },
+  saveTeam: async (backend, team) => {
+    await api.saveTeam(backend, team);
+    await get().loadPeople(backend);
+  },
+  removeTeam: async (backend, id) => {
+    await api.removeTeam(backend, id);
+    await get().loadPeople(backend);
+  },
+  setMe: async (backend, change) => {
+    await api.peopleMe(backend, change);
+    await Promise.all([get().loadPeople(backend), get().loadAuth(backend)]);
   },
   denyPair: async (backend, id) => {
     await api.denyPair(backend, id);
@@ -4765,7 +4961,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     }
     if (item.source === "auth") {
       if (!("pair" in answer) || item.backend === undefined) throw new Error("a pair request takes allow or deny");
-      return answer.pair === "allow" ? get().approvePair(item.backend, item.id) : get().denyPair(item.backend, item.id);
+      return answer.pair === "allow" ? get().approvePair(item.backend, item.id, answer.as) : get().denyPair(item.backend, item.id);
     }
     if (item.source === "advice") {
       if (!("advice" in answer)) throw new Error("a lesson takes accept or dismiss");
@@ -5652,6 +5848,24 @@ useStore.subscribe((s, prev) => {
   if (s.sheet !== prev.sheet) ++runOpen;
 });
 
+// A member or a viewer whose teams name folders starts on those folders: the
+// "my teams" filter comes on once, the first time the page knows who it is
+// and where its teams work. Whatever they choose after that stays. An owner
+// or an admin starts on the whole grove.
+useStore.subscribe((s, prev) => {
+  if (focusChosen || (s.people === prev.people && s.authByBackend === prev.authByBackend)) return;
+  const role = s.authByBackend[s.home]?.person?.role;
+  if (role === undefined || !s.people[s.home]) return;
+  focusChosen = true;
+  if (startsFocused(role, focusByBackend(s)[s.home])) useStore.setState({ focusOnly: true });
+});
+
+// Where this browser is follows its open panels, and a roster just read
+// means a backend that can be told (FR-074).
+useStore.subscribe((s, prev) => {
+  if (s.panels !== prev.panels || s.people !== prev.people) sayPlaces(s);
+});
+
 // A strip shell coming forward (a new one, a join, a move) takes the strip
 // back from a section tab showing there (FR-030), so no action that sets
 // activeTerm has to remember to.
@@ -6358,8 +6572,50 @@ export function specStale(s: Pick<CanopyState, "triggers">): ReadonlySet<string>
   return staleOut;
 }
 
-let viewIn: { cards: RepoCard[]; filters: unknown; users: unknown; attention: boolean; favorites: boolean; text: string; bad: ReadonlySet<string>; stale: ReadonlySet<string> } | null =
-  null;
+let focusIn: { people: CanopyState["people"]; auths: CanopyState["authByBackend"] } | null = null;
+let focusKey = "{}";
+let focusOut: Record<string, string[]> = {};
+
+/** Each backend's focus for this page's person: the folders their teams
+ *  work in (FR-074). A backend where they have none is not listed. The
+ *  object is the same one until a folder moves, so a people event that
+ *  changed nothing here rebuilds no view. */
+export function focusByBackend(s: Pick<CanopyState, "people" | "authByBackend">): Record<string, string[]> {
+  if (focusIn && focusIn.people === s.people && focusIn.auths === s.authByBackend) return focusOut;
+  focusIn = { people: s.people, auths: s.authByBackend };
+  const out: Record<string, string[]> = {};
+  for (const [b, roster] of Object.entries(s.people)) {
+    const folders = focusFor(roster, s.authByBackend[b]?.person?.id);
+    if (folders.length > 0) out[b] = folders;
+  }
+  const key = JSON.stringify(out);
+  if (key !== focusKey) {
+    focusKey = key;
+    focusOut = out;
+  }
+  return focusOut;
+}
+
+/** whether this page's person has team folders on any backend */
+export const hasFocus = (s: Pick<CanopyState, "people" | "authByBackend">): boolean => Object.keys(focusByBackend(s)).length > 0;
+
+/** how many cards the "my teams" filter would keep */
+export function focusCount(s: CanopyState): number {
+  const focus = focusByBackend(s);
+  return allCards(s).filter((card) => card.checkouts.some((c) => inFocus(focus[backendOf(c.id)] ?? [], c.path))).length;
+}
+
+let viewIn: {
+  cards: RepoCard[];
+  filters: unknown;
+  users: unknown;
+  attention: boolean;
+  favorites: boolean;
+  text: string;
+  bad: ReadonlySet<string>;
+  stale: ReadonlySet<string>;
+  focus: Record<string, string[]> | null;
+} | null = null;
 let viewOut: RepoCard[] = [];
 
 /** The cards the filters leave: a card is in view when any of its
@@ -6374,6 +6630,7 @@ export function visibleCards(s: CanopyState): RepoCard[] {
     v.users === s.users &&
     v.attention === s.dirtyOnly &&
     v.favorites === s.favoritesOnly &&
+    v.focus === (s.focusOnly ? focusByBackend(s) : null) &&
     v.text === s.filter &&
     // the health facet alone reads it: a check's tick does not rebuild the view
     (v.bad === healthBad(s) || !s.filters.includes("health")) &&
@@ -6384,8 +6641,16 @@ export function visibleCards(s: CanopyState): RepoCard[] {
   const bad = healthBad(s);
   const stale = specStale(s);
   const q = { filters: s.filters, users: s.users, attention: s.dirtyOnly, favorites: s.favoritesOnly, text: s.filter, healthBad: bad, specStale: stale };
-  viewIn = { cards, filters: s.filters, users: s.users, attention: s.dirtyOnly, favorites: s.favoritesOnly, text: s.filter, bad, stale };
-  viewOut = same(viewOut, cards.filter((card) => applyQuery(card.checkouts, q, plainOf).length > 0));
+  // a team's folders are a focus, not a wall: a backend where this person has none shows all it has
+  const focus = s.focusOnly ? focusByBackend(s) : null;
+  viewIn = { cards, filters: s.filters, users: s.users, attention: s.dirtyOnly, favorites: s.favoritesOnly, text: s.filter, bad, stale, focus };
+  viewOut = same(
+    viewOut,
+    cards.filter((card) => {
+      const left = applyQuery(card.checkouts, q, plainOf);
+      return focus ? left.some((c) => inFocus(focus[backendOf(c.id)] ?? [], c.path)) : left.length > 0;
+    }),
+  );
   return viewOut;
 }
 
@@ -6451,7 +6716,7 @@ export function attentionCount(s: CanopyState): number {
 
 /** how many chips the filter menu has lit */
 export function activeFilterCount(s: CanopyState): number {
-  return s.filters.length + s.users.length + (s.favoritesOnly ? 1 : 0);
+  return s.filters.length + s.users.length + (s.favoritesOnly ? 1 : 0) + (s.focusOnly ? 1 : 0);
 }
 
 

@@ -295,6 +295,9 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     case "secrets":
     // pair ids are the backend's own and name no repo
     case "auth":
+    // a roster is kept under its backend, its people's open repos by the ids
+    // that backend knows (FR-074)
+    case "people":
     // keep awake names no repo; the store files it under its backend
     case "awake":
     // a pulse names registry cards, whose ids are the broker's, not a backend's

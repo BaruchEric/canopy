@@ -104,6 +104,9 @@ export interface BranchStart {
 /** What a run the server sets up itself starts with beyond the plain
  *  arguments. */
 export interface StartExtras {
+  /** the person who asked for the start, by id (FR-074); set only where a
+   *  person's own call starts the run */
+  who?: string;
   /** start the repo's dev task in the branch's worktree once `prepare` is done (the pre-flight's toggle) */
   devTask?: true;
   /** Private in-memory identity for steps belonging to one flow. */
@@ -529,6 +532,7 @@ export class Runner {
       prompt: null,
     };
     if (by) run.by = by;
+    if (extras.who) run.who = extras.who;
     if (extras.parent) run.parent = extras.parent;
     const depth = extras.child ? (this.get(extras.parent ?? "")?.depth ?? 0) + 1 : extras.depth ?? 0;
     if (depth > 0) run.depth = depth;

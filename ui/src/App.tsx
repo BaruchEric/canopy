@@ -1,5 +1,6 @@
 import { HealthView } from "./components/Health";
-import { AgentsView, ClockView, CostsView, KitView, Library, ManagerView, PluginsView, SecretsView, SessionsView, TriggersView, WorkView, warmChunks } from "./components/LazyViews";
+import { AgentsView, ClockView, CostsView, KitView, Library, ManagerView, PeopleView, PluginsView, SecretsView, SessionsView, TriggersView, WorkView, warmChunks } from "./components/LazyViews";
+import { JoinedNote } from "./components/PeopleChip";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Wordmark } from "./components/TopBar";
@@ -84,6 +85,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
       { key: "health", label: "health", what: "What is broken on each backend, and what canopy is fixing" },
       { key: "costs", label: "costs", what: "What Claude, Codex, voice and dictation cost, by service, repo and run" },
       { key: "secrets", label: "secrets", what: "Names, sinks and imports; values only behind a passkey on the mini's page" },
+      { key: "people", label: "people", what: "Who is on each backend, what each may do, the teams, the invites that sign people in, and who did what" },
     ],
   },
 ];
@@ -91,7 +93,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
 const VIEWS: ViewDef[] = VIEW_GROUPS.flatMap((g) => g.views);
 
 /** the views that are not the git cockpit: their own bar, no board keys */
-const OTHER_VIEWS = ["library", "ports", "sessions", "agents", "manager", "health", "costs", "triggers", "clock", "work", "kit", "plugins", "secrets"];
+const OTHER_VIEWS = ["library", "ports", "sessions", "agents", "manager", "health", "costs", "triggers", "clock", "work", "kit", "plugins", "secrets", "people"];
 
 let goalsIn: readonly unknown[] = [];
 let goalsOut: Goal[] = [];
@@ -660,7 +662,8 @@ export function App() {
       return (
         <div className="loading grove signin-first">
           <Crowns size={40} />
-          <p>This canopy asks who is calling before it shows anything. Sign in to load the grove.</p>
+          <p>This canopy asks who is calling before it shows anything. Sign in to load the grove. With an invite, open its link, or press sign in and paste its code.</p>
+          <JoinedNote />
           <SignInChip backend={home} />
           <button type="button" className="mini" title="Load again, for a sign-in that finished in another tab" onClick={() => setAttempt((n) => n + 1)}>
             try again
@@ -723,6 +726,7 @@ export function App() {
       ) : (
         <TopBar nav={nav} />
       )}
+      <JoinedNote />
       <div
         className={`app-mid feed-${feedAt}${feedBeside ? " feed-beside" : ""}`}
         style={{ "--feed-w": `${feedWidth}px` } as CSSProperties}
@@ -751,6 +755,8 @@ export function App() {
         <PluginsView />
       ) : view === "secrets" ? (
         <SecretsView />
+      ) : view === "people" ? (
+        <PeopleView />
       ) : (
         <Library ports={view === "ports"} project={project} onRepo={showRepo} onPorts={() => navigate("ports")} />
       )}

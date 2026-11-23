@@ -12,11 +12,15 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import { allows, kindOfLabel, LANES, needs, PAIR_KINDS, type CallerKind, type PairKind, type Right } from "../core/callers";
+import { inviteCode, OWNER_ID, rightsOf, roleAllows, type Me, type Role } from "../core/people";
 import { configDir } from "../core/store";
 import { isLoopback, isLoopbackHost } from "../core/client";
 import type { PendingPair } from "../core/types";
 
-export type Caller = { id: string; kind: CallerKind; label: string; term?: string; run?: string; created: number; used: number };
+/** `user` is the person the caller belongs to (FR-074): a page's or CLI's by
+ *  its invite or its approval, a shell's or a run's by who started it. None
+ *  is the owner's, which every session from before there were people is. */
+export type Caller = { id: string; kind: CallerKind; label: string; term?: string; run?: string; user?: string; created: number; used: number };
 
 type Kept = Caller & { hash: string };
 
@@ -27,7 +31,7 @@ const LOOPBACK_ID = "loopback";
 /** what a ticket may stand in for: a shell's socket, a helper's, and the
  *  event stream, which any caller with a token may read */
 type Ticketed = "shell" | "helper" | "read";
-type Pair = { id: string; label: string; addr: string; kind: PairKind; code: string; secret: string; at: number; state: "waiting" | "approved" | "denied" };
+type Pair = { id: string; label: string; addr: string; kind: PairKind; code: string; secret: string; at: number; state: "waiting" | "approved" | "denied"; user?: string };
 
 const KINDS: readonly CallerKind[] = ["page", "cli", "shell", "ranger", "coordinator", "run", "helper", "none"];
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -75,6 +79,7 @@ function parseKept(raw: string): Kept[] | null {
       used: r["used"],
       ...(typeof r["term"] === "string" ? { term: r["term"] } : {}),
       ...(typeof r["run"] === "string" ? { run: r["run"] } : {}),
+      ...(typeof r["user"] === "string" && r["user"] !== OWNER_ID ? { user: r["user"] } : {}),
     });
   }
   return out;
@@ -156,7 +161,7 @@ export class CallerBook {
     return caller;
   }
 
-  mint(kind: CallerKind, opts: { label: string; term?: string; run?: string }): { token: string; caller: Caller } {
+  mint(kind: CallerKind, opts: { label: string; term?: string; run?: string; user?: string }): { token: string; caller: Caller } {
     const token = `cnp_${kind}_${b64(32)}`;
     const at = this.now();
     const kept: Kept = {
@@ -168,6 +173,8 @@ export class CallerBook {
       used: at,
       ...(opts.term !== undefined ? { term: opts.term } : {}),
       ...(opts.run !== undefined ? { run: opts.run } : {}),
+      // the owner's is the absence of one, as every older session's is
+      ...(opts.user !== undefined && opts.user !== OWNER_ID ? { user: opts.user } : {}),
     };
     this.callers.push(kept);
     this.save().catch(() => {});
@@ -230,6 +237,12 @@ export class CallerBook {
     return this.remove((c) => c.run === run).then(() => {});
   }
 
+  /** Drops everything a person holds: their sessions, and the shells' and
+   *  runs' tokens minted in their name. The owner's are those with no user. */
+  dropUser(user: string): Promise<void> {
+    return this.remove((c) => (c.user ?? OWNER_ID) === user).then(() => {});
+  }
+
   /** Drops every caller of one kind: at start, the coordinators', since no
    *  run outlives a restart to hold one. */
   dropKind(kind: CallerKind): Promise<void> {
@@ -243,6 +256,18 @@ export class CallerBook {
 
   list(): Caller[] {
     return this.callers.map((c) => this.strip(c));
+  }
+
+  /** a caller by its id, or null */
+  byId(id: string): Caller | null {
+    const kept = this.callers.find((c) => c.id === id);
+    return kept ? this.strip(kept) : null;
+  }
+
+  /** the person a shell's token is held for: undefined for the owner's, and
+   *  for a shell with no token */
+  userOfTerm(term: string): string | undefined {
+    return this.callers.find((c) => c.kind === "shell" && c.term === term)?.user;
   }
 
   /** a one-use ticket, good for 60 s, for a socket or a stream that cannot send a header */
@@ -298,6 +323,16 @@ export class CallerBook {
     return { id: p.id, code: p.code, secret: p.secret };
   }
 
+  /** The asker takes its own waiting pair back: it signed in another way (an
+   *  invite, FR-074), so the request should not sit in an inbox for someone
+   *  to approve. True when a waiting pair with that secret went. */
+  withdraw(id: string, secret: string): boolean {
+    const p = this.pairs.get(id);
+    if (!p || p.state !== "waiting" || p.secret !== secret) return false;
+    this.pairs.delete(id);
+    return true;
+  }
+
   /** Whether this pair was replaced by a renewal, told only to its own asker. */
   replaced(id: string, secret: string): boolean {
     const at = this.now();
@@ -309,10 +344,12 @@ export class CallerBook {
     return this.waiting().map(({ id, label, addr, code, at, kind }) => ({ id, label, addr, code, at, kind }));
   }
 
-  approve(id: string): boolean {
+  /** `user` is the person the device is approved as; none is the owner */
+  approve(id: string, user?: string): boolean {
     const p = this.waiting().find((x) => x.id === id);
     if (!p) return false;
     p.state = "approved";
+    if (user !== undefined) p.user = user;
     return true;
   }
 
@@ -333,7 +370,7 @@ export class CallerBook {
     if (p.state === "waiting") return "waiting";
     this.pairs.delete(id);
     if (p.state === "denied") return null;
-    return this.mint(p.kind, { label: p.label }).token;
+    return this.mint(p.kind, { label: p.label, ...(p.user !== undefined ? { user: p.user } : {}) }).token;
   }
 
   /** Whether a claim with this secret is a wrong guess at a live pair, the
@@ -347,17 +384,21 @@ export class CallerBook {
 
   /** The code shown in the server's own log while nobody can approve a pair:
    *  there is one only while the book holds no live page or cli session. One
-   *  unused for 30 days counts for nothing, since its token no longer works. */
-  firstCode(): string | null {
+   *  unused for 30 days counts for nothing, since its token no longer works.
+   *  `counts` says which sessions could let the owner in. Every one, unless
+   *  the caller knows better: with people (FR-074) only an owner's does,
+   *  since a member's session approves no owner, and counting it would lock
+   *  the owner out once their own sessions had lapsed. */
+  firstCode(counts: (c: Caller) => boolean = () => true): string | null {
     const at = this.now();
-    if (this.callers.some((c) => c.id !== LOOPBACK_ID && isSession(c.kind) && at - c.used <= SESSION_IDLE)) return null;
+    if (this.callers.some((c) => c.id !== LOOPBACK_ID && isSession(c.kind) && at - c.used <= SESSION_IDLE && counts(c))) return null;
     this.first ??= code();
     return this.first;
   }
 
   /** The first code approves a waiting pair, once; the code is burned. */
-  useFirst(given: string, pairId: string): boolean {
-    const have = this.firstCode();
+  useFirst(given: string, pairId: string, counts?: (c: Caller) => boolean): boolean {
+    const have = this.firstCode(counts);
     if (have === null || given !== have) return false;
     if (!this.approve(pairId)) return false;
     this.first = null;
@@ -478,13 +519,18 @@ const MOST_GUESSES = 10;
 
 const isAuth = (path: string): boolean => path === "/api/auth" || path.startsWith("/api/auth/");
 
+/** the people routes that change who is here or what they may do; saying
+ *  where you are (`at`) and your own name (`me`) follow the mode like any read */
+const isPeopleWrite = (method: string, path: string): boolean =>
+  method !== "GET" && method !== "HEAD" && path.startsWith("/api/people/") && path !== "/api/people/at" && path !== "/api/people/me";
+
 /** A 401 for nobody known, a 403 for a caller without the right. Never a
  *  `login` key: the page reads that as the edge gate's sign-in. */
-function refusal(right: Right, caller: Caller | null): Response {
-  return Response.json(
-    { error: `this call needs the ${right} right; run canopy auth login, or open a new shell`, need: right },
-    { status: caller ? 403 : 401 },
-  );
+function refusal(right: Right, caller: Caller | null, byRole = false): Response {
+  // a kind short of the right signs in for a token of another kind; a role
+  // short of it is the person's, and no sign-in changes that (FR-074)
+  const how = byRole ? "your role on this backend does not hold it" : "run canopy auth login, or open a new shell";
+  return Response.json({ error: `this call needs the ${right} right; ${how}`, need: right }, { status: caller ? 403 : 401 });
 }
 
 /** The check at the top of route(), what it refused, the guesses at the
@@ -505,6 +551,9 @@ export class CallerGate {
   private shown: string | null = null;
   /** the lane's refusals already logged, by kind, method and path */
   private readonly laneSaid = new Set<string>();
+  /** the role of a caller's person, null once that person is gone or off;
+   *  unset, everyone is the owner, as before there were people (FR-074) */
+  private readonly roleOf: (caller: Caller) => Role | null;
 
   constructor(opts: {
     book: CallerBook;
@@ -513,6 +562,7 @@ export class CallerGate {
     onPairs?: (pending: PendingPair[]) => void;
     onRefused?: () => void;
     now?: () => number;
+    roleOf?: (caller: Caller) => Role | null;
   }) {
     this.book = opts.book;
     this.mode = opts.mode;
@@ -520,19 +570,38 @@ export class CallerGate {
     this.onPairs = opts.onPairs ?? (() => {});
     this.onRefused = opts.onRefused ?? (() => {});
     this.now = opts.now ?? Date.now;
+    this.roleOf = opts.roleOf ?? (() => "owner");
+  }
+
+  /** Whether a caller holds a right: its kind's and its person's role's,
+   *  both. A caller whose person is gone or off holds nothing. */
+  can(caller: Caller | null, right: Right | "open"): boolean {
+    if (right === "open") return true;
+    if (!caller) return false;
+    const role = this.roleOf(caller);
+    return role !== null && allows(caller.kind, right) && roleAllows(role, right);
+  }
+
+  /** every right a caller holds, for `GET /api/auth` */
+  rights(caller: Caller | null): Right[] {
+    const role = caller ? this.roleOf(caller) : null;
+    return caller && role ? rightsOf(caller.kind, role) : [];
   }
 
   /** Null lets the request through, anything else is the answer. The auth
-   *  routes are checked in every mode, so a token nobody approved while
-   *  nothing was enforced cannot be one later. */
+   *  routes and the people routes that write are checked in every mode, so a
+   *  token nobody approved while nothing was enforced cannot be one later,
+   *  and nobody without admin adds a person or mints an invite. */
   gate(req: Request, url: URL, caller: Caller | null): Response | null {
-    const auth = isAuth(url.pathname);
+    const auth = isAuth(url.pathname) || isPeopleWrite(req.method, url.pathname);
     if (this.mode === "off" && !auth) return null;
     // a HEAD is a GET without the body
     const right = needs(req.method === "HEAD" ? "GET" : req.method, url.pathname);
     if (right === "open") return null;
+    // a token whose person is gone or off is nobody's
+    if (caller && this.roleOf(caller) === null) caller = null;
     const kind = caller?.kind ?? "none";
-    if (allows(kind, right)) return null;
+    if (this.can(caller, right)) return null;
     this.record(kind, req, url);
     if (this.mode === "log" && !auth) {
       const key = `${kind} ${req.method} ${url.pathname}`;
@@ -542,7 +611,7 @@ export class CallerGate {
       }
       return null;
     }
-    return refusal(right, caller);
+    return refusal(right, caller, caller !== null && allows(kind, right));
   }
 
   /** a refusal, would-refuse ones included, in the count and the recent list */
@@ -604,9 +673,18 @@ export class CallerGate {
     this.onPairs(this.book.pending());
   }
 
+  /** a session that could approve the owner's sign-in: an owner's own */
+  private readonly ownerSession = (c: Caller): boolean => this.roleOf(c) === "owner";
+
+  /** The first code takes a waiting pair for the owner, while no owner is
+   *  signed in to approve it. */
+  useFirst(given: string, pairId: string): boolean {
+    return this.book.useFirst(given, pairId, this.ownerSession);
+  }
+
   /** Prints the first sign-in code when there is one not printed yet. */
   announce(): void {
-    const code = this.book.firstCode();
+    const code = this.book.firstCode(this.ownerSession);
     if (code && code !== this.shown) this.log(`canopy: first sign-in code ${code} (good until a page or the CLI signs in)`);
     this.shown = code;
   }
@@ -629,16 +707,18 @@ const ticketRight = (v: unknown): Ticketed | null => (v === "term" ? "shell" : v
  *  addresses and routes, so they go to a caller that holds `admin` (a page
  *  or the CLI) and stay empty for the rest. While nothing is enforced the
  *  whole answer goes to anyone, as every other read does then. */
-export function authInfo(book: CallerBook, gate: CallerGate, caller: Caller | null): {
+export function authInfo(book: CallerBook, gate: CallerGate, caller: Caller | null, people?: AuthPeople): {
   mode: CallersMode;
   refused: { count: number; recent: Refused[] };
   callers: Caller[];
   pending: PendingPair[];
   you: CallerKind;
   youId: string | null;
+  person: Me | null;
+  rights: Right[];
 } {
   const kind = caller?.kind ?? "none";
-  const whole = gate.mode !== "enforce" || allows(kind, "admin");
+  const whole = gate.mode !== "enforce" || gate.can(caller, "admin");
   return {
     mode: gate.mode,
     refused: whole ? gate.refused : { count: gate.refused.count, recent: [] },
@@ -646,18 +726,34 @@ export function authInfo(book: CallerBook, gate: CallerGate, caller: Caller | nu
     pending: whole ? book.pending() : [],
     you: kind,
     youId: caller?.id ?? null,
+    // who the caller is; with no token outside enforce, the owner, as every
+    // route there takes nobody for a person
+    person: people ? people.me(caller, gate.mode) : null,
+    rights: gate.rights(caller),
   };
+}
+
+/** What the auth routes ask of the people on this backend (server/people.ts). */
+export interface AuthPeople {
+  /** who a caller is to the page: null for nobody known under enforce */
+  me(caller: Caller | null, mode: CallersMode): Me | null;
+  /** the id of the person a caller is; the owner's for one with no user */
+  idOf(caller: Caller | null): string;
+  /** why `actor` may not give a device to `person`, or null */
+  handRefusal(actor: Caller | null, person: string): string | null;
+  /** an invite spent: its person, or null for a wrong, used or expired code */
+  redeem(code: string): Promise<{ person: string; name: string } | null>;
 }
 
 /** `/api/auth` and below, after the gate has passed the request; null for
  *  any other path. `addr` is the client's address, which a pair request
  *  shows and the guess limit counts by. */
-export async function authRoute(book: CallerBook, gate: CallerGate, req: Request, url: URL, caller: Caller | null, addr: string): Promise<Response | null> {
+export async function authRoute(book: CallerBook, gate: CallerGate, req: Request, url: URL, caller: Caller | null, addr: string, people?: AuthPeople): Promise<Response | null> {
   if (!isAuth(url.pathname)) return null;
   const json = (body: unknown, status = 200): Response => Response.json(body, { status });
   if (url.pathname === "/api/auth") {
     if (req.method !== "GET") return json({ error: "/api/auth only answers a GET" }, 405);
-    return json(authInfo(book, gate, caller));
+    return json(authInfo(book, gate, caller, people));
   }
   if (req.method !== "POST") return json({ error: "the auth routes take a POST" }, 405);
   const raw: unknown = await req.json().catch(() => null);
@@ -698,7 +794,7 @@ export async function authRoute(book: CallerBook, gate: CallerGate, req: Request
       const id = field(b, "id");
       const given = field(b, "code");
       if (!id || !given) return json({ error: "id and code are required" }, 400);
-      if (!book.useFirst(given.trim().toUpperCase(), id)) {
+      if (!gate.useFirst(given.trim().toUpperCase(), id)) {
         gate.missed(route, addr);
         return json({ error: "that is not the first sign-in code, or the pair request is not waiting" }, 403);
       }
@@ -709,8 +805,45 @@ export async function authRoute(book: CallerBook, gate: CallerGate, req: Request
     case "deny": {
       const id = field(b, "id");
       if (!id) return json({ error: "id is required" }, 400);
-      if (!(route === "approve" ? book.approve(id) : book.deny(id))) return json({ error: "no such pair request waiting" }, 404);
+      // the device is its approver's own unless the approval names someone
+      // the approver may sign in (FR-074)
+      const person = route === "approve" && people ? (field(b, "person") ?? people.idOf(caller)) : undefined;
+      if (person !== undefined && people) {
+        const why = people.handRefusal(caller, person);
+        if (why) return json({ error: why }, 403);
+      }
+      if (!(route === "approve" ? book.approve(id, person) : book.deny(id))) return json({ error: "no such pair request waiting" }, 404);
       gate.pairsChanged();
+      return json({ ok: true });
+    }
+    case "join": {
+      // an invite traded for a session of its person's (FR-074)
+      if (!people) return json({ error: "this backend keeps no people" }, 404);
+      if (gate.locked(route, addr)) return tooMany();
+      const code = inviteCode(field(b, "code") ?? "");
+      const label = field(b, "label");
+      const kind = b["kind"] === "cli" ? "cli" : b["kind"] === "page" || b["kind"] === undefined ? "page" : null;
+      if (!label) return json({ error: "a join needs a label" }, 400);
+      if (!kind) return json({ error: "kind is page or cli" }, 400);
+      const got = code ? await people.redeem(code) : null;
+      if (!got) {
+        gate.missed(route, addr);
+        return json({ error: "that invite is not one: it was used, has expired, or was typed wrong" }, 403);
+      }
+      const { token } = book.mint(kind, { label: label.slice(0, 80), user: got.person });
+      // the pair this asker was waiting on is not needed any more
+      const id = field(b, "id");
+      const secret = field(b, "secret");
+      if (id && secret && book.withdraw(id, secret)) gate.pairsChanged();
+      gate.announce();
+      return json({ token, person: got.name });
+    }
+    case "signout": {
+      // a session ends itself, whatever its role: revoke is admin's
+      if (!caller) return json({ error: "no session to sign out" }, 401);
+      if (caller.kind !== "page" && caller.kind !== "cli" && caller.kind !== "helper") return json({ error: "only a page, a CLI or a helper signs itself out" }, 403);
+      await book.revoke(caller.id).catch(() => false);
+      gate.announce();
       return json({ ok: true });
     }
     case "revoke": {
@@ -731,7 +864,7 @@ export async function authRoute(book: CallerBook, gate: CallerGate, req: Request
     case "ticket": {
       const right = ticketRight(b["for"]);
       if (!right) return json({ error: `for is "term", "helper" or "events"` }, 400);
-      if (!caller || !allows(caller.kind, right)) return refusal(right, caller);
+      if (!caller || !gate.can(caller, right)) return refusal(right, caller, caller !== null && allows(caller.kind, right));
       try {
         return json({ ticket: book.ticket(caller.id, right) });
       } catch {

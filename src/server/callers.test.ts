@@ -414,6 +414,48 @@ describe("first code", () => {
     expect(book.useFirst(code, b.id)).toBe(false);
   });
 
+  test("a session that could not let the owner in does not hold the code back", () => {
+    const book = open();
+    const member = book.mint("page", { label: "a member's phone", user: "p-averyave" }).caller;
+    const owners = (c: { user?: string }): boolean => c.user === undefined;
+    // every session counts unless the caller says which do
+    expect(book.firstCode()).toBeNull();
+    const code = book.firstCode(owners);
+    expect(code).not.toBeNull();
+    const p = book.pair("the owner's laptop", "a");
+    if ("error" in p) throw new Error(p.error);
+    // without the rule the code is not one, since a session is live
+    expect(book.useFirst(code as string, p.id)).toBe(false);
+    expect(book.useFirst(code as string, p.id, owners)).toBe(true);
+    const token = book.claim(p.id, p.secret);
+    if (typeof token !== "string" || token === "waiting") throw new Error("the pair was not approved");
+    // the code made the owner: a token with no person on it
+    expect(book.check(token)?.user).toBeUndefined();
+    expect(book.check(token)?.id).not.toBe(member.id);
+    expect(book.firstCode(owners)).toBeNull();
+  });
+
+  test("the gate offers the code while no owner is signed in, and withholds it once one is", () => {
+    const book = open();
+    book.mint("cli", { label: "a member's laptop", user: "p-averyave" });
+    const lines: string[] = [];
+    const gate = new CallerGate({ book, mode: "enforce", log: (line) => lines.push(line), roleOf: (c) => (c.user === undefined ? "owner" : "member") });
+    gate.announce();
+    const code = /first sign-in code (\S+) /.exec(lines[0] ?? "")?.[1] ?? "";
+    expect(code).toMatch(/^[A-Z2-9]{6}$/);
+    const p = book.pair("the owner's laptop", "a");
+    if ("error" in p) throw new Error(p.error);
+    expect(gate.useFirst("WRONG1", p.id)).toBe(false);
+    expect(gate.useFirst(code, p.id)).toBe(true);
+    expect(typeof book.claim(p.id, p.secret)).toBe("string");
+    // the owner is in: no second code, for anyone
+    const again = book.pair("someone else", "b");
+    if ("error" in again) throw new Error(again.error);
+    gate.announce();
+    expect(lines).toHaveLength(1);
+    expect(gate.useFirst(code, again.id)).toBe(false);
+  });
+
   test("a book that holds a page session from disk has none", async () => {
     const book = open();
     book.mint("page", { label: "p" });

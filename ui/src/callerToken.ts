@@ -8,6 +8,7 @@
 
 import type { PendingPair } from "../../src/core/types";
 import { kindOfLabel, KIND_RIGHTS, needs, type CallerKind, type PairKind, type Right } from "../../src/core/callers";
+import type { Me } from "../../src/core/people";
 
 /** the header a token rides in */
 export const TOKEN_HEADER = "X-Canopy-Token";
@@ -170,10 +171,15 @@ export function isOwnCode(typed: string, own: string): boolean {
 export interface AuthInfo {
   mode: "off" | "log" | "enforce";
   refused: { count: number; recent: { kind: CallerKind; route: string; origin: string; ua: string; at: number }[] };
-  callers: { id: string; kind: CallerKind; label: string; term?: string; run?: string; created: number; used: number }[];
+  callers: { id: string; kind: CallerKind; label: string; term?: string; run?: string; user?: string; created: number; used: number }[];
   pending: PendingPair[];
   you: CallerKind;
   youId: string | null;
+  /** who this page's token is held for (FR-074); null when the backend
+   *  takes it for nobody, absent from a backend older than people */
+  person?: Me | null;
+  /** what the token holds: its kind's rights capped by the person's role */
+  rights?: Right[];
 }
 
 /** One backend's sign-in as the page keeps it: what it last said, whether
@@ -198,8 +204,18 @@ export type DialPlan = { kind: "ticket"; ticket: string } | { kind: "bare" } | {
 /** Whether a read of an `admin` route will land on a backend as it last
  *  said: anything goes while it does not enforce, else the kind it took
  *  this page for must hold admin. Unread, nothing is assumed. */
-export const readsAdmin = (auth: Pick<AuthInfo, "mode" | "you"> | undefined): boolean =>
-  auth !== undefined && (auth.mode !== "enforce" || KIND_RIGHTS[auth.you].includes("admin"));
+export const readsAdmin = (auth: Pick<AuthInfo, "mode" | "you" | "rights"> | undefined): boolean =>
+  auth !== undefined && (auth.mode !== "enforce" || holds(auth, "admin"));
+
+/** Whether this page's token holds a right on a backend as it last said:
+ *  what the backend listed, which a person's role caps (FR-074), else the
+ *  kind's own on a backend older than people. */
+export const holds = (auth: Pick<AuthInfo, "you" | "rights">, right: Right): boolean => (auth.rights ?? KIND_RIGHTS[auth.you]).includes(right);
+
+/** Whether a people write will land: those are checked in every mode, so a
+ *  page nobody signed in manages no one even where the backend only logs. */
+export const managesPeople = (auth: Pick<AuthInfo, "you" | "rights" | "person"> | undefined): boolean =>
+  auth !== undefined && auth.person != null && holds(auth, "admin");
 
 export function dialPlan(mode: AuthInfo["mode"] | undefined, ticket: string | null, refused: boolean): DialPlan {
   if (ticket) return { kind: "ticket", ticket };

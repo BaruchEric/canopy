@@ -14,6 +14,7 @@ import { askCloses, pickKeys } from "../sweep";
 import { dueWord } from "../../../src/core/notes";
 import { openView } from "../clirun";
 import { pairAsk } from "../callerToken";
+import { mayGrant } from "../../../src/core/people";
 import { HANGS_RIGHT, useFitPop } from "../pop";
 import { PopGrip, usePopEntries, type PopSpec } from "./PopGrip";
 import { POPUP_WORD } from "../sectiontabs";
@@ -319,14 +320,7 @@ export function InboxRow({
                 code <b>{item.pair.code}</b>
                 <span className="settings-hint"> allow it only when the asker shows the same code</span>
               </p>
-              <div className="ask-row">
-                <button type="button" className="mini strong" disabled={busy} title="Let it in: it gets a token of its own, which Settings can revoke" onClick={() => answer({ pair: "allow" })}>
-                  allow
-                </button>
-                <button type="button" className="mini" disabled={busy} onClick={() => answer({ pair: "deny" })}>
-                  deny
-                </button>
-              </div>
+              <PairAnswer backend={item.backend ?? ""} busy={busy} onAnswer={answer} />
             </div>
           ) : item.kind === "ci" || item.kind === "gave-up" ? (
             <div className="ask">
@@ -550,6 +544,43 @@ function PairAsk({ pair, backend }: { pair: PendingPair; backend: string }) {
         </span>
       ))}
     </>
+  );
+}
+
+/** Lets a pair in or turns it away. Where the backend has other people the
+ *  approver may hand a sign-in to, a picker says whose session the pair
+ *  becomes (FR-074); left alone it is the approver's own, as before. */
+function PairAnswer({ backend, busy, onAnswer }: { backend: string; busy: boolean; onAnswer: (a: InboxAnswer) => void }) {
+  const roster = useStore((s) => s.people[backend]);
+  const me = useStore((s) => s.authByBackend[backend]?.person);
+  const [as, setAs] = useState("");
+  const others = roster && me ? roster.people.filter((p) => p.id !== me.id && !p.off && mayGrant(me.role, p.role)) : [];
+  const picked = others.find((p) => p.id === as);
+  return (
+    <div className="ask-row">
+      {others.length > 0 && (
+        <select className="settings-input pair-as" value={picked ? as : ""} disabled={busy} aria-label="Whose sign-in this becomes" title="Whose sign-in this becomes: yours, or a person you may hand one to" onChange={(e) => setAs(e.target.value)}>
+          <option value="">as me{me ? `, ${me.name}` : ""}</option>
+          {others.map((p) => (
+            <option key={p.id} value={p.id}>
+              as {p.name}, {p.role}
+            </option>
+          ))}
+        </select>
+      )}
+      <button
+        type="button"
+        className="mini strong"
+        disabled={busy}
+        title={picked ? `Let it in as ${picked.name}: it gets a token of ${picked.name}'s, held to a ${picked.role}'s rights` : "Let it in: it gets a token of its own, which Settings can revoke"}
+        onClick={() => onAnswer(picked ? { pair: "allow", as: picked.id } : { pair: "allow" })}
+      >
+        allow
+      </button>
+      <button type="button" className="mini" disabled={busy} onClick={() => onAnswer({ pair: "deny" })}>
+        deny
+      </button>
+    </div>
   );
 }
 

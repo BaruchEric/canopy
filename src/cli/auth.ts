@@ -11,7 +11,7 @@ import { dirname } from "node:path";
 import { apiBase, callerHeaders, tokenFile } from "./api";
 import { dim, lichen, moss, sky } from "./render";
 
-export const AUTH_USAGE = "usage: canopy auth login [--backend URL] [--code CODE]\n       canopy auth logout [--backend URL]\n       canopy auth status [--backend URL]";
+export const AUTH_USAGE = "usage: canopy auth login [--backend URL] [--code CODE]\n       canopy auth join <invite code> [--backend URL]\n       canopy auth logout [--backend URL]\n       canopy auth status [--backend URL]";
 
 /** how often a login asks whether it was approved, and how long it waits */
 const POLL = 2_000;
@@ -94,6 +94,16 @@ interface AuthInfo {
   refused: { count: number };
   you: string;
   youId: string | null;
+  /** who the token is held for, and what it holds (FR-074); absent from a backend older than people */
+  person?: { id: string; name: string; role: string } | null;
+  rights?: string[];
+}
+
+/** `auth status`'s line: the mode, the caller's kind, whose it is and what it holds */
+export function statusWords(a: AuthInfo): string {
+  const who = a.person ? `  ${a.person.name} (${a.person.role})` : "";
+  const holds = a.rights ? `  holds ${a.rights.join(", ") || "nothing"}` : "";
+  return `mode ${a.mode}  you ${a.you}${who}${holds}  refused ${a.refused.count}`;
 }
 
 /** `--name value` removed from args, as the index's own `opt` does */
@@ -108,7 +118,7 @@ export async function authCommand(argv: string[], { fail }: AuthDeps): Promise<v
   const base = apiBase(opt(args, "--backend"));
   const code = opt(args, "--code");
   const sub = args[0];
-  if (sub !== "login" && sub !== "logout" && sub !== "status") return fail(AUTH_USAGE);
+  if (sub !== "login" && sub !== "logout" && sub !== "status" && sub !== "join") return fail(AUTH_USAGE);
   const info = async (): Promise<AuthInfo> => {
     let res: Response;
     try {
@@ -132,9 +142,27 @@ export async function authCommand(argv: string[], { fail }: AuthDeps): Promise<v
       console.log(`${moss("signed in")} ${dim("→")} ${sky(base)} ${dim(`(token kept in ${file})`)}`);
       return;
     }
+    case "join": {
+      // an invite traded for this machine's CLI token, of the invite's person (FR-074)
+      const invite = args[1];
+      if (!invite || args.length > 2) return fail(AUTH_USAGE);
+      let res: { status: number; body: Record<string, unknown> };
+      try {
+        res = await post(base, "/api/auth/join", { code: invite, label: pairLabel("cli"), kind: "cli" });
+      } catch (e) {
+        return fail(`could not join: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      const token = res.body["token"];
+      if (res.status !== 200 || typeof token !== "string") return fail(`could not join: ${message(res)}`);
+      const file = tokenFile(base);
+      await saveToken(file, token);
+      const name = typeof res.body["person"] === "string" ? res.body["person"] : "someone";
+      console.log(`${moss("signed in")} ${dim("as")} ${name} ${dim("→")} ${sky(base)} ${dim(`(token kept in ${file})`)}`);
+      return;
+    }
     case "status": {
       const a = await info();
-      console.log(`${sky(base)}  ${dim("mode")} ${a.mode}  ${dim("you")} ${a.you}  ${dim("refused")} ${a.refused.count}`);
+      console.log(`${sky(base)}  ${statusWords(a)}`);
       return;
     }
     case "logout": {
@@ -147,7 +175,10 @@ export async function authCommand(argv: string[], { fail }: AuthDeps): Promise<v
       }
       let res: { status: number; body: Record<string, unknown> };
       try {
-        res = await post(base, "/api/auth/revoke", { id: a.youId });
+        // a session ends itself whatever its role; a backend from before
+        // people has no such route, and there revoke is the way
+        res = await post(base, "/api/auth/signout", {});
+        if (res.status === 404) res = await post(base, "/api/auth/revoke", { id: a.youId });
       } catch (e) {
         return fail(`could not revoke: ${e instanceof Error ? e.message : String(e)}`);
       }

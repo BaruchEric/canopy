@@ -61,6 +61,7 @@ export function parseFlowRecord(text: string): FlowFile | null {
   if (!Array.isArray(steps) || !Array.isArray(wsteps) || steps.length !== wsteps.length) return null;
   if (!steps.every(isStep)) return null;
   if (flow["request"] !== undefined && !isRequestId(flow["request"])) return null;
+  if (flow["who"] !== undefined && typeof flow["who"] !== "string") return null;
   if (typeof current !== "number" || !Number.isInteger(current) || current < 0 || current >= steps.length) return null;
   // a card flow's equip, whose servers become its steps' --allowedTools; a
   // flow taken back without it would run every step without its loadout
