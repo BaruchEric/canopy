@@ -7,7 +7,7 @@
  * fold.
  */
 
-import { acpFold, acpPermissionPrompt, acpResult, acpSession, acpTurn, foldAcp, ownSession, type AcpFold } from "./acpfold";
+import { acpFold, acpInputText, acpPermissionPrompt, acpResult, acpSession, acpTurn, foldAcp, ownSession, type AcpFold } from "./acpfold";
 import { promptFacts, spawnEnv, type DriveAgent, type DriveCtx, type DriveSpec, type PromptInput, type RunDriver } from "./driver";
 import { bunSpawn, RpcClient, RpcClosed, RpcError, type RpcExit, type RpcId, type RpcRequest, type RpcSpawn } from "./codexrpc";
 import type { McpLaunch } from "./runtools";
@@ -164,10 +164,9 @@ function choosePermission(params: Record<string, unknown>, answer: RunAnswer, ca
   return { outcome: { outcome: "cancelled" } };
 }
 
-function permissionDetail(params: Record<string, unknown>): string {
+function permissionDetail(params: Record<string, unknown>, command?: string): string {
   const call = rec(params["toolCall"]);
-  const raw = call["rawInput"];
-  const input = typeof raw === "string" ? raw : isRecord(raw) ? JSON.stringify(raw, null, 2) : "";
+  const input = acpInputText(call["rawInput"], command);
   const content = Array.isArray(call["content"])
     ? call["content"].flatMap((block) => (isRecord(block) && typeof block["text"] === "string" ? [block["text"]] : [])).join("\n")
     : "";
@@ -495,7 +494,7 @@ export class AntigravityDriver implements RunDriver {
     this.pending.set(key, request.id);
     try {
       const prompt = acpPermissionPrompt(params, ctx.cwd);
-      const detail = permissionDetail(params);
+      const detail = permissionDetail(params, prompt.kind === "permission" && prompt.tool === "Bash" ? prompt.command : undefined);
       const shown: PromptInput = prompt.kind === "permission" && detail ? { ...prompt, detail } : prompt;
       // An unattended run is an explicit deny policy. It must still pass
       // through RunCtx even when the harness is otherwise in yolo mode.

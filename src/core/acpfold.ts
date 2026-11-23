@@ -122,6 +122,10 @@ export interface AcpFold {
   turnCostBaseUsd: number | undefined;
   costUsd: number | undefined;
   usage: DriveTokens | undefined;
+  /** the tokens of the turns this fold has finished. agy's usage counts one
+   *  prompt, and a run's tokens are its whole spend, as Codex's thread total
+   *  and Claude Code's session count are, so a chat's turns add up here. */
+  spent: DriveTokens | undefined;
 }
 
 export function acpFold(cwd: string): AcpFold {
@@ -143,6 +147,7 @@ export function acpFold(cwd: string): AcpFold {
     turnCostBaseUsd: undefined,
     costUsd: undefined,
     usage: undefined,
+    spent: undefined,
   };
 }
 
@@ -247,6 +252,11 @@ export function tokensOf(value: unknown): DriveTokens | undefined {
   };
 }
 
+function addTokens(a: DriveTokens | undefined, b: DriveTokens): DriveTokens {
+  if (!a) return b;
+  return { input: a.input + b.input, cachedInput: a.cachedInput + b.cachedInput, output: a.output + b.output, reasoning: a.reasoning + b.reasoning, total: a.total + b.total };
+}
+
 /** Result from a prompt response, folded into the same result shape as the
  *  other drivers. `problem` is the driver's stop/interrupt override. */
 export function acpResult(
@@ -256,7 +266,9 @@ export function acpResult(
   now = Date.now(),
 ): { result: DriveResult; problem: string | null } {
   const stop = str(response, "stopReason");
-  const usage = tokensOf(response["usage"]) ?? state.usage;
+  const turn = tokensOf(response["usage"]) ?? state.usage;
+  const usage = turn ? addTokens(state.spent, turn) : state.spent;
+  state.spent = usage;
   const error = rec(response["error"]);
   const detail = [str(error, "message"), str(error, "data")].filter(Boolean).join("\n");
   const reported = stop === "end_turn" ? null : stop === "cancelled" ? "the turn was cancelled" : stop === "error" ? detail || "Antigravity reported an error" : stop ? `Antigravity stopped with ${stop}` : "Antigravity returned no stop reason";
@@ -321,6 +333,21 @@ export function foldAcp(state: AcpFold, method: string, params: Record<string, u
   }
 }
 
+/** The command an execute call runs: agy names it CommandLine, other ACP
+ *  agents command or cmd. */
+export function acpCommand(input: unknown): string | undefined {
+  const raw = rec(input);
+  return ["command", "cmd", "CommandLine"].map((k) => raw[k]).find((v): v is string => typeof v === "string");
+}
+
+/** A tool call's input as a prompt shows it: the command alone for a
+ *  command, as Claude Code's and Codex's prompts show it, rather than agy's
+ *  JSON with its timeouts and summary; any other input as JSON. */
+export function acpInputText(input: unknown, command?: string): string {
+  if (command) return command;
+  return typeof input === "string" ? input : isRecord(input) ? JSON.stringify(input, null, 2) : "";
+}
+
 /** Build a canopy permission prompt from ACP's `session/request_permission`
  *  payload. The driver uses the same helper for its live bridge and replay. */
 export function acpPermissionPrompt(params: Record<string, unknown>, cwd: string): PromptInput {
@@ -330,17 +357,15 @@ export function acpPermissionPrompt(params: Record<string, unknown>, cwd: string
   const tool = kind === "execute" || name === "Bash" ? "Bash" : kind === "edit" || name === "Edit" ? "Edit" : name;
   const title = str(call, "title") || describeTool(tool, rec(call["rawInput"]), cwd);
   const input = call["rawInput"];
+  const command = acpCommand(input);
   const detail = [
-    typeof input === "string" ? input : isRecord(input) ? JSON.stringify(input, null, 2) : "",
+    acpInputText(input, tool === "Bash" ? command : undefined),
     contentText(call["content"]),
     toolPaths(call, cwd).join(", "),
   ]
     .filter(Boolean)
     .join("\n\n")
     .slice(0, 4_000);
-  const rawInput = rec(input);
-  // agy names it CommandLine; other ACP agents command or cmd
-  const command = ["command", "cmd", "CommandLine"].map((k) => rawInput[k]).find((v): v is string => typeof v === "string");
   const paths = toolPaths(call, cwd);
   return {
     kind: "permission",

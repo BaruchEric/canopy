@@ -60,7 +60,13 @@ describe("agy's wire in the fold", () => {
 
   test("the permission prompt names agy's CommandLine as the command", () => {
     const prompt = acpPermissionPrompt({ toolCall: { ...call, status: "pending" }, options: [] }, "/repo");
-    expect(prompt).toMatchObject({ kind: "permission", tool: "Bash", title: "echo canopy-probe", command: "echo canopy-probe" });
+    expect(prompt).toMatchObject({ kind: "permission", tool: "Bash", title: "echo canopy-probe", command: "echo canopy-probe", detail: "echo canopy-probe" });
+  });
+
+  test("a prompt for anything but a command still shows agy's input as JSON", () => {
+    const edit = { toolCallId: "call_2", name: "write_to_file", kind: "edit", title: "File NOTES.md", rawInput: { TargetFile: "/repo/NOTES.md", CodeContent: "hi" } };
+    const prompt = acpPermissionPrompt({ toolCall: { ...edit, status: "pending" }, options: [] }, "/repo");
+    expect(prompt.kind === "permission" ? prompt.detail : "").toContain('"TargetFile": "/repo/NOTES.md"');
   });
 
   test("a finished command's output is rawOutput's output field", () => {
@@ -79,6 +85,17 @@ describe("agy's wire in the fold", () => {
     const state = acpFold("/repo");
     acpTurn(state, 0);
     expect(acpResult(state, { stopReason: "end_turn", usage }, null, 5).result.tokens?.total).toBe(9433);
+  });
+
+  test("a chat's tokens add up over its turns, since agy counts each prompt alone", () => {
+    const state = acpFold("/repo");
+    acpTurn(state, 0);
+    acpResult(state, { stopReason: "end_turn", usage: { inputTokens: 8600, outputTokens: 36, thoughtTokens: 29, totalTokens: 8636 } }, null, 1);
+    acpTurn(state, 2);
+    const second = acpResult(state, { stopReason: "end_turn", usage: { inputTokens: 8700, outputTokens: 50, cachedReadTokens: 100, totalTokens: 8850 } }, null, 3).result;
+    expect(second.tokens).toEqual({ input: 17400, cachedInput: 100, output: 86, reasoning: 29, total: 17486 });
+    acpTurn(state, 4);
+    expect(acpResult(state, { stopReason: "end_turn" }, null, 5).result.tokens?.total).toBe(17486);
   });
 });
 
@@ -205,7 +222,7 @@ describe("an Antigravity run", () => {
   test("allow goes back as allow_once, even after allow all", async () => {
     const d = await drive({ turns: [[permission(), text("pushed"), { stop: "end_turn" }]] });
     await d.until((r) => r.status === "waiting", "the prompt");
-    expect(d.run.prompt).toMatchObject({ kind: "permission", tool: "Bash", command: "git push" });
+    expect(d.run.prompt).toMatchObject({ kind: "permission", tool: "Bash", command: "git push", detail: "git push" });
     d.ctx.answer("p1", { kind: "allow-all" });
     const run = await d.until(d.ended, "the end");
     expect(run.status).toBe("done");

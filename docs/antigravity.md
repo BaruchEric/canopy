@@ -5,6 +5,13 @@ with that machine's own Google login. Pick **antigravity** as the harness in
 an agent profile, a role or a repo's agent settings. Shells, chats, jobs and
 ordinary workflow steps take it. Canopy stores no Google key and no login.
 
+A loadout replaces a route's harness, model and effort (FR-065), and that
+includes a default one from kit.json (FR-069). kit.json's loadouts are all
+Claude Code's, and the mini's machine default is `feature`, so a repo routed
+to Antigravity on the mini still starts Claude Code there. Start with the
+loadout `none` (the plan sheet's pick, or `canopy run --loadout none`) to get
+agy, or give kit.json an Antigravity loadout.
+
 ## Setup on a backend
 
 1. Install the CLI. Google's installer is
@@ -16,6 +23,11 @@ ordinary workflow steps take it. Canopy stores no Google key and no login.
 2. Sign in once in a terminal on that machine: run `agy` and pick "Log in with
    Google" (a browser opens; over ssh it prints a URL and takes the code
    back), or run `agy acp --login`. The login lives in the OS keyring.
+   The first time agy's own screen opens on a machine, it asks for a color
+   scheme and then for its terms of service, with the box that lets Google
+   collect your interactions already ticked. Untick it if you want to. A run
+   never shows these screens, but a shell waits on them until someone
+   answers.
 3. Reload canopy's page. The harness picker greys Antigravity out on a
    backend where canopy cannot find `agy` on its PATH or in your login shell.
 
@@ -50,9 +62,12 @@ Antigravity. A run that names a provider is refused.
 Runs speak the Agent Client Protocol (ACP) v1 to `agy acp` over stdio. In ask
 mode agy sends each action its permission settings do not already allow as a
 prompt, and the prompt appears in the run like Claude Code's and Codex's:
-allow, deny or allow all. Canopy answers agy "allow once" every time, even for
+allow, deny or allow all. A command's prompt shows the command, and any other
+action's shows its input. Canopy answers agy "allow once" every time, even for
 allow all, and keeps the allow-all scope itself, so it ends with the run and
-never lands in agy's own settings. Yolo passes
+never lands in agy's own settings. A deny's reason stays in canopy: ACP's
+reply to agy says allow or reject and nothing more, so agy hears only the
+refusal, and a job usually ends its turn there. Yolo passes
 `--dangerously-skip-permissions`, and agy asks nothing.
 
 The extra-flags box applies to shells only. A run with extra flags is refused
@@ -71,7 +86,7 @@ rather than started without them.
   a new run from canopy's brief of its steps.
 - ACP reports no plan usage windows, so the capacity chip has no reading for
   Antigravity. Each run's tokens come from agy's own count and show on the
-  run; agy reports no dollar cost.
+  run, a chat's summed over its turns; agy reports no dollar cost.
 
 ## How it was checked
 
@@ -82,6 +97,17 @@ directories), the `configOptions` (model, `thought_level`, mode), the -32000
 and `deny` options) and the usage counts were read off agy 1.5.15 on
 2026-11-23. The driver tests in `src/core/antigravity.test.ts` replay those
 shapes against a stand-in, `src/core/testdata/fake-agy-acp.ts`.
+
+Then end to end through canopy on 2026-11-23, with agy 1.5.15 on all three
+machines and `gemini-3.8-flash`. On the Mac: a profile made and edited in the
+Routing view, a repo override to it, an ask run that asked before running a
+command and writing a file (allow, then allow all), a two-turn chat that
+remembered a word from its first turn, a side question refused in words, a
+model agy does not offer failing the run with agy's list, and an Antigravity
+shell starting `agy --model gemini-3.8-flash`. On the mini and De Soto: an
+ask run that asked before `git rev-list --count HEAD` and answered after an
+allow, and on the mini an Antigravity shell starting agy in the shells
+container.
 
 References: [ACP in the CLI](https://antigravity.google/docs/cli/acp/),
 [CLI reference](https://antigravity.google/docs/cli/reference).
