@@ -45,7 +45,7 @@ One developer (the owner) across a laptop, an always-on Linux backend, a tablet 
 bun install
 bun run typecheck
 bun run lint
-bun test
+bun run test
 bun run build
 bun link
 canopy ui ~/dev
@@ -55,6 +55,7 @@ canopy ui ~/dev
 - Production: the Bun server on :7850 serves the built `dist/web` (the page, `sw.js`, `manifest.webmanifest` and `icons/`), so a stale build shows a stale UI.
 - Shared backend: docker compose (`canopy`, `shells`, `stages`, `coord` (the coordinator's runner, always up, used only once `.env` sets `CANOPY_COORD_SOCKET`, `CANOPY_COORD_API` and `CANOPY_COORD_PORT` and canopy enforces caller tokens, its lane held on that port's own listener), `coord-proxy` (the coordinator's egress proxy, its one way to the internet, which tunnels to Anthropic's names alone), `secrets`, and `tunnel` under its profile). Deploy committed `main` with `bun run redeploy`; `bun run redeploy status` says what is running. From the Mac it goes to the mini unless a backend is named (`desoto`, or `all`); `bun run redeploy mac` updates the Mac's own server through a key that runs only `scripts/mac-update` there. See `docs/deploy.md`.
 - Run `bun test` with `SHELL=/bin/bash` when an interactive zsh config slows shells down.
+- Run the whole suite as `bun run test`: the script passes `--timeout 20000`. Bun applies the preload's `setDefaultTimeout` to the first test file only, so a bare `bun test` runs every later file at Bun's 5 s limit, which the tests that start a server or clone a repo go over when the machine is busy.
 
 ## Data and state
 

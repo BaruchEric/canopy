@@ -10,7 +10,7 @@ canopy is a workbench for building software with Claude across many repos and ma
 bun install
 bun run typecheck          # tsc for the server (tsconfig.json), the SPA (ui/tsconfig.json) and its service worker (ui/tsconfig.sw.json)
 bun run lint               # oxlint over src, ui/src, ui/sw.ts, bin and scripts
-bun test                   # every *.test.ts under src and ui/src
+bun run test               # every *.test.ts under src and ui/src, 20 s a test (a bare `bun test` gives every file after the first Bun's 5 s)
 bun test src/core/git.test.ts          # one file
 bun test src/core/git.test.ts -t "name"  # one test by name
 bun run build              # vite builds of ui/ and its service worker into dist/web
