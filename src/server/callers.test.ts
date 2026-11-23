@@ -557,6 +557,8 @@ describe("the coordinator's lane", () => {
       ["POST", "/api/runs/stop"],
       ["POST", "/api/runs/answer"],
       ["POST", "/api/runs/fork"],
+      ["POST", "/api/runs/side"],
+      ["POST", "/api/runs/model"],
       ["POST", "/api/repos/run"],
       ["POST", "/api/repos/push"],
       ["POST", "/api/coordinator/plan"],

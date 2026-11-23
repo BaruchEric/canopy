@@ -909,6 +909,10 @@ export interface CanopyState {
   /** an accepted lesson's text by chat run id, which that chat's message box
    *  starts with; the user sends it, or not */
   chatDrafts: Record<string, string>;
+  /** the side question on show beside a run, by that run's id (FR-077):
+   *  the column its console draws. Closing the column drops the entry and
+   *  leaves the chat open. */
+  sideShown: Record<string, string>;
   /** the user's own workflow file an accepted lesson named, until put away,
    *  with the backend whose machine it is on */
   adviceFile: (Extract<AdviceAccepted, { kind: "file" }> & { backend: string }) | null;
@@ -1664,6 +1668,17 @@ export interface CanopyState {
   /** gives a live run a name of the user's own, over the one canopy cut
    *  from its first message or a model wrote (FR-073) */
   renameRun: (runId: string, name: string) => Promise<void>;
+  /** asks a side question beside a live run (FR-077): a chat forked from
+   *  the run's session, shown beside the run, which gets no message */
+  askSide: (runId: string, text: string, model?: string) => Promise<void>;
+  /** shows a side question beside the run it was asked of, or closes that
+   *  run's column with null; the chat stays open either way */
+  showSide: (parentId: string, sideId: string | null) => void;
+  /** brings a side question forward: beside the run it was asked of while
+   *  that run is on the page, else in a console of its own */
+  openSide: (sideId: string) => void;
+  /** another model for a side question's later messages */
+  modelRun: (runId: string, model: string) => Promise<void>;
   dismissRun: (runId: string) => Promise<void>;
   /** edits a coordinator's proposed or queued card; the run's broadcast brings it back */
   coordPlanEdit: (runId: string, taskId: string, change: CoordEdit) => Promise<void>;
@@ -2533,6 +2548,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   advice: {},
   harnessSaid: readHarnessSaid(),
   chatDrafts: {},
+  sideShown: {},
   adviceFile: null,
   inboxOpen: false,
   inboxFocus: null,
@@ -5459,6 +5475,28 @@ export const useStore = create<CanopyState>((set, get) => ({
   renameRun: async (runId, name) => {
     if (get().runs[runId]?.kept) return;
     const run = await answered(runId, api.renameRun(runId, name));
+    if (run) set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+  },
+  askSide: async (runId, text, model) => {
+    const side = await api.sideRun(runId, text, model);
+    // the stream may have brought the new run already, a step or two on
+    set((s) => ({ runs: s.runs[side.id] ? s.runs : { ...s.runs, [side.id]: side }, sideShown: { ...s.sideShown, [runId]: side.id } }));
+  },
+  showSide: (parentId, sideId) =>
+    set((s) => {
+      if (sideId) return { sideShown: { ...s.sideShown, [parentId]: sideId } };
+      const { [parentId]: _closed, ...sideShown } = s.sideShown;
+      return { sideShown };
+    }),
+  openSide: (sideId) => {
+    const parent = get().runs[sideId]?.sideOf?.run;
+    if (parent === undefined || !get().runs[parent]) return get().showRun(sideId);
+    get().showSide(parent, sideId);
+    get().showRun(parent);
+  },
+  modelRun: async (runId, model) => {
+    if (get().runs[runId]?.kept) return;
+    const run = await answered(runId, api.modelRun(runId, model));
     if (run) set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
   },
   coordPlanEdit: (runId, taskId, change) => api.coordTask(runId, taskId, change),

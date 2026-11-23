@@ -313,6 +313,15 @@ describe("the sweep hub", () => {
     expect(await readSweptChats()).toEqual([]);
   });
 
+  test("a side question is stopped with no record: beside a branch run it works in that run's worktree (FR-077)", async () => {
+    const w = world();
+    w.runs = [{ ...idleChat("c1"), sideOf: { run: "r1", title: "fix the footer" } }];
+    const hub = new SweepHub(w.deps);
+    expect(await hub.close(["chat:c1"], "eric")).toEqual([{ key: "chat:c1", result: "closed" }]);
+    expect(w.calls.stopChat).toEqual(["c1"]);
+    expect(await readSweptChats()).toEqual([]);
+  });
+
   test("a key the plan no longer has is \"gone\"", async () => {
     const w = world();
     const hub = new SweepHub(w.deps);

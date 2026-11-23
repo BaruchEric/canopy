@@ -55,6 +55,7 @@ import { branchTask, branchTaskWords, devTask as devTaskOf, renameOld, taskDraft
 import { AGENT_NAME, CHAT_BRANCH_HINT, OWN_BRANCH_NOTE, harnessOf, hideTodoSteps, nestSteps, resultLine, runBesideFlow, runPanelLabel, settledProposal, tokenTitle, type SettledProposal } from "../runs";
 import { RunTabs } from "./RunTabs";
 import { PromptRail, PromptRailEnd } from "./PromptRail";
+import { SideColumn, SideLine, useSideBox, type SideFrom } from "./SideQuestion";
 import { HARNESS } from "../../../src/core/harness";
 import { CENTERED } from "../pop";
 import { PopGear, PopGrip, PopHere } from "./PopGrip";
@@ -777,6 +778,7 @@ export function Console({ run, repo, onClose, go }: { run: Run; repo: Repo | und
       <RunTabs run={run} repo={repo} go={go} />
       {(run.parent || run.group || run.branch?.group) && <ParentLine run={run} />}
       {run.forkOf && <ForkLine run={run} />}
+      {run.sideOf && <SideLine run={run} solo={go !== undefined} />}
       {run.branch && <BranchBlock run={run} act={act} />}
       {run.branch && !run.kept && <BranchApp run={run} act={act} />}
       {run.branch?.work && <WorkBlock run={run} />}
@@ -816,6 +818,7 @@ export function Console({ run, repo, onClose, go }: { run: Run; repo: Repo | und
           onSend={(text) => act(() => sayRun(run.id, text), true)}
           hidden={cardsOnly}
           {...(draft ? { draft } : {})}
+          {...(asksBeside(run) ? { side: { run } } : {})}
         />
       )}
 
@@ -865,6 +868,7 @@ export function Console({ run, repo, onClose, go }: { run: Run; repo: Repo | und
           {active ? "hide" : "close"}
         </button>
       </footer>
+      <SideColumn run={run} repo={repo} />
     </>
   );
 }
@@ -1377,6 +1381,7 @@ export function RunPane({ run, repo, onSend, hint }: {
   const sayRun = useStore((s) => s.sayRun);
   const interruptRun = useStore((s) => s.interruptRun);
   const draft = useStore((s) => s.chatDrafts[run.id]);
+  const showRun = useStore((s) => s.showRun);
   const [error, setError] = useState<string | null>(null);
   const act = (fn: () => Promise<void>, propagate = false) => {
     setError(null);
@@ -1395,6 +1400,8 @@ export function RunPane({ run, repo, onSend, hint }: {
           onSend={(text) => act(() => (onSend ? onSend(text) : sayRun(run.id, text)), true)}
           quiet
           {...(draft ? { draft } : {})}
+          // a pane has no room for a column: the run's console opens with it
+          {...(!onSend && asksBeside(run) ? { side: { run, reveal: () => showRun(run.id) } } : {})}
         />
       )}
     </div>
@@ -1419,9 +1426,14 @@ function composerMode(run: Run, onStop: (text: string) => Promise<void>): Compos
   return run.status === "idle" ? { kind: "turn" } : { kind: "steer", chat: run.chat, onStop };
 }
 
+/** whether a run's box offers a side question (FR-077): a side question's
+ *  own box sends its words to that thread, and a coordinator takes none */
+const asksBeside = (run: Run): boolean => !run.sideOf && !isCoordinator(run);
+
 /** A run's message box: a chat's next message, or a person's words into any
  *  run at work. Enter sends, shift-enter breaks a line; `/`, `$` and `@`
- *  open the agent's commands, skills and the repo's files. */
+ *  open the agent's commands, skills and the repo's files. A message that
+ *  opens with `btw` is a side question, which goes beside the run (`side`). */
 function Composer({
   who,
   repoId,
@@ -1432,6 +1444,7 @@ function Composer({
   quiet = false,
   hidden = false,
   first = false,
+  side,
 }: {
   /** the agent's name, for the box's placeholder while it works */
   who: string;
@@ -1450,16 +1463,19 @@ function Composer({
   /** nothing has been said yet: this message starts the agent inside
    *  canopy's prompt, where the CLI reads no slash command */
   first?: boolean;
+  /** the run a side question from this box is asked beside (FR-077) */
+  side?: SideFrom;
 }) {
   const [text, setText] = useState(draft);
   const [busy, setBusy] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const ready = mode.kind === "turn";
   const typed = text.trim().length > 0;
-  const can = !busy && typed;
+  const mentions = useMentions({ box, text, setText, repoId, harness, bare: !first });
+  const beside = useSideBox({ from: side, text, setText, box });
+  const can = !busy && typed && beside.to !== "held";
   // a job stops its turn only for words to go on with: Stop ends the run
   const canStop = mode.kind === "steer" && !busy && (typed || mode.chat);
-  const mentions = useMentions({ box, text, setText, repoId, harness, bare: !first });
 
   // Back to the box as soon as the agent has answered, unless it is out of
   // sight. Coming back into sight is no answer, so it takes no focus: on a
@@ -1486,7 +1502,7 @@ function Composer({
     }
   };
   const send = async () => {
-    if (can) await deliver(onSend);
+    if (can) await deliver(beside.to === "side" ? beside.send : onSend);
   };
   const stop = async () => {
     if (canStop) await deliver(mode.onStop);
@@ -1494,6 +1510,7 @@ function Composer({
 
   return (
     <div className="composer" hidden={hidden}>
+      {beside.hint}
       <div className="mention-host">
         {/* first, so it opens over the box; the timeline gives it room */}
         {mentions.menu}
@@ -1517,7 +1534,9 @@ function Composer({
         />
       </div>
       <DictateButton target={box} />
-      {mode.kind === "steer" && (
+      {beside.button}
+      {/* a side question leaves the run's turn alone, so nothing stops it */}
+      {mode.kind === "steer" && beside.to === "run" && (
         <button
           type="button"
           className="mini"
@@ -1539,7 +1558,9 @@ function Composer({
         className="mini strong"
         disabled={!can}
         title={
-          mode.kind === "relay"
+          beside.to !== "run"
+            ? "↩ asks it beside the run, which gets no message and works on"
+            : mode.kind === "relay"
             ? `↩ sends: ${mode.hint}`
             : ready
               ? `↩ sends, shift-↩ for a new line; ${harness === "codex" ? "/ or $ for a skill" : "/ for a command or skill"}, @ for a file`
@@ -1547,7 +1568,7 @@ function Composer({
         }
         onClick={() => void send()}
       >
-        send
+        {beside.to === "run" ? "send" : "ask beside"}
       </button>
     </div>
   );

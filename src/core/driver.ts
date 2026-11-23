@@ -249,6 +249,10 @@ export interface RunDriver {
   /** Whether the run waits on work its steps do not show, such as a
    *  subagent in the background: the watchdog never calls such a run quiet. */
   holding?(): boolean;
+  /** Another model for the turns that follow, asked of a chat between
+   *  turns (FR-077): null once the harness has taken it, else why it has
+   *  not. A harness that keeps one model for a conversation has none. */
+  model?(model: string): Promise<string | null>;
   /** Ends the run's process. While a turn runs, it interrupts and kills. A
    *  chat between turns is closed politely, and the exit after is its end.
    *  Prompts still waiting have been answered "deny" by the Runner first. */

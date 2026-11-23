@@ -1092,6 +1092,33 @@ describe("a Codex run", () => {
     expect((await d.sent()).some((m) => m["eof"])).toBe(true);
   });
 
+  test("a chat between turns takes another model: the next turn/start names it once, and codex keeps it", async () => {
+    const d = await drive(
+      () => ({
+        turns: [
+          [agentMessage("m1", "hello"), { complete: "completed" }],
+          [agentMessage("m2", "again"), { complete: "completed" }],
+          [agentMessage("m3", "still"), { complete: "completed" }],
+        ],
+      }),
+      { chat: true, message: "hi" },
+    );
+    const run = await d.until((r) => r.status === "idle", "the first reply");
+    // its configured default has no name to go back to by
+    expect(await d.driver.model("default")).toBe("Codex has no name for its configured default; pick a model by its name");
+    expect(await d.driver.model("gpt-6-luna")).toBeNull();
+    run.status = "working";
+    d.driver.say("more");
+    await d.until((r) => r.status === "idle" && r.result?.text === "again", "the second reply");
+    run.status = "working";
+    d.driver.say("and more");
+    await d.until((r) => r.status === "idle" && r.result?.text === "still", "the third reply");
+    const turns = requests(await d.sent(), "turn/start").map((m) => m["params"] as Record<string, unknown>);
+    expect(turns.map((p) => p["model"])).toEqual([undefined, "gpt-6-luna", undefined]);
+    d.stop();
+    await d.until(d.ended, "the end");
+  });
+
   test("a chat whose server lingers after stdin closes is still done, not failed", async () => {
     const d = await drive(() => ({ ignoreEof: true, turns: [[agentMessage("m1", "hello"), { complete: "completed" }]] }), {
       chat: true,

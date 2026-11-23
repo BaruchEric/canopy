@@ -482,6 +482,26 @@ describe("a Claude run through the driver", () => {
     expect(users).toEqual(["hello", "again"]);
   });
 
+  test("a chat between turns takes another model (set_model), and a refusal comes back as the CLI's words", async () => {
+    const d = await drive("chat", "hello");
+    await d.until((r) => r.status === "idle", "the first reply");
+    expect(await d.driver.model("sonnet")).toBeNull();
+    const asked = (await d.sent()).filter((m) => m["type"] === "control_request").map((m) => m["request"]);
+    expect(asked).toEqual([{ subtype: "set_model", model: "sonnet" }]);
+    d.ctx.ending = true;
+    d.driver.stop();
+    await d.until(d.done, "the end");
+    // a process that is gone takes none
+    expect(await d.driver.model("opus")).toBe("the run ended");
+
+    const refused = await drive("chat", "hello", undefined, { env: { FAKE_CLAUDE_REFUSE_MODEL: "1" } });
+    await refused.until((r) => r.status === "idle", "the first reply");
+    expect(await refused.driver.model("sonnet")).toBe("no such model");
+    refused.ctx.ending = true;
+    refused.driver.stop();
+    await refused.until(refused.done, "the end");
+  });
+
   test("a CLI that dies before its result fails the run in the words it always had", async () => {
     const d = await drive("die");
     const run = await d.until(d.done, "the failure");

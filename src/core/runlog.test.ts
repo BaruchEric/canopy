@@ -501,6 +501,16 @@ test("merged attribution never exempts private credential collisions", async () 
 });
 
 
+test("a side question's record keeps the run it was asked beside, its title redacted like any text", async () => {
+  const dir = join(root, "side-question");
+  const value = run({ id: "5ide0001", action: "chat", chat: true, sideOf: { run: "ab12cd34", title: "rotate hunter2 in the vault" } });
+  const log = open(dir, value, { secrets: [{ name: "VAULT_PASSWORD", value: "hunter2" }] });
+  await log.settle(value);
+  expect((await readKeptRun(dir, value.id))?.sideOf).toEqual({ run: "ab12cd34", title: "rotate <redacted:VAULT_PASSWORD> in the vault" });
+  await writeFile(join(log.folder, RUN_FILE), JSON.stringify({ ...value, sideOf: { run: "ab12cd34" } }));
+  expect(await readKeptRun(dir, value.id)).toBeNull();
+});
+
 test("kept snapshots reject malformed merged group and priority fields", async () => {
   const dir = join(root, "merged-invalid"); const value = run();
   const log = open(dir, value); await log.settle(value);

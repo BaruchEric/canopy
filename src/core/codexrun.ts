@@ -701,6 +701,9 @@ export class CodexDriver implements RunDriver {
   /** a person stopped the running turn (`interrupt`): its completion as
    *  interrupted is no failure */
   private cut = false;
+  /** the model the next `turn/start` names (`model`), which codex then
+   *  keeps for the turns after it */
+  private nextModel: string | null = null;
 
   constructor(private opts: CodexOptions = {}) {}
 
@@ -763,6 +766,16 @@ export class CodexDriver implements RunDriver {
     this.cut = true;
     rpc.request("turn/interrupt", { threadId: thread, turnId: turn }).catch(() => {});
     return true;
+  }
+
+  /** Another model from the next turn on: `turn/start` takes one for that
+   *  turn and the turns after it. Codex's configured default has no name
+   *  to go back to by, so "default" is refused. */
+  model(model: string): Promise<string | null> {
+    if (model === "default") return Promise.resolve("Codex has no name for its configured default; pick a model by its name");
+    if (!this.rpc || this.rpc.closed || this.fold.thread === null) return Promise.resolve("its thread is not open");
+    this.nextModel = model;
+    return Promise.resolve(null);
   }
 
   stop(): void {
@@ -877,7 +890,9 @@ export class CodexDriver implements RunDriver {
     this.toolCalls = 0;
     this.capped = null;
     try {
-      const r = rec(await rpc.request("turn/start", turnParams(thread, text, ctx.agent)));
+      const model = this.nextModel;
+      this.nextModel = null;
+      const r = rec(await rpc.request("turn/start", { ...turnParams(thread, text, ctx.agent), ...(model ? { model } : {}) }));
       // turn/started may have said so already, and turn/completed may have
       // come in the same chunk as this answer and been handled first
       const id = str(rec(r["turn"]), "id") || null;

@@ -150,6 +150,13 @@ function build(): void {
  *  CLI did. */
 function onHostRequest(m: Record<string, unknown>): void {
   const r = (m["request"] ?? {}) as Record<string, unknown>;
+  // a model for the turns that follow (FR-077), answered as the real CLI
+  // did: with the model the alias resolved to, or an error
+  if (r["subtype"] === "set_model") {
+    if (process.env["FAKE_CLAUDE_REFUSE_MODEL"] === "1") out({ type: "control_response", response: { subtype: "error", request_id: m["request_id"], error: "no such model" } });
+    else out({ type: "control_response", response: { subtype: "success", request_id: m["request_id"], response: { model: `claude-${String(r["model"])}-5-5` } } });
+    return;
+  }
   const silent = process.env["FAKE_CLAUDE_SILENT_MODE"];
   if (r["subtype"] === "set_permission_mode" && silent) {
     if (silent === "now") build();

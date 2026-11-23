@@ -3,8 +3,9 @@
 // every view from its URL and by switching inside one page, the runs pill's
 // menu with two runs going, the prompt rail of a chat of twelve messages (its
 // ticks, a card, a click, the keys from an empty message box and not from a
-// draft, and a phone's bar), a shell that answers,
-// the two load failures
+// draft, and a phone's bar), a side question asked from a run's box (its
+// line, the ask, the thread beside the run and, on a phone, over it), a
+// shell that answers, the two load failures
 // (a view's chunk and xterm's refused), a phone: the top bar's first row
 // on the screen, an open panel's section tabs, and no field small enough for
 // iOS to zoom the page onto, and the manager: a goal kept in the run log
@@ -260,6 +261,120 @@ try {
       ? await rows.nth(1).click().then(() => page.waitForSelector(".sheet-back", { timeout: 5000 })).then((e) => e.innerText(), () => "")
       : "";
     check(sheet.includes("twin") && sheet.includes("the older chat"), `a pick opens that run and not the newest: "${sheet.replace(/\s+/g, " ").trim().slice(0, 60)}"`);
+    await page.close();
+  }
+
+  // A side question (FR-077). A scratch server has no agent whose session
+  // could be forked, so the run is made up and /api/runs/side is answered
+  // here with the chat the server would start. A message that opens with
+  // btw raises the box's line and goes to the side route, never to the run,
+  // and the thread shows beside the run on a wide sheet and over it, with a
+  // way back, on a phone.
+  for (const phone of [false, true]) {
+    const where = phone ? "on a phone" : "at 1400px";
+    const page = await fresh(undefined, true, phone);
+    const tree = (await (await page.request.get(`${base}/api/tree`)).json()) as { repos: { id: string; name: string }[] };
+    const repoId = (name: string) => tree.repos.find((r) => r.name === name)?.id ?? name;
+    const question = "what does retryBackoff default to?";
+    const going = {
+      id: "check-par",
+      repoId: repoId("demo"),
+      action: "ask",
+      verb: "Ask",
+      progress: "working",
+      expectsChange: false,
+      chat: false,
+      harness: "claude",
+      name: "migrate the billing checkout",
+      note: "Migrate the billing checkout",
+      status: "working",
+      session: "check-session",
+      startedAt: Date.now() - 60_000,
+      steps: [{ id: "p1", at: Date.now() - 50_000, kind: "text", text: "Reading the checkout module." }],
+      prompt: null,
+    };
+    const thread = {
+      ...going,
+      id: "check-side",
+      action: "chat",
+      verb: "chat",
+      chat: true,
+      name: "what does retryBackoff default to",
+      note: question,
+      status: "idle",
+      startedAt: Date.now(),
+      sideOf: { run: going.id, title: going.name },
+      steps: [
+        { id: "s1", at: Date.now(), kind: "user", text: question },
+        { id: "s2", at: Date.now(), kind: "text", text: "500 ms, doubling up to 8 s." },
+      ],
+    };
+    const runs: unknown[] = [going, { ...going, id: "check-twin", repoId: repoId("twin"), name: "another run", steps: [] }];
+    const sent: string[] = [];
+    await page.route("**/api/runs", (r) => (r.request().method() === "GET" ? r.fulfill({ json: runs }) : r.continue()));
+    await page.route("**/api/runs/side", async (r) => {
+      const body = r.request().postDataJSON() as { id?: string; text?: string };
+      sent.push(`side ${body.id}: ${body.text}`);
+      runs.push(thread);
+      await r.fulfill({ status: 201, json: thread });
+    });
+    await page.route("**/api/runs/say", async (r) => {
+      sent.push("say");
+      await r.fulfill({ status: 404, json: { error: "no such run" } });
+    });
+    await page.goto(`${base}/`, { waitUntil: "load" });
+    await page.waitForSelector(".pill.runs", { timeout: 20_000 });
+    await page.locator(".pill.runs").click();
+    const rows = page.locator('.runs-pick [role="radio"]');
+    await rows.first().waitFor({ timeout: 5000 }).catch(() => undefined);
+    const at = (await rows.allInnerTexts()).findIndex((t) => t.includes("demo"));
+    const sheet = page.locator(".sheet-back .sheet");
+    const opened = at >= 0 ? await rows.nth(at).click().then(() => sheet.locator("> .composer .composer-box").waitFor({ timeout: 5000 })).then(() => true, () => false) : false;
+    check(opened, `the made-up run's console opens with its box ${where}`);
+    if (opened) {
+      const box = sheet.locator("> .composer .composer-box");
+      const words = async () => (await sheet.locator("> .composer button").allInnerTexts()).map((t) => t.trim()).filter(Boolean);
+      const plain = await words();
+      await box.fill(`btw ${question}`);
+      const hint = await sheet.locator(".side-hint").innerText({ timeout: 3000 }).then((t) => t.replace(/\s+/g, " ").trim(), () => "");
+      const asking = await words();
+      check(
+        plain.includes("btw") && plain.includes("interrupt") && hint.startsWith("Side question.") && asking.includes("ask beside") && !asking.includes("stop & send"),
+        `a message that opens with btw raises the side question's line ${where}, and the box stops offering to cut the run's turn: "${hint.slice(0, 60)}" with ${asking.join(", ")}`,
+      );
+      await page.screenshot({ path: `${shots}/side-question-hint${phone ? "-phone" : ""}.png` });
+      await box.press("Enter");
+      const column = sheet.locator("> .side-q");
+      await column.waitFor({ timeout: 5000 }).catch(() => undefined);
+      check(sent.length === 1 && sent[0] === `side check-par: ${question}`, `the question goes to the side route and nothing is said to the run ${where}: ${sent.join("; ") || "nothing sent"}`);
+      const head = await column.locator(".side-q-head").innerText().then((t) => t.replace(/\s+/g, " ").trim(), () => "");
+      check(head.includes("Side question") && head.includes(question) && head.includes("Started from: migrate the billing checkout"), `the thread's head says what was asked and what it started from ${where}: "${head.slice(0, 120)}"`);
+      const geo = await page.evaluate(() => {
+        const sheet = document.querySelector<HTMLElement>(".sheet-back .sheet");
+        const col = sheet?.querySelector<HTMLElement>(":scope > .side-q");
+        const body = sheet?.querySelector<HTMLElement>(":scope > .sheet-body");
+        if (!sheet || !col || !body) return null;
+        const [s, c, b] = [sheet.getBoundingClientRect(), col.getBoundingClientRect(), body.getBoundingClientRect()];
+        return { sheet: s.width, mid: s.left + s.width / 2, colLeft: c.left, colWidth: c.width, colHeight: c.height, bodyRight: b.right, body: getComputedStyle(body).visibility, over: col.classList.contains("over"), wider: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+      });
+      if (!geo) check(false, `the thread's column is in the run's sheet ${where}`);
+      else if (phone) {
+        check(geo.over && geo.colWidth >= geo.sheet - 4 && geo.body === "hidden" && geo.colHeight >= 400 && geo.wider <= 0, `on a phone the thread lies over the run: ${Math.round(geo.colWidth)} of ${Math.round(geo.sheet)}px wide, ${Math.round(geo.colHeight)}px tall, the run under it ${geo.body}`);
+      } else {
+        check(!geo.over && Math.abs(geo.colLeft - geo.mid) <= 2 && geo.bodyRight <= geo.colLeft + 1 && geo.body === "visible" && geo.colHeight >= 400 && geo.wider <= 0, `at 1400px the thread has the sheet's right half and the run keeps the left: a ${Math.round(geo.sheet)}px sheet, the run to ${Math.round(geo.bodyRight)}, the thread from ${Math.round(geo.colLeft)}`);
+      }
+      await page.waitForTimeout(300);
+      await page.screenshot({ path: `${shots}/side-question${phone ? "-phone" : ""}.png` });
+      // put away, the thread is still a chat with a tab of its own
+      await column.locator(".side-q-head button.close").click();
+      const tab = sheet.locator(".run-tabs .rtab", { hasText: "retryBackoff" });
+      const closed = await tab.waitFor({ timeout: 3000 }).then(() => true, () => false);
+      const mark = closed ? ((await tab.locator(".rtab-side").textContent()) ?? "").trim() : "";
+      const back = await sheet.locator("> .sheet-body").evaluate((el) => getComputedStyle(el).visibility).catch(() => "");
+      check(closed && mark === "btw" && back === "visible" && (await column.count()) === 0, `closing the thread ${where} shows the run again and leaves the chat a tab marked btw: tab ${closed ? `"${mark}"` : "missing"}, the run ${back}`);
+      await tab.click().catch(() => undefined);
+      check(await column.waitFor({ timeout: 3000 }).then(() => true, () => false), `its tab brings the thread back ${where}`);
+    }
     await page.close();
   }
 

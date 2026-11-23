@@ -455,8 +455,12 @@ export class SweepHub {
         // A chat on a branch of its own (FR-080) is carried on from its
         // branch's landing record, which holds its session and its worktree.
         // A swept record would resume the session in the checkout, where
-        // Claude has no such conversation, so it gets none.
-        const record = !run.branch;
+        // Claude has no such conversation, so it gets none. A side question
+        // (FR-077) gets none either: one asked beside a branch run works in
+        // that run's worktree with no branch of its own, so its record
+        // would resume in the checkout too, and the run keeps no folder
+        // that says which it was.
+        const record = !run.branch && !run.sideOf;
         // the record goes first, so a stopped chat can always be resumed
         if (record) await addSweptChat({ runId: id, repoId: run.repoId, harness: run.harness, session: run.session, title: item.title, sweptAt: this.now(), ...(run.equip ? { equip: run.equip } : {}), ...(run.name ? { name: run.name } : {}) });
         // the record's write gave a message time to start a turn: a chat

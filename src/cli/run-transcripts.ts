@@ -21,6 +21,8 @@ export const RUN_USAGE = `usage: canopy run <repo> <action> [-m note] [--times 1
        canopy run stop <id> [--backend URL]
        canopy run say <id> <words…> [--backend URL]
        canopy run interrupt <id> [words…] [--backend URL]
+       canopy run side <id> <words…> [--model NAME] [--backend URL]
+       canopy run model <id> <model> [--backend URL]
        canopy run prune [--backend URL]
        canopy run pickup <flow> [--backend URL] [--on NAME]`;
 
@@ -32,13 +34,14 @@ export function keptLines(heads: readonly KeptRunHead[], now: number = Date.now(
 }
 
 /** One line per run still going, oldest first: id, how long ago it
- *  started, repo, state, what it is, and the name it goes by (FR-073).
- *  `now` is unix milliseconds. */
+ *  started, repo, state, what it is, and the name it goes by (FR-073). A
+ *  side question says which run it sits beside (FR-077). `now` is unix
+ *  milliseconds. */
 export function liveLines(runs: readonly Run[], now: number = Date.now()): string[] {
   return runs
     .filter(isRunActive)
     .sort((a, b) => a.startedAt - b.startedAt)
-    .map((run) => `${run.id.padEnd(8)}  ${ago(run.startedAt / 1000, now).padEnd(3)}  ${run.repoId.padEnd(24)}  ${run.status.padEnd(7)}  ${run.verb}${run.branch ? ` on ${run.branch.name}` : ""}${runSubject(run) ? `  ${runSubject(run)}` : ""}`);
+    .map((run) => `${run.id.padEnd(8)}  ${ago(run.startedAt / 1000, now).padEnd(3)}  ${run.repoId.padEnd(24)}  ${run.status.padEnd(7)}  ${run.verb}${run.branch ? ` on ${run.branch.name}` : ""}${run.sideOf ? ` beside ${run.sideOf.run}` : ""}${runSubject(run) ? `  ${runSubject(run)}` : ""}`);
 }
 
 /** The run's export-style head followed by its timeline in UTC. */
@@ -61,6 +64,7 @@ function headLines(run: Run): string[] {
     `${run.verb} in ${run.repoId} (${run.kept ? "kept" : "live"})`,
     `run: ${run.id}`,
     ...(run.name ? [`name: ${run.name}`] : []),
+    ...(run.sideOf ? [`side question of: ${run.sideOf.run} (${run.sideOf.title})`] : []),
     `action: ${run.action}`,
     `agent: ${agentName(run.harness)}, model ${model}`,
     `when: ${new Date(run.startedAt).toISOString()} to ${endLabel}, ${duration}`,
@@ -223,6 +227,34 @@ export async function runTranscriptCommand(argv: string[], { fail }: { fail: Fai
     const body = { id, ...(text ? { text } : {}) };
     const run = await ask<Run>(target, "POST", sub === "say" ? "/api/runs/say" : "/api/runs/interrupt", body).catch(requestFailure(target, fail));
     console.log(`${run.id} ${run.status}`);
+    return;
+  }
+
+  // a side question beside a run that is going: a chat forked from its
+  // session, which leaves the run at work, and another model for that
+  // chat's later messages (FR-077)
+  if (sub === "side" || sub === "model") {
+    const id = args.shift();
+    if (!id || outFlag) return fail(RUN_USAGE);
+    if (!RUN_ID.test(id)) return fail(`invalid run id: ${id}`);
+    // a backend from before side questions answers either with a bare 404
+    const failed = (message: string): never =>
+      fail(message === "not found" ? "this backend runs a canopy from before side questions; deploy the current one to it and try again" : message);
+    if (sub === "model") {
+      const model = args.shift();
+      if (!model || args.length > 0) return fail(RUN_USAGE);
+      const run = await ask<Run>(target, "POST", "/api/runs/model", { id, model }).catch(requestFailure(target, failed));
+      console.log(`${run.id} ${run.agentSettings?.model ?? model}`);
+      return;
+    }
+    const modelFlag = args.includes("--model");
+    const model = take(args, "--model");
+    if (modelFlag && !model) return fail("--model needs a model's name");
+    const text = args.join(" ").trim();
+    if (!text) return fail("canopy run side needs the question to ask");
+    const run = await ask<Run>(target, "POST", "/api/runs/side", { id, text, ...(model ? { model } : {}) }).catch(requestFailure(target, failed));
+    console.log(`${run.id} ${run.status}`);
+    console.log(`a side question beside run ${id}, which works on; read it with canopy run show ${run.id}, go on with canopy run say ${run.id} <words…>`);
     return;
   }
 

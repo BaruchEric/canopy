@@ -6761,6 +6761,158 @@ button.rtab:hover .rtab-pen {
   gap: 2px 8px;
 }
 
+/* a side question beside a run (FR-077): a second column in the run's
+   console, with a head, a timeline, a box and a model of its own. It takes
+   the sheet's right half while the sheet has room (.beside) and lies over
+   the run when it has not (.over); SideQuestion.tsx picks by the sheet's
+   width. The run's own rows give way with a margin, which a flex item
+   measures against the sheet. The sheet's own padding would measure
+   against the page around it. */
+.sheet-back > .sheet:where(:has(> .side-q)) {
+  width: min(1240px, 100%);
+  height: min(84vh, 920px);
+}
+.sheet:has(> .side-q) > .sheet-body {
+  flex: 1 1 auto;
+}
+.sheet:has(> .side-q.beside) > :not(.side-q, .pop-grip, .pop-gear) {
+  margin-right: 50%;
+}
+.sheet:has(> .side-q.over) > :not(.side-q) {
+  visibility: hidden;
+}
+.side-q {
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: 2;
+  width: 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--float);
+  /* the sheet's own edge, so the thread reads as a sheet set against it */
+  border-left: 1px solid var(--float-edge);
+}
+.side-q.over {
+  width: 100%;
+  border-left: 0;
+}
+/* the head says what was asked, so the timeline does not say it first */
+.side-q .run-note {
+  display: none;
+}
+.side-q-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hair);
+}
+.side-q-what {
+  flex: 1;
+  min-width: 0;
+}
+.side-q-head > .close {
+  margin-left: 0;
+}
+.side-q-title,
+.side-q-from {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.side-q-title {
+  margin: 2px 0 0;
+  font-size: var(--t-xl);
+  font-weight: 600;
+}
+.side-q-from {
+  font-size: var(--t-sm);
+  color: var(--ink-dim);
+}
+.side-q-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--hair);
+}
+.side-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--t-sm);
+  color: var(--ink-dim);
+}
+.side-model > select {
+  width: auto;
+  max-width: 22ch;
+  padding-block: 2px;
+}
+/* over the run, the way back leads and the question has the full width */
+.side-q.over > .side-q-head {
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.side-q.over > .side-q-head > .close {
+  order: -2;
+  margin-right: auto;
+  padding-left: 0;
+}
+.side-q.over > .side-q-head > .status {
+  order: -1;
+}
+.side-q.over .side-q-what {
+  flex: 0 0 100%;
+}
+/* the line over a run's box while its text is a side question */
+.composer:has(> .side-hint) {
+  flex-wrap: wrap;
+}
+.side-hint {
+  flex: 0 0 100%;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: var(--t-sm);
+  color: var(--ink-dim);
+}
+.side-hint > span:first-child {
+  flex: 1 1 26ch;
+  min-width: 0;
+}
+.side-hint b {
+  font-weight: 600;
+  color: var(--ink);
+}
+.side-hint-err {
+  font-size: var(--t-sm);
+  color: var(--rust);
+}
+/* a side question's tab among a repo's runs, and the one on show beside
+   the run the console is on */
+.rtab-side {
+  flex: none;
+  padding: 0 4px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+}
+.rtab.beside {
+  color: var(--ink);
+  border-color: var(--hair);
+}
+@media (max-width: 760px) {
+  .sheet-back > .sheet:where(:has(> .side-q)) {
+    height: 92vh;
+  }
+}
+
 /* a coordinator's child: who started it, with a way back (FR-010) */
 .run-parent {
   display: flex;

@@ -11,7 +11,7 @@
  *  (`driver.ts`), and the server broadcasts the `Run` whole on every change.
  *  With a logger, each run keeps its wire on disk (`runlog.ts`). */
 
-import { branchPrompt, buildPrompt, busyWith, checkoutFull, sharingNote, type ActionSpec } from "./actions";
+import { ACTIONS, branchPrompt, buildPrompt, busyWith, checkoutFull, sharingNote, type ActionSpec } from "./actions";
 import { normalizeAgent } from "./agent";
 import { CapacityHeldError, type Decision, type Heard } from "./capacity";
 import { ClaudeDriver, cliArgs } from "./claudedrive";
@@ -19,12 +19,14 @@ import { isGoalAnchor } from "./coordinator";
 import type { RpcProc } from "./codexrpc";
 import { appServerArgs, CodexDriver, runsInside } from "./codexrun";
 import { answerMisfit, RunCtx, type DriveSpec, type RememberHook, type RunDriver } from "./driver";
+import { HARNESS, takesModel } from "./harness";
 import { rememberOffer } from "./offer";
 import { pathsInside, rememberedFor, ruleCovers, type RunScope } from "./remember";
 import type { RunLog, RunLogger } from "./runlog";
 import { cleanName, nameFromWords, runTitle, uniqueName } from "./runname";
 import { childRefusal, type McpLaunch } from "./runtools";
 import { EDIT_TOOLS } from "./shellwords";
+import { sideMessage, sideNote, sideRefusal } from "./sidequestion";
 import { holdQuiet, type QuietHold, type StageClient } from "./stageclient";
 import { noWrapUpNote, STALL_AFTER, stallStep, stallStopNote, WRAP_UP_NOTE, wrapUpMessage } from "./stall";
 import { StageAwayError } from "./stagewire";
@@ -44,6 +46,7 @@ import {
   type RunBranchState,
   type RunEquip,
   type RunFork,
+  type RunSide,
   type WorkspaceScope,
 } from "./types";
 
@@ -163,6 +166,14 @@ export interface StartExtras {
    *  transcript settles: a fork removes the transcript copy it resumed
    *  from. A throw is swallowed; the run has ended either way. */
   cleanup?: () => Promise<void>;
+  /** with `resume`: fork that session under a new id and leave it as it is,
+   *  for a side question (FR-077); a branch's own `fork` does the same */
+  fork?: true;
+  /** the run this chat is a side question of (FR-077), kept on the run */
+  sideOf?: RunSide;
+  /** a chat's whole first message, in place of the repo's framing around
+   *  its note: a side question's, whose session knows the repo already */
+  opening?: string;
 }
 
 export { claudeBinary, cliArgs } from "./claudedrive";
@@ -543,6 +554,7 @@ export class Runner {
     if (group) run.group = group;
     if (extras.priority) run.priority = extras.priority;
     if (extras.forkOf) run.forkOf = { ...extras.forkOf };
+    if (extras.sideOf) run.sideOf = { ...extras.sideOf };
     // a coordinator's goal, a stage and a flow's step go by what they are
     const named = !coordinate && !stage && !spec.flowStep;
     const given = named && extras.name ? cleanName(extras.name) : "";
@@ -565,7 +577,7 @@ export class Runner {
     const remember = stage || coordinate ? null : this.rememberHook(run, cwd);
     const resume = branch?.resume ?? extras.resume;
     const addDirs = [...(scope?.others ?? []), ...(extras.addDirs ?? [])];
-    const driveSpec = { ...spec, ...(addDirs.length > 0 ? { addDirs } : {}), ...(extras.pluginDirs?.length ? { pluginDirs: [...extras.pluginDirs] } : {}), ...(resume ? { resume, ...(branch?.fork ? { fork: true as const } : {}) } : {}), ...(extras.mcpConfig ? { mcpConfig: extras.mcpConfig } : {}), ...(extras.mcpConfig && extras.canopy ? { canopy: true as const } : {}), ...(extras.mcpServer ? { mcpServer: extras.mcpServer } : {}), ...(extras.settings ? { settings: extras.settings } : {}), ...(extras.servers?.length ? { servers: [...extras.servers] } : {}) };
+    const driveSpec = { ...spec, ...(addDirs.length > 0 ? { addDirs } : {}), ...(extras.pluginDirs?.length ? { pluginDirs: [...extras.pluginDirs] } : {}), ...(resume ? { resume, ...(branch?.fork || extras.fork ? { fork: true as const } : {}) } : {}), ...(extras.mcpConfig ? { mcpConfig: extras.mcpConfig } : {}), ...(extras.mcpConfig && extras.canopy ? { canopy: true as const } : {}), ...(extras.mcpServer ? { mcpServer: extras.mcpServer } : {}), ...(extras.settings ? { settings: extras.settings } : {}), ...(extras.servers?.length ? { servers: [...extras.servers] } : {}) };
     const env = runEnv(run, this.opts.backend, extras.env);
     // open can fail synchronously, before a context exists to receive its note.
     let ctx: RunCtx | undefined;
@@ -642,13 +654,15 @@ export class Runner {
     this.prune();
     if (scope?.skipped.length) live.ctx.step({ kind: "note", text: `left out of this run: ${scope.skipped.join("; ")}` });
     if (branch) live.ctx.step({ kind: "note", text: `on branch ${branch.branch.name} in ${branch.branch.dir}` });
+    if (extras.sideOf) live.ctx.step({ kind: "note", text: sideNote(extras.sideOf.title) });
     // said once the run has something to do: a chat opened with nothing to
-    // say shares nothing yet, and hears it with its first message (`say`)
-    if (run.status !== "idle") this.noteBeside(live);
+    // say shares nothing yet, and hears it with its first message (`say`).
+    // A side question's own note says what it sits beside.
+    if (run.status !== "idle" && !extras.sideOf) this.noteBeside(live);
     if (chat) {
       if (note.trim()) live.ctx.step({ kind: "user", text: note.trim() });
       this.hooks.onChange(run);
-      if (note.trim()) this.begin(live, this.firstMessage(live, note));
+      if (note.trim()) this.begin(live, extras.opening ?? this.firstMessage(live, note));
       return run;
     }
     this.hooks.onChange(run);
@@ -745,6 +759,59 @@ export class Runner {
     run.name = clean;
     run.nameBy = "hand";
     this.hooks.onChange(run);
+    return run;
+  }
+
+  /** A side question beside a live run (FR-077): a chat forked from the
+   *  run's session as it stands, in the folder the run works in, with
+   *  `text` as its first message. The run gets no message and no step, and
+   *  works on. Both harnesses fork a session mid-turn, so a turn in flight
+   *  is no refusal. The chat counts among the checkout's runs
+   *  (`checkoutRefusal`), wherever its parent works, and runs on the
+   *  parent's harness, whose session it is; `agent` gives the rest. */
+  side(id: string, text: string, agent: AgentSettings = DEFAULT_AGENT, by?: string): Run {
+    const live = this.live.get(id);
+    if (!live) throw new UnknownRunError(id);
+    const parent = live.ctx.run;
+    const question = text.trim();
+    if (!question) throw new SteerError("write the question first");
+    const refused =
+      sideRefusal(parent) ??
+      ((this.opts.stage?.(live.repo) ?? false) ? "an incubator stage takes no side question" : null) ??
+      this.checkoutRefusal(live.repo);
+    if (refused) throw new SteerError(refused);
+    // the folders the parent's session reads beside its own: a workspace's
+    // other members and the ones it was started with
+    const addDirs = [...(live.scope?.others ?? []), ...(parent.addDirs ?? [])];
+    return this.start(live.repo, "chat", ACTIONS.chat, question, { ...agent, harness: parent.harness }, by, undefined, undefined, {
+      ...(parent.session ? { resume: parent.session } : {}),
+      fork: true,
+      sideOf: { run: parent.id, title: runTitle(parent) },
+      opening: sideMessage(question),
+      // a branch run's session is filed under its worktree, so its side
+      // question starts there too
+      ...(live.ctx.cwd !== live.repo.path ? { cwd: live.ctx.cwd } : {}),
+      ...(addDirs.length ? { addDirs } : {}),
+    });
+  }
+
+  /** Another model for a side question's later messages (FR-077), between
+   *  its turns: the harness takes it on the session it has, and the next
+   *  reply comes from it. Only a side question changes its model after it
+   *  has started; any other run keeps the one it was started on. */
+  async remodel(id: string, model: string): Promise<Run> {
+    const live = this.live.get(id);
+    if (!live) throw new UnknownRunError(id);
+    const run = live.ctx.run;
+    if (!run.sideOf) throw new SteerError("only a side question changes its model once it has started");
+    if (!isRunActive(run)) throw new SteerError("the run has ended");
+    if (!takesModel(run.harness, model)) throw new SteerError(`${HARNESS[run.harness].label} takes no model named ${model}`);
+    if (run.status !== "idle") throw new SteerError("it is mid-reply: pick the model once it has answered");
+    if (run.agentSettings?.model === model) return run;
+    const why = live.driver.model ? await live.driver.model(model) : `${live.driver.label} changes no model mid-conversation`;
+    if (why) throw new SteerError(`the model stays as it was: ${why}`);
+    if (run.agentSettings) run.agentSettings = { ...run.agentSettings, model };
+    live.ctx.note(`model: ${model}, from the next message on`);
     return run;
   }
 

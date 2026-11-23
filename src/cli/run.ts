@@ -171,7 +171,7 @@ export async function dispatchRunCommand(argv: string[], deps: RunCommandDeps): 
   const args = [...argv];
   const first = firstWord(args);
   if (first === "pickup") return pickupCommand(args, deps);
-  if (first === undefined || first === "show" || first === "export" || first === "fork" || first === "prune" || first === "say" || first === "interrupt" || first === "ls" || first === "name" || first === "stop") {
+  if (first === undefined || first === "show" || first === "export" || first === "fork" || first === "prune" || first === "say" || first === "interrupt" || first === "ls" || first === "name" || first === "stop" || first === "side" || first === "model") {
     if (deps.transcripts) return deps.transcripts(args, { fail: deps.fail });
     return deps.fail(RUN_USAGE);
   }
