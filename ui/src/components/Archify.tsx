@@ -19,10 +19,11 @@ const RUN_EVERY = 8000;
  *  and open its source links in a tab. Never `allow-same-origin`: the page
  *  runs at an opaque origin, so it cannot reach canopy's storage, cookies
  *  or API, whoever wrote it. */
-const FRAME_SANDBOX = "allow-scripts allow-downloads allow-popups allow-popups-to-escape-sandbox";
+export const FRAME_SANDBOX = "allow-scripts allow-downloads allow-popups allow-popups-to-escape-sandbox";
 
-/** A removal asked for twice: the first press arms the button for a few seconds. */
-function RemoveButton({ busy, onRemove }: { busy: boolean; onRemove: () => void }) {
+/** A removal asked for twice: the first press arms the button for a few
+ *  seconds. `what` names the folder that goes, for the button's titles. */
+export function RemoveButton({ busy, onRemove, what = "the diagram's folder" }: { busy: boolean; onRemove: () => void; what?: string }) {
   const [sure, setSure] = useState(false);
   useEffect(() => {
     if (!sure) return;
@@ -34,7 +35,7 @@ function RemoveButton({ busy, onRemove }: { busy: boolean; onRemove: () => void 
       type="button"
       className={sure ? "mini confirm" : "mini"}
       disabled={busy}
-      title={sure ? "Press again to remove the diagram's folder for good" : "Remove the diagram's folder under .archify"}
+      title={sure ? `Press again to remove ${what} for good` : `Remove ${what} under .archify`}
       onClick={() => (sure ? onRemove() : setSure(true))}
     >
       {sure ? "remove for good" : "remove"}
@@ -44,7 +45,7 @@ function RemoveButton({ busy, onRemove }: { busy: boolean; onRemove: () => void 
 
 /** Saves a page as a file of its own: a download, never a navigation, so
  *  its scripts do not run at canopy's origin. */
-function savePage(html: string, file: string): void {
+export function savePage(html: string, file: string): void {
   const href = URL.createObjectURL(new Blob([html], { type: "text/html" }));
   const a = document.createElement("a");
   a.href = href;

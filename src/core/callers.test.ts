@@ -107,6 +107,13 @@ describe("needs", () => {
     expect(needs("GET", "/api/repos/archify")).toBe("operate");
   });
 
+  test("a diagnosis's start, its removal and its read are a hand's (FR-075)", () => {
+    // run starts a process on the backend, remove deletes a folder
+    expect(needs("POST", "/api/repos/diagnosis")).toBe("operate");
+    // the counts, the findings and the page are read out of the checkout
+    expect(needs("GET", "/api/repos/diagnosis")).toBe("operate");
+  });
+
   test("a graph's start, its viewer, its prepare and its read are a hand's (FR-072)", () => {
     // make starts a Claude run, open starts a viewer, prepare installs the plugin
     expect(needs("POST", "/api/repos/understand")).toBe("operate");

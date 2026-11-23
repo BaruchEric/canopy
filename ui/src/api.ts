@@ -5,6 +5,7 @@ import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } fro
 import type { CostReport } from "../../src/core/costs";
 import type { FloorplanInfo } from "../../src/core/floorplan";
 import type { ArchifyInfo, ArchifyPick } from "../../src/core/archify";
+import type { DiagnosisInfo, DiagnosisPick } from "../../src/core/diagnosis";
 import { isWait, type UnderstandInfo, type UnderstandWait } from "../../src/core/understand";
 import type { CapacitySettings } from "../../src/core/capacity";
 import type { PushEntryView, PushKeyInfo, PushListInfo, PushTestResult } from "../../src/core/push";
@@ -1526,6 +1527,19 @@ export const api = {
   /** removes a diagram's folder */
   archifyRemove: (id: string, diagram: string) =>
     repoReq<{ removed: string }>(id, (p) => `/api/repos/archify?${rq(p)}`, { method: "POST", body: JSON.stringify({ act: "remove", diagram }) }),
+  /** a checkout's Architecture Diagnosis (FR-075): the analysis on disk,
+   *  the one going and why the last failed */
+  diagnosis: (id: string) => repoReq<DiagnosisInfo>(id, (p) => `/api/repos/diagnosis?${rq(p)}`),
+  /** the analysis's page as text, for a sandboxed frame's srcdoc */
+  diagnosisPage: (id: string) => {
+    const [b, plain] = on(id);
+    return blobReq(b, `/api/repos/diagnosis?${rq(plain, { page: "1" })}`).then((blob) => blob.text());
+  },
+  /** starts an analysis in the background; the read says when it ends */
+  diagnosisRun: (id: string, language: DiagnosisPick) =>
+    repoReq<{ running: number }>(id, (p) => `/api/repos/diagnosis?${rq(p)}`, { method: "POST", body: JSON.stringify({ act: "run", language }) }),
+  /** removes the analysis's folder */
+  diagnosisRemove: (id: string) => repoReq<{ removed: boolean }>(id, (p) => `/api/repos/diagnosis?${rq(p)}`, { method: "POST", body: JSON.stringify({ act: "remove" }) }),
   /** a checkout's knowledge graph (FR-072): the graph file, the commits
    *  since, the prepared plugin, its viewer and the run making it, that
    *  run's id under the backend's name */

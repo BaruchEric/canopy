@@ -4,6 +4,8 @@ import { FLOORPLAN_ACTION, floorplanSpec, isUpdate } from "../core/floorplan";
 import { FLOORPLAN_PLUGIN, FLOORPLAN_SKILL, FloorplanError, floorplanEnv, floorplanInfo, openFloorplan, readFloorplanStatus, realRoot, stopFloorplan } from "./floorplan";
 import { ARCHIFY_ACTION, archifyFolder, archifySpec, isArchifyPick, type ArchifyStart } from "../core/archify";
 import { ARCHIFY_PLUGIN, ARCHIFY_SKILL, ArchifyError, archifyEnv, diagramPage, hasOrigin, keepOutOfGit, listDiagrams, removeDiagram } from "./archify";
+import { DIAGNOSIS_LANGUAGES, DIAGNOSIS_PAGE, isDiagnosisPick } from "../core/diagnosis";
+import { DiagnosisError, diagnosisInfo, diagnosisPage, removeDiagnosis, startDiagnosis } from "./diagnosis";
 import { UNDERSTAND_ACTION, graphRun, understandSpec, type UnderstandWait } from "../core/understand";
 import * as understand from "./understand";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
@@ -1438,6 +1440,50 @@ async function archifyRoute(state: ServerState, repo: Repo, method: string, req:
     return json(run, 201);
   } catch (err) {
     if (err instanceof ArchifyError) throw new HttpError(400, err.message);
+    throw err;
+  }
+}
+
+/** A checkout's Architecture Diagnosis (FR-075). GET reads it: the analysis
+ *  on disk, the one going and why the last failed; GET `?page` answers the
+ *  analysis's page as text, for the page to frame in a sandboxed iframe.
+ *  POST `{act}` starts an analysis in the background (`run`, with an
+ *  optional `language`, answering 202) or removes the folder (`remove`).
+ *  No model runs: the server calls Archify's `code-analysis prepare`
+ *  itself. The analysis reads the checkout, so a repo on another host and
+ *  an incubator seed are refused, as for the map. */
+async function diagnosisRoute(state: ServerState, repo: Repo, method: string, req: Request): Promise<Response> {
+  if (repo.host) throw new HttpError(400, `the analysis reads the checkout on its own machine; ${repo.name} is on ${repo.host}`);
+  if (isSeedPath(state.root, repo.path)) throw new HttpError(400, "a seed's files may live with its stage, where canopy cannot analyze them");
+  try {
+    if (method === "GET") {
+      if (!new URL(req.url).searchParams.has("page")) return json(await diagnosisInfo(repo.path));
+      const page = diagnosisPage(repo.path);
+      return new Response(Bun.file(page.path), {
+        headers: {
+          // text, not a page, as for a diagram: the browser frames it
+          // through srcdoc in a sandbox, never at canopy's origin
+          "content-type": "text/plain; charset=utf-8",
+          "content-length": String(page.bytes),
+          "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(DIAGNOSIS_PAGE)}`,
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "sandbox; default-src 'none'",
+        },
+      });
+    }
+    if (method !== "POST") throw new HttpError(405, "GET or POST");
+    const b = await objectBody(req);
+    if (b.act === "remove") {
+      await removeDiagnosis(repo.path);
+      return json({ removed: true });
+    }
+    if (b.act !== "run") throw new HttpError(400, "act is run or remove");
+    const language = b.language ?? "auto";
+    if (!isDiagnosisPick(language)) throw new HttpError(400, `language is auto or one of ${DIAGNOSIS_LANGUAGES.join(", ")}`);
+    return json({ running: await startDiagnosis(repo.path, language) }, 202);
+  } catch (err) {
+    if (err instanceof DiagnosisError) throw new HttpError(err.busy ? 409 : 400, err.message);
     throw err;
   }
 }
@@ -6139,6 +6185,7 @@ async function handleApi(
 
     if (action === "floorplan") return floorplanRoute(state, repo, method, req);
     if (action === "archify") return archifyRoute(state, repo, method, req);
+    if (action === "diagnosis") return diagnosisRoute(state, repo, method, req);
     if (action === "understand") return understandRoute(state, repo, method, req);
     if (method === "GET" && action === "log") {
       return json(await getLog(repo.path));

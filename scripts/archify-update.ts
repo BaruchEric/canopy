@@ -289,7 +289,11 @@ function main(args: Args): number {
         failed = true;
       }
       say("running canopy's Archify tests…");
-      const t = run(["bun", "test", "src/core/archify.test.ts", "src/core/archifyvendor.test.ts", "src/server/archify.test.ts", "src/server/archify-route.test.ts"], args.root);
+      // the diagnosis tests too: they run the new release's code-analysis prepare (FR-075)
+      const t = run(
+        ["bun", "test", "src/core/archify.test.ts", "src/core/archifyvendor.test.ts", "src/server/archify.test.ts", "src/server/archify-route.test.ts", "src/core/diagnosis.test.ts", "src/server/diagnosis.test.ts", "src/server/diagnosis-route.test.ts"],
+        args.root,
+      );
       const tail = `${t.out}\n${t.err}`.trim().split("\n").filter((l) => /^\s*\d+ (pass|fail)$|^\(fail\)/.test(l));
       for (const l of tail) say(`  ${l.trim()}`);
       if (t.code !== 0) failed = true;

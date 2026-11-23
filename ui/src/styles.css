@@ -11701,9 +11701,10 @@ body:has(.focus-grip.se.dragging) {
   height: auto;
   max-height: none;
 }
-/* the switch between Floorplan's map and Archify's diagrams */
+/* the switch between the map's kinds; on a narrow panel it wraps */
 .map-kinds {
   align-self: flex-start;
+  flex-wrap: wrap;
   font-size: var(--t-md);
 }
 /* the knowledge graph's notice while a backend prepares Understand-Anything
@@ -11774,6 +11775,55 @@ body:has(.focus-grip.se.dragging) {
   font-size: var(--t-md);
 }
 .map.section-full .arch-list {
+  flex: 0 0 auto;
+}
+
+/* ---------- the map's Architecture Diagnosis: Archify's Code Analysis (FR-075) ---------- */
+
+.diag-going {
+  color: var(--ink);
+}
+.diag-leads {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.diag-lead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--t-md);
+  color: var(--ink);
+}
+.diag-sev {
+  flex: 0 0 auto;
+  min-width: 4.5em;
+  font-size: var(--t-sm);
+  color: var(--ink-dim);
+}
+.diag-sev.diag-error {
+  color: var(--rust);
+}
+/* two lines at most: the analysis's own messages run to a paragraph, and
+   the page in the frame below holds each in full */
+.diag-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.diag-where {
+  margin-right: 8px;
+  font-size: var(--t-sm);
+  color: var(--ink-dim);
+}
+.map.section-full .diag-leads {
   flex: 0 0 auto;
 }
 
