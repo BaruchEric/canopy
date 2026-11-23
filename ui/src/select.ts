@@ -1,4 +1,5 @@
 import type { Repo } from "../../src/core/types";
+import type { BoardState } from "./boardstate";
 import { matchesFilter, REPO_FILTERS, type FilterContext, type RepoFilter } from "./filters";
 import { pickable } from "./flows";
 import { groupRepos, sectionKey } from "./grouping";
@@ -64,8 +65,9 @@ export function boardOrder(
   collapsed: readonly string[] = [],
   at?: (r: Repo) => number,
   fav?: (r: Repo) => boolean,
+  state?: (r: Repo) => BoardState,
 ): string[] {
-  return groupRepos(repos, sort, undefined, at, fav)
+  return groupRepos(repos, sort, undefined, at, fav, state)
     .filter((g) => !collapsed.includes(sectionKey(sort, g.key)))
     .flatMap((g) => g.repos.filter(pickable).map((r) => r.id));
 }

@@ -1,4 +1,5 @@
 import type { Repo } from "../../src/core/types";
+import type { BoardState } from "./boardstate";
 import type { SortMode } from "./settings";
 import { identities, stateOf, userKey } from "./util";
 
@@ -100,6 +101,19 @@ const FAVORITES: readonly Bucket[] = [
   { key: "rest", label: "everything else" },
 ];
 
+/** What goes on at each card, the most pressing first (boardstate.ts); a
+ *  bucket's key is its `BoardState`. */
+const STATE: readonly (Bucket & { key: BoardState })[] = [
+  { key: "needs", label: "needs you", hint: "An agent, a run or a workflow here waits on your answer" },
+  { key: "working", label: "working", hint: "An agent, a run or a workflow here is at work" },
+  {
+    key: "unread",
+    label: "unread",
+    hint: "Something finished here and still sits on its card: a run or a workflow not dismissed, a chat Claude answered in, or an agent or a task that ended in the last half hour",
+  },
+  { key: "idle", label: "idle", hint: "Nothing going and nothing new" },
+];
+
 /** Age buckets for the last change, commit or edit; the last one holds what
  *  has neither. */
 const RECENT: readonly (Bucket & { within?: number })[] = [
@@ -143,7 +157,9 @@ export function foldGroups(collapsed: string[], keys: readonly string[], fold: b
  * other. `now` is unix seconds; it only matters for "recent". `at` is when
  * a repo changed, for "recent" and the newest-first order: a card with
  * several checkouts passes its newest one's. `fav` says whether a repo is
- * starred, for "favorites": a card passes whether any checkout is.
+ * starred, for "favorites": a card passes whether any checkout is. `state`
+ * says what goes on at a repo's card, for "state" (the store's
+ * `boardStates`); without it every card is idle.
  */
 export function groupRepos(
   repos: Repo[],
@@ -151,6 +167,7 @@ export function groupRepos(
   now: number = Date.now() / 1000,
   at: (r: Repo) => number = changedAt,
   fav: (r: Repo) => boolean = (r) => r.favorite === true,
+  state: (r: Repo) => BoardState = () => "idle",
 ): RepoGroup[] {
   const byChange = byChangeAt(at);
   switch (mode) {
@@ -168,6 +185,8 @@ export function groupRepos(
       return bucket(repos, RECENT, (r) => ageKey(at(r), now), byChange);
     case "favorites":
       return bucket(repos, FAVORITES, (r) => (fav(r) ? "starred" : "rest"), byChange);
+    case "state":
+      return bucket(repos, STATE, state, byChange);
     case "name":
       return bucket(
         repos,

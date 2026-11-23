@@ -920,6 +920,95 @@ body.resizing-nesw iframe {
   margin-right: 8px;
   background: var(--hair2);
 }
+/* the quiet bar (FR-079, the intermediate level): one row, two on a phone.
+   A chip with nothing to say is put away, still mounted so its key, its
+   popover and the bar's menu reach it, and it shows again for as long as its
+   popover is open. A run of chips with none speaking takes no room, and the
+   run after it draws no hairline. */
+.tb-tuck {
+  display: contents;
+}
+.tb-tuck.quiet {
+  display: none;
+}
+.tb-tuck.quiet:has([aria-expanded="true"]) {
+  display: contents;
+}
+.tb-cluster.tb-none {
+  display: none;
+}
+.tb-cluster.tb-none:has(.tb-tuck [aria-expanded="true"]) {
+  display: inline-flex;
+}
+.tb-cluster.tb-none:not(:has(.tb-tuck [aria-expanded="true"])) + .tb-cluster::before {
+  content: none;
+}
+/* its menu: every chip on one line, the name and then its state, with a
+   word after the name while the chip is on the bar */
+.bar-more .sort-list button {
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.bar-more .sort-name {
+  flex: none;
+  gap: 8px;
+}
+.bar-more .sort-what {
+  text-align: right;
+}
+.bar-more-on {
+  font-size: var(--t-sm);
+  color: var(--moss);
+}
+/* a chip with something to say and no room on the row: its word in the
+   menu, and their count on the menu's button */
+.bar-more-on.short,
+.bar-more-n {
+  color: var(--lichen);
+}
+.bar-more-n {
+  font-variant-numeric: tabular-nums;
+}
+@media (min-width: 761px) {
+  /* as tall as the room under the bar, and it scrolls past that */
+  .bar-more .pick-pop {
+    max-height: calc(100dvh - var(--pop-top, 56px) - 12px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+@media (max-width: 1100px) {
+  /* a tablet's row holds the views, the filter box and the buttons with
+     little to spare for chips: the menu is its dots, and the runs stand
+     closer with no hairline between them */
+  .bar-more-word {
+    display: none;
+  }
+  .topbar.calm > .tb-line,
+  .topbar.calm .topbar-group {
+    column-gap: 6px;
+  }
+  .topbar.calm .topbar-group > .tb-cluster::before {
+    content: none;
+  }
+}
+@media (max-width: 760px) {
+  /* a phone's second row: the filter box keeps a width worth typing in and
+     the row scrolls before the box goes under it, up to the menu, which
+     holds its place at the row's end */
+  .topbar.phone.calm .tb-pinned > .tb-scroll {
+    flex: 1 1 0;
+    min-width: 0;
+    margin-right: 0;
+    padding-right: 0;
+  }
+  .topbar.phone.calm .tb-scroll > .search {
+    flex: 1 1 120px;
+    min-width: 120px;
+  }
+}
 /* one word that opens the rest, each with what it does: the view, the
    workspace, the grouping. The caret says it opens; the menu hangs off the
    word's left edge, since these sit at the left of the bar. */
@@ -6505,6 +6594,130 @@ button.dl-gut.has {
   color: var(--moss-deep);
   line-height: 17px;
 }
+/* the start box (FR-079, the intermediate level): the pre-flight of one
+   plain run or chat as one box. The words in the middle, where the run works
+   along the top edge, what it starts with and send along the bottom edge. A
+   chip that opens a menu has a rim; one that cannot be changed is plain text. */
+.sheet-body.start {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.start-gear {
+  display: contents;
+}
+.start-box {
+  display: flex;
+  flex-direction: column;
+  background: var(--bark0);
+  border: 1px solid var(--hair2);
+  border-radius: 10px;
+}
+.start-box:has(.start-words:focus-visible) {
+  border-color: var(--sky);
+  box-shadow: 0 0 0 1px var(--sky);
+}
+.start-edge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px 10px 0;
+}
+.start-edge.start-foot {
+  flex-wrap: nowrap;
+  padding: 0 8px 8px 10px;
+}
+.start-with {
+  display: flex;
+  min-width: 0;
+}
+.start-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: var(--t-sm);
+  line-height: 20px;
+  color: var(--ink-dim);
+}
+.start-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.start-pick {
+  padding: 0 6px 0 8px;
+  border: 1px solid var(--hair2);
+  border-radius: 999px;
+  color: var(--ink);
+}
+.start-pick:hover,
+.start-pick.on {
+  background: var(--wash);
+}
+.start-pick .pick-caret {
+  flex: none;
+  color: var(--ink-faint);
+}
+.start-words {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  resize: none;
+}
+.start-words:focus-visible {
+  outline: none;
+}
+.start-words::placeholder {
+  color: var(--ink-faint);
+}
+.start-more {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: var(--r);
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.start-more:hover {
+  color: var(--ink);
+  background: var(--wash);
+}
+.start-send {
+  flex: none;
+}
+.start-note,
+.start-held {
+  margin: 0;
+}
+.start-menu .menu-item {
+  align-items: flex-start;
+}
+.start-menu .gear-mark {
+  line-height: 20px;
+}
+.start-opt {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.start-what {
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+@media (pointer: coarse) {
+  /* a finger's worth of chip and of "more options" */
+  .start-pick,
+  .start-more {
+    min-height: 32px;
+    padding-inline: 10px;
+  }
+}
 .run-branch {
   display: flex;
   align-items: center;
@@ -8431,6 +8644,68 @@ a.sweep-title:hover {
 .thinking .step-text {
   font-size: var(--t-sm);
   color: var(--ink-faint);
+}
+/* a turn's commands folded into one line (FR-079, the intermediate level):
+   a quiet line with a caret, and after it the step in flight while the turn
+   is live. Open, the steps follow the line as they are. */
+.k-fold .node {
+  width: 5px;
+  height: 5px;
+  left: -15px;
+  top: 11px;
+  background: var(--hair2);
+}
+.k-fold.live .node {
+  background: var(--sky);
+}
+.fold-line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: -6px;
+  padding: 2px 8px 2px 6px;
+  border-radius: var(--r);
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+  text-align: left;
+}
+.fold-line::before {
+  content: "▸";
+  flex: none;
+}
+.fold-line[aria-expanded="true"]::before {
+  content: "▾";
+}
+.fold-line:hover,
+.fold-line:focus-visible {
+  color: var(--ink);
+  background: var(--wash);
+}
+.fold-words {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.k-fold.live .fold-words {
+  color: var(--sky);
+}
+.fold-flight {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-sm);
+  color: var(--ink-dim);
+}
+@media (pointer: coarse) {
+  /* a finger needs more than a line of small type to land on */
+  .fold-line {
+    padding-block: 8px;
+  }
+  .k-fold .node {
+    top: 17px;
+  }
 }
 
 /* a message the user sent in a chat: a filled node and a "you" eyebrow, so

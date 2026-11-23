@@ -16,6 +16,11 @@
 // 1440 and 390px on a goal (its @ menu, a file's chip) and on a project (the
 // words and chip kept, and at 1440 start project sending the form), opened
 // from its address, the command line's new and the top bar's + new.
+// It also drives the level (FR-079): at intermediate the quiet top bar in
+// one row with its menu, a turn's commands folded in a run's timeline and
+// the start box, which opens on a new worktree where the checkout is in
+// use; at advanced the two rows, every step and the pre-flight;
+// the board grouped by state at both; and the bar's rows on a phone at each.
 // check.sh starts a scratch server and runs this; it copies the file into
 // the browser folder first, where "playwright" resolves.
 //   check.ts <base url> <screenshot folder>
@@ -216,6 +221,197 @@ try {
     check(small.length === 0, `with a finger for a pointer no field is under 16px, where iOS zooms the page${small.length ? `: ${[...new Set(small)].join(", ")}` : ""}`);
     await page.screenshot({ path: `${shots}/phone-panel.png` });
     await page.close();
+  }
+
+  {
+    // The level (FR-079), which a new browser has at intermediate: the quiet
+    // top bar in one row with its menu, a turn's commands folded in a run's
+    // timeline, and one start box in place of the pre-flight. Then the same
+    // page at advanced: every chip in two rows, every step, the pre-flight's
+    // dialog. The board is grouped by state at both. The run is made up, as
+    // the runs pill's are, and the tree says the backend has claude: a
+    // scratch server has none, which switches a card's jobs off.
+    const probe = await fresh(undefined, true);
+    const tree = (await (await probe.request.get(`${base}/api/tree`)).json()) as { repos: { id: string; name: string }[] };
+    await probe.close();
+    const now = Date.now();
+    const tool = (id: string, ago: number, title: string) => ({ id, at: now - ago, kind: "tool", tool: { name: "Bash", title, status: "ok", output: "ok" } });
+    const runs = [
+      {
+        id: "level-chat",
+        repoId: tree.repos.find((r) => r.name === "demo")?.id ?? "demo",
+        action: "chat",
+        verb: "chat",
+        progress: "replying",
+        expectsChange: false,
+        chat: true,
+        harness: "claude",
+        note: "",
+        status: "idle",
+        startedAt: now - 120_000,
+        prompt: null,
+        steps: [
+          { id: "l1", at: now - 100_000, kind: "user", text: "Does the build pass?" },
+          tool("l2", 98_000, "git status"),
+          tool("l3", 90_000, "bun run build"),
+          tool("l4", 62_000, "ls dist/web"),
+          { id: "l5", at: now - 58_000, kind: "text", text: "The build passes." },
+        ],
+      },
+    ];
+    /** the lines the top bar's visible controls sit on: two controls whose
+     *  middles are within 12px of each other share a line, whatever the
+     *  fonts of the machine do to a pixel */
+    const barRows = (page: Page) =>
+      page.evaluate(() => {
+        const mids: number[] = [];
+        for (const el of document.querySelectorAll<HTMLElement>(".topbar button, .topbar a, .topbar input")) {
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          const mid = r.top + r.height / 2;
+          if (!mids.some((m) => Math.abs(m - mid) < 12)) mids.push(mid);
+        }
+        return mids.length;
+      });
+    const at = async (level: "intermediate" | "advanced", phone = false) => {
+      const page = await fresh(undefined, true, phone);
+      await page.addInitScript((saved) => localStorage.setItem("canopy.settings", JSON.stringify(saved)), { level, onboarded: true, sort: "state" });
+      await page.route("**/api/runs", (r) => (r.request().method() === "GET" ? r.fulfill({ json: runs }) : r.continue()));
+      await page.route("**/api/tree", async (r) => {
+        if (r.request().method() !== "GET") return r.continue();
+        const res = await r.fetch();
+        const body = (await res.json()) as { backend?: Record<string, unknown> };
+        return r.fulfill({ response: res, json: { ...body, backend: { ...body.backend, harnesses: ["claude"] } } });
+      });
+      await page.goto(`${base}/`, { waitUntil: "load" });
+      await page.waitForSelector(".card", { timeout: 20_000 });
+      await page.waitForTimeout(500);
+      return page;
+    };
+    const lines = (page: Page) =>
+      page.evaluate(() => [...document.querySelectorAll(".sheet-back .steps > li")].map((li) => [...li.classList].find((c) => c.startsWith("k-")) ?? ""));
+
+    for (const level of ["intermediate", "advanced"] as const) {
+      const quiet = level === "intermediate";
+      const page = await at(level);
+      const groups = await page.evaluate(() =>
+        [...document.querySelectorAll(".grid-group")].map((g) => `${g.querySelector(".head-toggle")?.textContent?.trim().match(/^(needs you|working|unread|idle)/)?.[0] ?? "?"}: ${[...g.querySelectorAll(".card-name")].map((n) => n.textContent).join(",")}`),
+      );
+      check(groups.join(" | ") === "unread: demo | idle: twin", `at ${level} the board grouped by state reads "${groups.join(" | ")}"`);
+
+      const rows = await barRows(page);
+      const more = page.locator(".bar-more-btn");
+      if (quiet) {
+        check(rows === 1 && (await more.count()) === 1, `at intermediate the top bar is one row with its menu at its end (${rows} rows)`);
+        await more.click();
+        const picks = page.locator('.bar-more [role="radio"]');
+        await picks.first().waitFor({ timeout: 4000 }).catch(() => undefined);
+        const names = (await picks.allInnerTexts()).map((t) => t.split("\n")[0]?.trim() ?? "");
+        check(names.length >= 10 && names.some((n) => n.startsWith("live runs")) && names.includes("select repos"), `the bar's menu lists each chip by name: ${names.length}, among them "${names.slice(0, 3).join('", "')}"`);
+        await page.waitForTimeout(300);
+        await page.screenshot({ path: `${shots}/level-bar-menu.png` });
+        // a pick does what the chip does, and a chip with something to say is on the bar
+        await picks.filter({ hasText: "select repos" }).click();
+        await page.waitForTimeout(400);
+        const shown = await page.evaluate(() => document.querySelector('[data-tuck="select"]')?.classList.contains("quiet") === false);
+        // x is the chip's own key, and it still works with the chip put away
+        await page.keyboard.press("x");
+        await page.waitForTimeout(400);
+        const away = await page.evaluate(() => document.querySelector('[data-tuck="select"]')?.classList.contains("quiet") === true);
+        check(shown && away, `a pick of select repos starts the picking and brings its chip to the bar (${shown}); x ends it and the chip leaves (${away})`);
+        // a list opened from the menu by the keys closes on Escape, its chip
+        // leaves the bar, and the focus goes back to the menu's button
+        await more.focus();
+        await page.keyboard.press("Enter");
+        const grouping = page.locator('.bar-more [role="radio"]', { hasText: "grouping" }).first();
+        await grouping.waitFor({ timeout: 4000 }).catch(() => undefined);
+        await grouping.focus();
+        await page.keyboard.press("Enter");
+        const opened = await page.waitForSelector('[data-tuck="sort"] [aria-expanded="true"]', { timeout: 4000 }).then(() => true, () => false);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(400);
+        const back = await page.evaluate(() => document.activeElement?.classList.contains("bar-more-btn") === true);
+        check(opened && back, `the grouping opened from the menu by the keys (${opened}) hands the focus back to the menu's button on Escape (${back})`);
+      } else {
+        check(rows === 2 && (await more.count()) === 0, `at advanced the top bar keeps its two rows and has no menu of the rest (${rows} rows)`);
+      }
+      await page.screenshot({ path: `${shots}/level-${level}.png` });
+
+      // the timeline: one turn of three commands between a message and the reply
+      await page.locator(".card", { has: page.locator(".card-name", { hasText: /^demo$/ }) }).first().locator(".card-more button").first().click();
+      await page.locator('[role="menuitem"].live').first().click();
+      await page.waitForSelector(".sheet-back .steps", { timeout: 5000 });
+      const got = await lines(page);
+      if (quiet) {
+        const fold = page.locator(".sheet-back .fold-line");
+        const says = (await fold.first().innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+        await fold.first().click();
+        const opened = await lines(page);
+        await fold.first().click();
+        const folded = await lines(page);
+        check(
+          got.join(" ") === "k-user k-fold k-text" && says === "worked for 40s · 3 steps" && opened.filter((k) => k === "k-tool").length === 3 && folded.join(" ") === got.join(" "),
+          `at intermediate a turn's commands fold into one line, "${says}", that a click opens and a second folds (${got.join(" ")}; open: ${opened.join(" ")})`,
+        );
+      } else {
+        check(got.join(" ") === "k-user k-tool k-tool k-tool k-text", `at advanced the timeline shows every step (${got.join(" ")})`);
+      }
+      await page.screenshot({ path: `${shots}/level-${level}-timeline.png` });
+      await page.keyboard.press("Escape");
+      await page.waitForSelector(".sheet-back", { state: "detached", timeout: 5000 }).catch(() => undefined);
+
+      // the start: ask on twin
+      const card = page.locator(".card", { has: page.locator(".card-name", { hasText: /^twin$/ }) }).first();
+      await card.locator(".card-more button").first().click();
+      await page.locator('[role="menuitem"]', { hasText: "ask the agent" }).first().click();
+      await page.waitForSelector(".sheet-back .sheet", { timeout: 5000 });
+      await page.waitForTimeout(400);
+      if (quiet) {
+        const chips = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".start-box .start-chip")].map((c) => `${c.dataset["chip"]}${c.tagName === "BUTTON" ? " (menu)" : ""}: ${c.textContent?.trim()}`));
+        const focused = await page.evaluate(() => document.activeElement?.classList.contains("start-words") === true);
+        check(
+          chips.length === 4 && chips[0] === "repo: twin" && chips[1] === "branch (menu): main" && (chips[2]?.startsWith("backend: ") ?? false) && (chips[3]?.startsWith("agent") ?? false) && focused,
+          `at intermediate a start is one box with its chips and the focus in its words: ${chips.join(" | ")}`,
+        );
+        await page.locator('.start-pick[data-chip="branch"]').click();
+        await page.locator(".start-menu [role=menuitemradio]").nth(1).click();
+        const branch = (await page.locator('.start-chip[data-chip="branch"]').innerText()).trim();
+        await page.locator(".start-words").fill("count the parts");
+        await page.waitForTimeout(200);
+        await page.screenshot({ path: `${shots}/level-${level}-start.png` });
+        await page.locator(".start-more").click();
+        const kept = await page.evaluate(() => `${document.querySelector<HTMLTextAreaElement>(".sheet-body.plan .plan-note")?.value} / ${document.querySelector<HTMLInputElement>(".plan-branch input[type=checkbox]")?.checked}`);
+        check(branch === "new worktree" && kept === "count the parts / true", `the branch chip's menu picks a new worktree ("${branch}"), and more options opens the pre-flight with the words and the pick kept (${kept})`);
+        // a checkout in use (FR-080): demo holds the chat, so a start there
+        // opens on a worktree of its own and the box says why
+        await page.keyboard.press("Escape");
+        await page.waitForSelector(".sheet-back", { state: "detached", timeout: 5000 }).catch(() => undefined);
+        const busy = page.locator(".card", { has: page.locator(".card-name", { hasText: /^demo$/ }) }).first();
+        await busy.locator(".card-more button").first().click();
+        await page.locator('[role="menuitem"]', { hasText: "ask the agent" }).first().click();
+        await page.waitForSelector(".start-box", { timeout: 5000 });
+        const own = (await page.locator('.start-chip[data-chip="branch"]').innerText()).trim();
+        const why = await page.locator(".sheet .start-note").allInnerTexts();
+        check(own === "new worktree" && why.length === 1 && (why[0]?.startsWith("This checkout is in use") ?? false), `on a checkout in use the box opens on a new worktree and says why ("${own}": ${why.join(" | ")})`);
+        await page.screenshot({ path: `${shots}/level-${level}-start-busy.png` });
+      } else {
+        const plan = await page.evaluate(() => `${document.querySelectorAll(".sheet-body.plan .plan-note").length} ${document.querySelectorAll(".start-box").length}`);
+        check(plan === "1 0", `at advanced a start is the pre-flight's dialog and no box (${plan})`);
+        await page.screenshot({ path: `${shots}/level-${level}-start.png` });
+      }
+      await page.close();
+    }
+
+    // a phone at intermediate: two rows where the advanced bar takes three
+    for (const level of ["intermediate", "advanced"] as const) {
+      const page = await at(level, true);
+      const rows = await barRows(page);
+      const want = level === "intermediate" ? 2 : 3;
+      const more = level === "intermediate" ? await page.locator(".bar-more-btn").boundingBox() : null;
+      check(rows === want && (level === "advanced" || (more !== null && more.x + more.width <= 390)), `on a phone at ${level} the top bar takes ${rows} rows${level === "intermediate" ? ", its menu on the screen" : ""}`);
+      if (level === "intermediate") await page.screenshot({ path: `${shots}/level-phone.png` });
+      await page.close();
+    }
   }
 
   {

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { Repo, RepoStatus } from "../../src/core/types";
+import { stateIn, type BoardState } from "./boardstate";
 import { changedAt, foldGroups, groupRepos, newestEdit } from "./grouping";
+import { SORT_MODES } from "./settings";
 
 const NOW = 1_800_000_000;
 const DAY = 86_400;
@@ -197,8 +199,40 @@ describe("groupRepos", () => {
     ]);
   });
 
+  test("state groups by what goes on at each card, the most pressing first, newest change first inside each", () => {
+    const states: Record<string, BoardState> = { "web/alpha": "needs", "tools/gamma": "working", "tools/beta": "working", "tools/delta": "unread", "web/fresh": "needs" };
+    const g = groupRepos(grove, "state", NOW, undefined, undefined, stateIn(states));
+    expect(ids(g)).toEqual([
+      ["needs you", ["alpha", "fresh"]],
+      ["working", ["beta", "gamma"]],
+      ["unread", ["delta"]],
+      ["idle", ["zeta", "omega"]],
+    ]);
+    expect(g.map((x) => x.key)).toEqual(["needs", "working", "unread", "idle"]);
+    // every heading says what puts a card under it
+    expect(g.every((x) => Boolean(x.hint))).toBe(true);
+  });
+
+  test("state shows no group that holds nothing", () => {
+    const g = groupRepos(grove, "state", NOW, undefined, undefined, stateIn({ "tools/beta": "unread" }));
+    expect(g.map((x) => [x.label, x.repos.length])).toEqual([
+      ["unread", 1],
+      ["idle", grove.length - 1],
+    ]);
+  });
+
+  test("state sorts by the at hook when one is given, as a card with several checkouts does", () => {
+    const newest: Record<string, number> = { "tools/gamma": NOW, "web/alpha": NOW - 5 };
+    const g = groupRepos(grove, "state", NOW, (r) => newest[r.id] ?? 0, undefined, stateIn({ "tools/gamma": "needs", "web/alpha": "needs", "web/zeta": "needs" }));
+    expect(g[0]?.repos.map((r) => r.name)).toEqual(["gamma", "alpha", "zeta"]);
+  });
+
+  test("state with nothing to read the cards by calls every card idle", () => {
+    expect(ids(groupRepos(grove, "state", NOW)).map(([label]) => label)).toEqual(["idle"]);
+  });
+
   test("empty input yields no groups in every mode", () => {
-    for (const mode of ["recent", "folder", "activity", "name", "user", "favorites"] as const) {
+    for (const mode of SORT_MODES) {
       expect(groupRepos([], mode, NOW)).toEqual([]);
     }
   });

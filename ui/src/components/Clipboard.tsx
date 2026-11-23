@@ -154,7 +154,7 @@ function allShown(s: CanopyState): ShownClip[] {
 }
 
 /** whether the newest clip came from somewhere other than this browser since a clipboard last showed */
-function freshElsewhere(s: CanopyState): boolean {
+export function freshElsewhere(s: CanopyState): boolean {
   const newest = allShown(s)[0];
   return !!newest && newest.at > s.clipsSeen && newest.device?.id !== clientId();
 }

@@ -58,6 +58,10 @@ import { PromptRail, PromptRailEnd } from "./PromptRail";
 import { SideColumn, SideLine, useSideBox, type SideFrom } from "./SideQuestion";
 import { HARNESS } from "../../../src/core/harness";
 import { CENTERED } from "../pop";
+import { foldTurns } from "../turnfold";
+import { TurnFold } from "./TurnFold";
+import { NEW_WORKTREE, agentChip, boxFits, boxHeld, boxNotes, placeChips, routeWords } from "../startbox";
+import { StartBox } from "./StartBox";
 import { PopGear, PopGrip, PopHere } from "./PopGrip";
 import { api } from "../api";
 import { openSectionElsewhere, parseRoute } from "../routes";
@@ -365,6 +369,10 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   // a branch run whose note opens with #123 or an issue URL starts from
   // that GitHub issue; the backend reads it with gh (core/issue)
   const issue = branchable && onBranch ? parseIssueRef(note) : null;
+  // FR-079: at the intermediate level one plain run or chat starts from one
+  // box, this same state drawn small; "more options" is the pre-flight below
+  const quiet = useStore((s) => s.settings.level === "intermediate");
+  const [more, setMore] = useState(false);
 
   const go = async () => {
     if (!ready) return;
@@ -379,6 +387,43 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
       setBusy(false);
     }
   };
+
+  if (quiet && !more && boxFits(action)) {
+    return (
+      <StartBox
+        agentName={name}
+        workspace={workspace}
+        verb={spec.verb}
+        repoText={idText(repo.id)}
+        top={placeChips({ repo: repo.name, workspace: workspace ?? null, branch: repo.status?.branch ?? null, branchable, onBranch, beside: ownBeside, backend: backendOf(repo.id), host: repo.host ?? null })}
+        agent={agentChip({
+          loadouts: loadoutOffered ? loadouts.map((l) => ({ name: l.name, label: loadoutLabel(l), note: l.note })) : [],
+          pick: loadoutPick,
+          inherited: inheritedLabel(inherited, loadouts),
+          inherits: inheritedLoadout !== undefined,
+          loadout: loadout ? loadoutLabel(loadout) : null,
+          route: routeWords(agent, AGENT_NAME[agent.harness]),
+        })}
+        onPick={(id, value) => {
+          if (id === "branch") setOnBranch(value === NEW_WORKTREE);
+          if (id === "agent") setLoadoutPick(value);
+        }}
+        note={note}
+        setNote={setNote}
+        noteBox={noteBox}
+        mentions={mentions}
+        placeholder={words.notePlaceholder}
+        notes={boxNotes({ besideFlow, memberFlows: besideMemberFlows, ownBranch: ownBeside && onBranch, branch: repo.status?.branch ?? null, chatHint: chatOnBranch && !note.trim() ? CHAT_BRANCH_HINT : null })}
+        held={boxHeld({ branchable, onBranch, free, slots: GROUP_MAX })}
+        error={error}
+        busy={busy}
+        ready={ready}
+        onSend={() => void go()}
+        onMore={() => setMore(true)}
+        onClose={close}
+      />
+    );
+  }
 
   return (
     <>
@@ -561,6 +606,8 @@ export function Timeline({
   const nodes = nestSteps(hideTodoSteps(steps, todos.length > 0));
   // the latest plan, once settled: the one waiting shows in its form below
   const settled = settledProposal(run);
+  // FR-079: the intermediate level folds each turn's commands into one line
+  const quiet = useStore((s) => s.settings.level === "intermediate");
 
   return (
     <div
@@ -595,9 +642,15 @@ export function Timeline({
         </ol>
       )}
       <ol className="steps">
-        {nodes.map((n) => (
-          <Step key={n.step.id} step={n.step} kids={n.kids} />
-        ))}
+        {quiet
+          ? foldTurns(nodes, { live: run.status === "working", end: run.status === "working" ? Date.now() : (run.endedAt ?? null) }).map((item) =>
+              item.kind === "fold" ? (
+                <TurnFold key={`fold ${item.id}`} fold={item} renderStep={(n) => <Step key={n.step.id} step={n.step} kids={n.kids} />} />
+              ) : (
+                <Step key={item.node.step.id} step={item.node.step} kids={item.node.kids} />
+              ),
+            )
+          : nodes.map((n) => <Step key={n.step.id} step={n.step} kids={n.kids} />)}
         {run.status === "working" && run.steps.length === 0 && (
           <li className="step k-note thinking">
             <span className="node" />

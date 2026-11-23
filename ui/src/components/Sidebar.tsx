@@ -14,6 +14,7 @@ import { Tick } from "./SelectBar";
 import type { Repo } from "../../../src/core/types";
 import { kbKey } from "../kbfocus";
 import { useKb } from "../kbring";
+import { useStateOf } from "./useStateOf";
 
 /** One row of the tree. In select mode it picks the repo like the card
  *  does, shift included, instead of opening it. */
@@ -128,6 +129,7 @@ export function Sidebar({ drawer = false }: { drawer?: boolean }) {
   const { zoom, entry: zoomEntry } = useZoom("sidebar");
 
   // the same `at` the grid groups by, so a heading means the same in both
+  const stateOf = useStateOf(sort === "state");
   const groups = useMemo(
     () => groupRepos(
         repos,
@@ -135,8 +137,9 @@ export function Sidebar({ drawer = false }: { drawer?: boolean }) {
         undefined,
         many && cards.length > 0 ? boardChangedAt(useStore.getState()) : undefined,
         many && cards.length > 0 ? boardFavorite(useStore.getState()) : undefined,
+        stateOf,
       ),
-    [repos, cards, many, sort],
+    [repos, cards, many, sort, stateOf],
   );
   // the groups showing, which the gear's and Alt+click's folds act on
   const shownKeys = groups.map((g) => sectionKey(sort, g.key));

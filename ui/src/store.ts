@@ -15,6 +15,8 @@ import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
 import { harnessNames, harnessWeeks, isHarnessCard } from "../../src/core/harnessshare";
 import { changedAt, foldGroups as foldGroupList } from "./grouping";
+import { cardState, stateIn, type BoardState } from "./boardstate";
+import { lastEnded } from "./cardlive";
 import { foldKeys, sectionsHidden, withZoom, zoomOf, ZOOM_MAX, ZOOM_MIN, type SectionKey } from "./surface";
 import { addItemTab, addSectionTab, dropSectionTab, itemTabId, sectionTabId, type SectionPlace, type TabRef } from "./sectiontabs";
 import { applyTabs, captureTabs, type TabCard } from "./tabtemplates";
@@ -115,6 +117,7 @@ import {
   DEFAULT_LAUNCH,
   effectivePrimary,
   isFlowActive,
+  isLiveAgent,
   isRunActive,
   type About,
   type AgentPick,
@@ -5587,6 +5590,7 @@ export const useStore = create<CanopyState>((set, get) => ({
           s.collapsed,
           many ? boardChangedAt(s) : undefined,
           many ? boardFavorite(s) : undefined,
+          s.settings.sort === "state" ? stateIn(boardStates(s, Date.now())) : undefined,
         );
         const ids = rangeIds(order, s.selectAnchor, repoId);
         return { selected: setPick(s.selected, ids, s.selected.includes(s.selectAnchor)) };
@@ -6462,6 +6466,50 @@ export function boardFavorite(s: CanopyState): (r: Repo) => boolean {
     const card = cardOf(s, r.id);
     return card ? cardFavorite(card) : r.favorite === true;
   };
+}
+
+/** What goes on at each card in view, by the checkout it leads with, for
+ *  the board's "state" grouping (FR-079, boardstate.ts): a card's agents
+ *  as its live row reads them, canopy's runs and workflows on any of its
+ *  checkouts as its chip does (no flow's step, no flow on a branch of its
+ *  own, no snapshot opened from the run log), and when the last thing left
+ *  its row. A new object each call: select it with useShallow, which holds
+ *  it still while no card's state moves. */
+export function boardStates(s: CanopyState, now: number): Record<string, BoardState> {
+  const runsAt = new Map<string, Run[]>();
+  for (const r of Object.values(s.runs)) {
+    if (r.kept || !ownRun(s.flowRuns, r)) continue;
+    const list = runsAt.get(r.repoId);
+    if (list) list.push(r);
+    else runsAt.set(r.repoId, [r]);
+  }
+  const flowsAt = new Map<string, Flow[]>();
+  for (const f of Object.values(s.flows)) {
+    if (f.branch) continue;
+    const list = flowsAt.get(f.repoId);
+    if (list) list.push(f);
+    else flowsAt.set(f.repoId, [f]);
+  }
+  const status = statusOf(s);
+  const many = multi(s);
+  const split = (id: string): [string, string] => [backendOf(id), plainOf(id)];
+  const out: Record<string, BoardState> = {};
+  for (const repo of visibleRepos(s)) {
+    const card = many ? cardOf(s, repo.id) : undefined;
+    const ids = card ? card.checkouts.map((c) => c.id) : [repo.id];
+    const agents = agentsOn(s, repo.id);
+    const tasks = s.taskAll.filter((t) => ids.includes(t.repoId));
+    out[repo.id] = cardState(
+      {
+        agents: agents.filter(isLiveAgent).map(status),
+        runs: ids.flatMap((id) => runsAt.get(id) ?? []),
+        flows: ids.flatMap((id) => flowsAt.get(id) ?? []),
+        endedAt: lastEnded({ lead: repo.id, agents, tasks, split })?.at ?? null,
+      },
+      now,
+    );
+  }
+  return out;
 }
 
 /** Whether the card a repo is on is starred; a boolean, so a selector over
