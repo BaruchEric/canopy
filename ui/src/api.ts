@@ -216,9 +216,15 @@ const scopes = new ScopeBook();
  *  calls after a stream drop wait for the auth read that follows it. */
 export const scopeUnknown = (b: string): void => scopes.unknown(b);
 
-/** what each backend last said this page is, for the role's gate: a right
- *  the page's role lacks there is refused here, as the backend would */
-const authAt = new Map<string, AuthInfo>();
+/** Where the role's gate reads what each backend last said this page is:
+ *  the store's record of its auth reads, which store.ts names when it loads.
+ *  A right the page's role lacks there is refused here, as the backend
+ *  would. Reading the store's record, not one kept here, means a page the
+ *  store forgets (a reset, a backend removed) is forgotten here too. */
+let roleSource: (b: string) => AuthInfo | undefined = () => undefined;
+export const readRolesFrom = (source: (b: string) => AuthInfo | undefined): void => {
+  roleSource = source;
+};
 
 /** the backends whose auth read the gate itself has asked for, one at a time */
 const scopeAsked = new Set<string>();
@@ -239,14 +245,20 @@ async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<
   if (!reachable(b)) throw new Error(`${b} has not answered yet`);
   // a page held to its teams' folders asks nothing the wall closes: the
   // refusal is answered here, once the auth read says it is held
+  // once the backend has said, the call goes out at once with no await, so
+  // a page that is not held sends it in the same tick as before the wall
   if (!scopeReaches(init.method ?? "GET", path)) {
-    askScope(b);
-    if (await scopes.scoped(b)) throw scopeRefusal();
+    const held = scopes.now(b);
+    if (held === true) throw scopeRefusal();
+    if (held === null) {
+      askScope(b);
+      if (await scopes.scoped(b)) throw scopeRefusal();
+    }
   }
   // a role that does not hold the right (a viewer reads the board and no
   // repo's files) is refused here, with the backend's own words
   const need = needOf(init.method ?? "GET", path);
-  if (need !== "open" && lacks(authAt.get(b), need)) throw roleRefusal(need);
+  if (need !== "open" && lacks(roleSource(b), need)) throw roleRefusal(need);
   const base = baseOf(b);
   const opts: RequestInit = { ...init };
   // The backend's own token, when this page signed in to it. To another
@@ -1112,8 +1124,6 @@ export const api = {
     }
     const info = isAuthInfo(r) ? r : null;
     scopes.known(b, Array.isArray(info?.scope) && info.scope.length > 0);
-    if (info) authAt.set(b, info);
-    else authAt.delete(b);
     return info;
   },
   /** asks a backend to let this page in; the secret claims the token once approved */

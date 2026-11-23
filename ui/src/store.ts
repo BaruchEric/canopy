@@ -6,7 +6,7 @@ import { applyClips, looksSecret, type Clip } from "../../src/core/clips";
 import type { Copied } from "./clipsink";
 import { copyText } from "./share";
 import { create } from "zustand";
-import { api, onBackendSignal, PartialFleetError, resolveBase, scopeUnknown, subscribe } from "./api";
+import { api, onBackendSignal, PartialFleetError, readRolesFrom, resolveBase, scopeUnknown, subscribe } from "./api";
 import { scopedOr } from "./scopeGate";
 import { saveChoice } from "./preview";
 import { backendOf, baseOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
@@ -5845,6 +5845,10 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   showFleet: (fleetId) => set({ sheet: { kind: "fleet", fleetId } }),
 }));
+// the page's role gate (api.ts) reads who each backend says this page is
+// from the store's own record, so it forgets what the store forgets
+readRolesFrom((b) => useStore.getState().authByBackend[b]);
+
 
 /** Ends the shells behind some tabs on the server. Closing a socket only
  *  detaches, so this is the one way a tab's × hangs a shell up. One that

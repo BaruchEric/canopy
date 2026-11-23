@@ -1351,6 +1351,9 @@ describe("several backends", () => {
     if (!stream) throw new Error("no foreign stream");
     stream.onopen?.();
     stream.onopen?.();
+    // a reconnect may be a change of teams (FR-074): its reads wait for the
+    // auth read that says whether the page is held
+    await settle();
     const [older, newer] = pending;
     if (!older || !newer || pending.length !== 2) throw new Error("expected initial and reconnect pool reads");
     newer(new Response(JSON.stringify(current)));
