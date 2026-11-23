@@ -11,3 +11,10 @@ ui/node_modules
 # in the image they would sit in a layer, and bun loads a .env from /app
 .env
 .env.*
+# what the map section writes when the repo it reads is canopy's own
+# checkout: the map, the diagrams and the diagnosis (tens of MB), the graph.
+# In the build context they would change the image on every analysis.
+floorplan
+.archify
+.ua
+.understand-anything
