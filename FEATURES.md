@@ -2,6 +2,19 @@
 
 ## Open
 
+### FR-079 · A simple level for the whole page
+P2 · added 2026-11-22 · source: Eric ("borrow UI simplicity", 2026-11-22, on Google's "Antigravity, Redesigned" video)
+Settings' level changes a repo's panel and nothing else: at 1200 px the top bar shows 29 controls in three rows, and the board is the same at intermediate as at advanced. Antigravity's redesign keeps what needs a person in front and lets the rest wait, and four parts of it fit the intermediate level: a board grouped by state (needs you, working, unread, idle) beside the six groupings there are; a top bar that keeps the chips with something to say and puts the others behind one menu; one start box that carries the repo, the branch or a new worktree, the backend and the loadout as chips, where a start now passes through the pre-flight and the repo's agent settings; and a timeline that folds a turn's commands into one "worked for 40s" line, as a subagent's steps already fold under their Agent call. Advanced stays the dense cockpit. Pick which of the four before a spec, since the dense grid is on purpose.
+Video: https://www.youtube.com/watch?v=jYWQtG8BBSY (the composer at 0:58, the sidebar at 1:22).
+
+### FR-078 · A rail on a run's timeline to step through its prompts
+P2 · added 2026-11-22 · source: Eric ("do Recommendations", 2026-11-22, on the recommendation "Log the prompt navigator rail for long run transcripts as a feature request")
+A chat that runs to dozens of turns has no way back to one message but scrolling. A rail of ticks down the timeline's edge, one per message Eric sent, shows that message's first words and its place ("49 of 96") on hover, jumps to it on a click, and steps to the one before or after from the keyboard. A finished run's replay bar already has "jump to…" over its prompts (FR-043); this is the same list for a live chat, always in view. Seen as Antigravity's conversation navigator, at 2:47 of the video under FR-079.
+
+### FR-077 · A side question beside a run that keeps working
+P2 · added 2026-11-22 · source: Eric ("do Recommendations", 2026-11-22, on the recommendation "Log side question as a canopy feature request")
+A message that opens with `btw` in a run's box does not go to the run. It opens a second thread docked beside the run that starts with the run's context, answers on a model picked there, and leaves the run working and its timeline without the question. FR-043's fork carries a run's context today, but only from a finished run and into a new branch run; this forks a live run's session as of its last finished turn, into a chat on the same checkout. Seen as Antigravity's side questions, at 3:05 of the video under FR-079.
+
 ### FR-061 · Change a schedule rule's line from the clock
 P3 · added 2026-11-10 · source: Claude (follow-up to FR-060)
 The clock view fires a schedule rule and shows its line, but the line is changed only by editing `triggers.json` on the backend. A route that rewrites one rule's `cron` or `poll` (admin right, the file's other keys and its order kept, the same checks `parseRules` makes) would let the clock's line editor save a rule the way it saves a wake. Decide first whether the file should stay hand-written only: it also names the env vars that hold hook secrets.
