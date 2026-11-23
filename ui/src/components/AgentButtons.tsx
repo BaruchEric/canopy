@@ -12,6 +12,7 @@ import { canSave, debugPrompt, devState, pendingAgent, SAVE_PROMPT, SETUP_PROMPT
 import { LIVE, typeInto } from "../liveTerms";
 import { pasteIntoAgentShell, runsAgent } from "../agentsend";
 import type { TermTab } from "../term";
+import { useLacks } from "../useLacks";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -92,10 +93,12 @@ export function AgentButtons({ tab }: { tab: TermTab }) {
   const loadTasks = useStore((s) => s.loadTasks);
   const taskAct = useStore((s) => s.taskAct);
   const agent = useShellAgent(tab);
+  // a viewer asks no agent and runs no app (FR-074)
+  const reads = useLacks(tab.repoId, "operate");
   useEffect(() => {
     if (tasks === undefined && repo && !repo.forge && !repo.host) loadTasks(tab.repoId).catch(() => {});
   }, [tasks, repo, tab.repoId, loadTasks]);
-  if (!repo || repo.forge || repo.host) return null;
+  if (!repo || repo.forge || repo.host || reads) return null;
   // a seed's agents run through the incubator alone: no button here asks one
   const seed = isSeedId(tab.repoId);
   const dev = devTask(tasks ?? []);

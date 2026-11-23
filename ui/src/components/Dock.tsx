@@ -3347,6 +3347,8 @@ export function RepoPanel({
                 )}
                 {isHome(repo.id) && <WorkspaceMenu repo={repo} onError={showError} />}
               </div>
+              {/* a viewer pulls and pushes nothing (FR-074) */}
+              {!reads && (
               <div className="panel-sync">
                 <button
                   type="button"
@@ -3374,6 +3376,7 @@ export function RepoPanel({
                     : `push${st?.ahead ? ` ↑${st.ahead}` : ""}`}
                 </button>
               </div>
+              )}
             </div>
             <GitNote id={id} note={note} setNote={setNote} retry={lastMove} />
 
@@ -3415,7 +3418,8 @@ export function RepoPanel({
       )}
       </div>
       {!repo.error && <PanelShells repo={repo} />}
-      {guided && isActive && !onboarded && !hidden && !dockless() && <Tour targets={tourTargets} onDone={finishTour} />}
+      {/* the tour shows how to ask an agent, run the app and save, none of which a viewer does (FR-074) */}
+      {guided && isActive && !onboarded && !hidden && !reads && !dockless() && <Tour targets={tourTargets} onDone={finishTour} />}
     </section>
     </>
   );

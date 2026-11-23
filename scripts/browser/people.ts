@@ -285,6 +285,9 @@ try {
   check(termTickets.length === 0, `a viewer's shell tab asks for no ticket (${termTickets.length} asked)`);
   check((await guest.locator(".panel .commit-box").count()) === 0, "a viewer's panel has no commit box");
   check((await guest.locator('.panel .file-row input[type="checkbox"]:not([disabled])').count()) === 0, "nor a box that stages a file");
+  check((await guest.locator(".panel .panel-sync").count()) === 0, "nor pull or push");
+  check((await guest.locator(".panel .guided-btn, .panel .agent-buttons, .panel .new-shell").count()) === 0, "nor a button that asks an agent, runs the app, saves the work or opens a shell");
+  check((await guest.locator(".tour").count()) === 0, "nor the tour of asking an agent, running and saving");
   check(guestRefused.length === 0, `a viewer's page asks the backend for nothing its role refuses (${[...new Set(guestRefused)].join(", ") || "none"})`);
   await guest.screenshot({ path: `${shots}/08-viewer-dark.png` });
   await guest.goto(`${base}/?view=sessions`, { waitUntil: "load" });
@@ -316,9 +319,13 @@ try {
   await avery.waitForSelector(".card .card-more", { timeout: 15_000 }).catch(() => {});
   check((await avery.locator(".card .card-more").count()) === 2, "changing it back gives the menus back without a reload");
   const starred = avery.waitForResponse((r) => r.url().includes("/api/repos/favorite"), { timeout: 15_000 }).catch(() => null);
-  await avery.locator(".card .star").first().tap();
+  // on a phone the repo Avery opened earlier covers the board again, so the
+  // star pressed is the one on show: the panel head's when a panel is open
+  const panelStar = avery.locator(".panel-head .star");
+  await ((await panelStar.count()) > 0 ? panelStar : avery.locator(".card .star")).first().tap();
   const fav = await starred;
   check(fav?.status() === 200, `and a star stars again (${fav?.status() ?? "nothing sent"})`);
+  check((await avery.locator(".panel .panel-sync").count()) > 0, "and their open repo offers pull and push again");
   await avery.goto(`${base}/?view=people`, { waitUntil: "load" });
   await avery.waitForSelector(".people-view .people-list", { timeout: 20_000 });
 

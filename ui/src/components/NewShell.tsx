@@ -7,6 +7,7 @@ import { HARNESSES, type LaunchPick } from "../../../src/core/types";
 import { profileNames, startHarnesses } from "../agents";
 import { backendOf } from "../registry";
 import { connOf, routesOf, useStore } from "../store";
+import { useLacks } from "../useLacks";
 
 /** how long a press is held before it is a long press, not a click */
 const LONG_PRESS = 500;
@@ -31,6 +32,8 @@ function menuPlace(el: HTMLElement | null): CSSProperties {
  */
 export function NewShellButton({ repoId }: { repoId: string }) {
   const openTerm = useStore((s) => s.openTerm);
+  // a viewer opens no shell (FR-074)
+  const noShell = useLacks(repoId, "shell");
   const backend = backendOf(repoId);
   // a repo on another host starts its agent there, whatever this backend has
   const host = useStore((s) => s.repos.find((r) => r.id === repoId)?.host ?? null);
@@ -77,6 +80,7 @@ export function NewShellButton({ repoId }: { repoId: string }) {
     else openTerm(repoId, "panel");
   };
   const profiles = profileNames(routes).filter((n) => n !== "default");
+  if (noShell) return null;
 
   return (
     <span className="new-shell" ref={box}>

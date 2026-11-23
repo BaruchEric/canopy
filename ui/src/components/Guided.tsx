@@ -6,6 +6,7 @@ import { devTask } from "../tasks";
 import { canSave, devState, plainStatus, SAVE_PROMPT, SETUP_PROMPT } from "../guided";
 import { askAgent } from "./AgentButtons";
 import { PreviewSection } from "./Preview";
+import { useLacks } from "../useLacks";
 
 export interface GuidedTargets {
   run: RefObject<HTMLButtonElement | null>;
@@ -19,6 +20,8 @@ export function GuidedPanel({ repo, onMore, targets }: { repo: Repo; onMore: () 
   const tasks = useStore((s) => s.tasks[repo.id]);
   const loadTasks = useStore((s) => s.loadTasks);
   const taskAct = useStore((s) => s.taskAct);
+  // a viewer reads the app's state and starts, stops and saves nothing (FR-074)
+  const reads = useLacks(repo.id, "operate");
   useEffect(() => {
     if (!repo.forge && !repo.host) loadTasks(repo.id).catch(() => {});
   }, [repo.id, repo.forge, repo.host, loadTasks]);
@@ -50,7 +53,7 @@ export function GuidedPanel({ repo, onMore, targets }: { repo: Repo; onMore: () 
     <div className="guided">
       <p className="guided-status">{plainStatus(repo, state)}</p>
       <div className="guided-actions">
-        {state === "none" && seed ? null : state === "none" ? (
+        {reads || (state === "none" && seed) ? null : state === "none" ? (
           <button ref={targets.run} type="button" className="guided-btn" onClick={() => void askAgent(repo.id, SETUP_PROMPT, null)}>
             Set up run
           </button>
@@ -63,7 +66,7 @@ export function GuidedPanel({ repo, onMore, targets }: { repo: Repo; onMore: () 
             Run my app
           </button>
         )}
-        {!seed && (
+        {!seed && !reads && (
         <button
           ref={targets.save}
           type="button"

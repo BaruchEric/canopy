@@ -16,6 +16,7 @@ import { IdLabel } from "./IdLabel";
 import { AgentFix } from "./AgentFix";
 import { DropStale } from "./DropStale";
 import type { StaleOffer } from "../../../src/core/stalecopy";
+import { useLacks } from "../useLacks";
 
 /** "4m ago" from unix ms */
 function agoMs(at: number, now: number): string {
@@ -62,8 +63,11 @@ interface RowAct {
 /** One repo row: the row opens its panel, and a push or pull sits beside it
  *  when that is the obvious fix, one click from here. The server re-reads
  *  the repo after either, which drops the row. */
-function RepoRow({ repo, state, word, detail, act }: { repo: Repo; state: RepoState; word: string; detail: string; act: RowAct | null }) {
+function RepoRow({ repo, state, word, detail, act: given }: { repo: Repo; state: RepoState; word: string; detail: string; act: RowAct | null }) {
   const openPanel = useStore((s) => s.openPanel);
+  // a viewer reads what waits and pushes or pulls nothing (FR-074)
+  const reads = useLacks(repo.id, "operate");
+  const act = reads ? null : given;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // a push upstream holds an amend for offers to drop the stale copy (FR-048)

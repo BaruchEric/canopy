@@ -1145,7 +1145,8 @@ function Tucked({ label, ids, on, compact = false }: { label: string; ids: reado
  *  views, the filter box, search, the command line, the mic, + new and
  *  settings stay; a chip sits between them only while it has something to
  *  say (`quietbar.ts`), and the menu before settings lists every chip with
- *  its state. A row with more speaking than it can hold wraps. */
+ *  its state. The sign-in chips and the people chip hide themselves when
+ *  they have nothing to say. A row with more speaking than it can hold wraps. */
 function QuietWideBar({ nav }: { nav?: ReactNode }) {
   const narrow = useMedia(NARROW);
   const bar = useRef<HTMLElement>(null);
@@ -1176,6 +1177,9 @@ function QuietWideBar({ nav }: { nav?: ReactNode }) {
         <span className="topbar-group topbar-tail">
           <SignInChips />
           <ReloadChip />
+          {/* who else is on, and "viewing" for a role that only reads
+              (FR-074); it shows nothing on a canopy of one person */}
+          <PeopleChip />
           <Tucked label="Right now" ids={NOW_WIDE} on={on} compact={narrow} />
           <Cluster label="Find and make">
             <SearchButton />
@@ -1241,6 +1245,7 @@ function QuietPhoneBar({ nav }: { nav?: ReactNode }) {
                 <FilterMenu />
               </Tuck>
               <Tucked label="Right now" ids={NOW_PHONE} on={on} compact />
+              <PeopleChip />
               <Cluster label="Make">
                 <NewButton />
                 <CliButton />

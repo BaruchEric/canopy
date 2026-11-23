@@ -81,7 +81,7 @@ The page asks nothing the wall would refuse. `req()` learns from the auth read w
 
 The scope is soft for the reason above: a scoped member's agent or shell can still `cat` a sibling folder. It is exact for a viewer.
 
-A viewer's page. The role caps the API, and the page now keeps to it too: under enforce `req()` answers a route the role lacks locally, and the controls a viewer cannot use are gone (card and panel menus, staging and the commit box, a run's answers, composer, stop and fork, a new shell). The star shows and stars nothing.
+A viewer's page. The role caps the API, and the page now keeps to it too: under enforce `req()` answers a route the role lacks locally, and the controls a viewer cannot use are gone (card and panel menus, staging and the commit box, pull and push, the guided panel's run and save buttons and its tour, the agent buttons on a shell's tab row, a run's answers, composer, stop, fork, rename and side questions, a new shell). The star shows and stars nothing.
 
 ## Plan 3: a tenant is a backend
 
