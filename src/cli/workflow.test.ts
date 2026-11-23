@@ -192,6 +192,9 @@ describe("the command", () => {
 
   test("list --repo prints the backend's entries; a bad word is the usage", async () => {
     const got = await drive(["list", "--repo", "app"], { "/api/repos/workflows": [{ ok: true, workflow: fan() }] });
+    // the failure and the requests first, so a miss names its cause instead of an empty list
+    expect(got.failed).toBeNull();
+    expect(got.asked).toEqual(["/api/repos/workflows?id=app"]);
     expect(got.lines).toEqual(["workflows for app\n  fan  user     4 steps as a graph, Ship manual"]);
     expect((await drive(["draw"])).failed).toStartWith("usage: canopy workflow show");
     expect((await drive(["list", "--repo"])).failed).toBe("--repo needs a repo id or a path");

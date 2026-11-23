@@ -57,6 +57,10 @@ services:
       - ${HOST_HOME:-/home/eric}/.claude:${HOST_HOME:-/home/eric}/.claude
       - ${HOST_HOME:-/home/eric}/.claude.json:/home/bun/.claude.json
       - ${HOST_HOME:-/home/eric}/.codex:/home/bun/.codex
+      # agy's login and state (antigravity-cli/ inside it), so a login made in
+      # a shell outlives the container; scripts/redeploy.sh makes the folder
+      # on the host first, since docker would make it as root
+      - ${HOST_HOME:-/home/eric}/.gemini:/home/bun/.gemini
       # the convex CLI's login (config.json), so `convex dev` in a shell
       # reaches its cloud deployment; without it the CLI asks to log in,
       # which fails under `bun run --filter` (no TTY). scripts/redeploy.sh
@@ -503,6 +507,9 @@ services:
       # records are the host claude's own (FR-064, server/kit.ts claudeHome)
       - ${HOST_HOME:-/home/eric}/.claude.json:${HOST_HOME:-/home/eric}/.claude.json
       - ${HOST_HOME:-/home/eric}/.codex:/home/bun/.codex
+      # agy's login, the same folder the shells mount, so a run uses the login
+      # a shell made
+      - ${HOST_HOME:-/home/eric}/.gemini:/home/bun/.gemini
       # Hermes' skills folder, for the kit's links (docs/superpowers/specs/
       # 2026-10-14-kit-design.md); under /home/bun like ~/.claude so a
       # relative link means the same inside and out. The folder must exist

@@ -79,6 +79,14 @@ mini.
    login stays in that folder across rebuilds. Without it `convex dev` asks
    to log in, and under `bun run --filter` (no TTY) that exits 1 with
    "Cannot prompt for input in non-interactive terminals".
+   The image also has Google Antigravity's `agy` (FR-081), and both the
+   shells and the `canopy` service mount `~/.gemini`, which
+   `bun run redeploy` creates on the host too. agy keeps its login there in
+   `antigravity-cli/antigravity-oauth-token`, a file, since the containers
+   have no keyring. Sign in once from a canopy shell with
+   `agy acp --login`: it prints a Google link, and the page that link ends on
+   shows a code to paste back. A login copied from another Linux machine's
+   `~/.gemini/antigravity-cli/` works as well.
 4. An ssh host on each client that reaches the mini, named to match
    `CANOPY_SSH_HOST` (`macmini-2018` on the mini), for VS Code Remote-SSH.
 

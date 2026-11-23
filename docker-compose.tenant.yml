@@ -8,7 +8,7 @@
 # It uses the images the main stack built (canopy-shells, canopy-backend) and
 # none of the main stack's binds, so any number of tenants run beside it. It
 # mounts the tenant's folder and the tenant's own home, and nothing of the
-# owner's: no ~/.claude, ~/.claude.json, ~/.ssh, ~/.codex, GH_TOKEN or secrets
+# owner's: no ~/.claude, ~/.claude.json, ~/.ssh, ~/.codex, ~/.gemini, GH_TOKEN or secrets
 # socket, any one of which would hand the tenant the owner's login, keys or
 # plan. So a tenant starts with no claude login: give it a provider file or
 # sign claude in from one of its shells (docs/deploy.md, "Tenants").
@@ -25,6 +25,7 @@ services:
       - ${TENANT_HOME:?}/.claude:/home/bun/.claude
       - ${TENANT_HOME:?}/.claude.json:/home/bun/.claude.json
       - ${TENANT_HOME:?}/.codex:/home/bun/.codex
+      - ${TENANT_HOME:?}/.gemini:/home/bun/.gemini
       - ${TENANT_HOME:?}/.config/git:/home/bun/.config/git
       - /etc/localtime:/etc/localtime:ro
     # one port. On loopback when canopy tenant add can put it on the
@@ -66,6 +67,7 @@ services:
       - ${TENANT_HOME:?}/.claude:/home/bun/.claude
       - ${TENANT_HOME:?}/.claude.json:/home/bun/.claude.json
       - ${TENANT_HOME:?}/.codex:/home/bun/.codex
+      - ${TENANT_HOME:?}/.gemini:/home/bun/.gemini
       - ${TENANT_HOME:?}/.config/git:/home/bun/.config/git
       - /etc/localtime:/etc/localtime:ro
     command:

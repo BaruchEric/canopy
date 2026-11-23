@@ -19,6 +19,12 @@ ordinary workflow steps take it. Canopy stores no Google key and no login.
 3. Reload canopy's page. The harness picker greys Antigravity out on a
    backend where canopy cannot find `agy` on its PATH or in your login shell.
 
+On the mini and De Soto the image installs agy and mounts the host's
+`~/.gemini` into the shells and `canopy` containers (docs/deploy.md, step 3).
+The containers have no keyring, so agy keeps its login in the file
+`~/.gemini/antigravity-cli/antigravity-oauth-token`; one `agy acp --login` in
+a canopy shell there lasts across rebuilds.
+
 Without a Google login, agy also takes a Gemini API key: set
 `"modelProvider": "gemini"` in `~/.gemini/antigravity-cli/settings.json` and
 put `GEMINI_API_KEY` in the environment canopy's server starts agy with. The

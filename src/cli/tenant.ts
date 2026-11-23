@@ -293,10 +293,7 @@ async function add(args: string[], fail: Fail): Promise<void> {
     for (const missing of ["canopy-shells:latest", "canopy-backend:latest"].filter((img) => !run(["docker", "image", "inspect", img]).ok)) {
       return fail(`no ${missing} image here: the main stack builds it (bun run redeploy)`);
     }
-    // the tenant's own home: docker would make a missing mount point as
-    // root, and a missing file as a folder
-    for (const d of [".claude", ".codex", join(".config", "git")]) mkdirSync(join(home, d), { recursive: true, mode: 0o700 });
-    if (!existsSync(join(home, ".claude.json"))) writeFileSync(join(home, ".claude.json"), "{}\n", { mode: 0o600 });
+    tenantHome(home);
     writeFileSync(join(dir, "tenant.json"), JSON.stringify(tenant, null, 2) + "\n", { mode: 0o600 });
     writeFileSync(envFile, env, { mode: 0o600 });
     const r = run(start, { cwd: REPO });
@@ -340,6 +337,14 @@ async function list(): Promise<void> {
 
 /** Starts a tenant again on what this host has now: the images a deploy
  *  just built, or the checkout's code under launchd. */
+/** The tenant's own home's mount points. Docker would make a missing one as
+ *  root, and a missing file as a folder; `up` makes them too, for a tenant
+ *  added before a mount was (.gemini came with FR-081). */
+function tenantHome(home: string): void {
+  for (const d of [".claude", ".codex", ".gemini", join(".config", "git")]) mkdirSync(join(home, d), { recursive: true, mode: 0o700 });
+  if (!existsSync(join(home, ".claude.json"))) writeFileSync(join(home, ".claude.json"), "{}\n", { mode: 0o600 });
+}
+
 async function up(args: string[], fail: Fail): Promise<void> {
   const [name, ...more] = args;
   if (!name || more.length > 0) return fail(TENANT_USAGE);
@@ -349,7 +354,7 @@ async function up(args: string[], fail: Fail): Promise<void> {
   const r =
     host === "launchd"
       ? run(["launchctl", "kickstart", "-k", `gui/${process.getuid?.() ?? 0}/${launchLabel(name)}`])
-      : run([...composeArgs(name, join(stateDir(host, name), ".env")), "up", "-d"], { cwd: REPO });
+      : (tenantHome(join(stateDir(host, name), "home")), run([...composeArgs(name, join(stateDir(host, name), ".env")), "up", "-d"], { cwd: REPO }));
   if (!r.ok) return fail(`${name} did not start again:\n${r.out}`);
   const back = await waitUp(localOf(t), 90);
   console.log(`tenant ${name} ${back ? "is up" : "did not answer in 90 s"} at ${t.url}`);

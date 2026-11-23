@@ -74,7 +74,7 @@ RUN if [ "$(id -u bun)" != "$UID" ] || [ "$(id -g bun)" != "$GID" ]; then \
 # otherwise be "dubious ownership" and refuse every git command
 RUN git config --system --add safe.directory '*'
 
-# a login shell (the in-browser terminal) must find claude and codex too
+# a login shell (the in-browser terminal) must find claude, codex and agy too
 RUN printf 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"\n' > /etc/profile.d/canopy-path.sh
 
 # Durable config and the tmux socket live on a mounted volume so config
@@ -113,7 +113,7 @@ ENV BUN_INSTALL_BIN=/home/bun/.bun/bin
 # ble.sh warns on every shell without a UTF-8 locale; C.UTF-8 needs no package
 ENV LANG=C.UTF-8
 
-# Change this date to take new claude and codex releases. Both install
+# Change this date to take new claude, codex and agy releases. All three install
 # unpinned, so a cached layer keeps the old ones until this line moves. It is
 # in the shells stage, so the deploy after a change recreates the shells.
 ARG TOOLS_AT=2026-11-03
@@ -129,6 +129,13 @@ COPY --chown=bun:bun docker/canopy /home/bun/.local/bin/canopy
 # name is wrong for your setup, install it your own way (see deploy.md); it
 # is not required for canopy to start.
 RUN bun add -g @openai/codex || echo "codex not installed at build; see docs/deploy.md"
+
+# Google Antigravity's agy (FR-081), from Google's installer, which checks the
+# binary against its manifest's sha512 and puts it in ~/.local/bin. Its login
+# is a file in the mounted ~/.gemini (antigravity-cli/antigravity-oauth-token,
+# since the image has no keyring), so one `agy acp --login` in a shell lasts.
+# Not required for canopy to start; the picker greys antigravity out without it.
+RUN curl -fsSL https://antigravity.google/cli/install.sh | bash || echo "agy not installed at build; see docs/antigravity.md"
 
 # The Vercel CLI, for the incubator's deploy. canopy runs it itself, with
 # VERCEL_TOKEN in that one process's env; no agent's allowlist names it.
@@ -207,7 +214,7 @@ RUN set -e; \
       cp -a /home/bun/.bun/install/global/node_modules /opt/stage-tools/node_modules; \
       ln -s "/opt/stage-tools/node_modules/${js#/home/bun/.bun/install/global/node_modules/}" /opt/stage-tools/bin/codex; \
     fi; \
-    rm -rf /home/bun/.local/bin/claude /home/bun/.local/share/claude /home/bun/.bun/bin /home/bun/.bun/install/global; \
+    rm -rf /home/bun/.local/bin/claude /home/bun/.local/share/claude /home/bun/.local/bin/agy /home/bun/.bun/bin /home/bun/.bun/install/global; \
     chown -R root:root /opt/stage-tools; \
     chmod -R u+rwX,go+rX,go-w /opt/stage-tools
 COPY --from=build /app/dist/stage-runner.js /app/stage-runner.js

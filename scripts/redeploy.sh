@@ -341,6 +341,8 @@ job() {
   # a bind mount's missing host folder is made by docker, as root, and the
   # shells container's user could never write a login into it
   mkdir -p "$HOME/.convex" || { echo "could not make $HOME/.convex"; return 1; }
+  # agy's login folder (FR-081), mounted into the shells and canopy
+  mkdir -p "$HOME/.gemini" || { echo "could not make $HOME/.gemini"; return 1; }
   # the same for the stages: a root .shared would stop canopy copying a
   # stage's inputs in, and a root login folder would keep the stages' own
   # claude and codex logins out
