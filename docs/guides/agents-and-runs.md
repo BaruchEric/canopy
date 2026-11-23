@@ -36,6 +36,8 @@ With Codex, a provider value names an entry already configured on the backend. C
 
 In chat, later messages continue the conversation. **end chat** closes it.
 
+Once a run holds two messages of yours, a rail of ticks runs down the right edge of its console, one tick per message. Point at a tick to see that message's first words, the start of the reply and its place, such as "49 of 96". Click it to bring the message to the top. `Option+Up` and `Option+Down` on a Mac, `Alt` with the same arrows elsewhere, step to the message before or after. They also work from the run's message box while it is empty. Once the box holds a draft, they move the caret as they do in any text field. On a phone or a touch screen the ticks become a bar under the console: the place, which opens the list of your messages, between an up and a down button.
+
 ## Run several at once on one repo
 
 A repo's checkout takes up to 8 runs at once, so an open chat does not stop a job or a second chat from starting. An incubator project is the exception and keeps one run at a time.

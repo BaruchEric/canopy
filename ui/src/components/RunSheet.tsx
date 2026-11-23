@@ -54,6 +54,7 @@ import { forkLine, stepWords } from "../../../src/core/handoff";
 import { branchTask, branchTaskWords, devTask as devTaskOf, renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
 import { AGENT_NAME, CHAT_BRANCH_HINT, OWN_BRANCH_NOTE, harnessOf, hideTodoSteps, nestSteps, resultLine, runBesideFlow, runPanelLabel, settledProposal, tokenTitle, type SettledProposal } from "../runs";
 import { RunTabs } from "./RunTabs";
+import { PromptRail, PromptRailEnd } from "./PromptRail";
 import { HARNESS } from "../../../src/core/harness";
 import { CENTERED } from "../pop";
 import { PopGear, PopGrip, PopHere } from "./PopGrip";
@@ -569,6 +570,7 @@ export function Timeline({
         stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
       }}
     >
+      <PromptRail steps={steps} list={list} onFollow={(on) => (stuck.current = on)} />
       {run.note && (
         <p className="run-note">
           <span className="eyebrow">your note</span>
@@ -662,6 +664,7 @@ export function Timeline({
       )}
       {extra}
       {error && <p className="note err">{error}</p>}
+      <PromptRailEnd />
     </div>
   );
 }
@@ -1607,7 +1610,7 @@ function Step({ step, kids = [] }: { step: RunStep; kids?: readonly RunStep[] })
   }
   if (step.kind === "user") {
     return (
-      <li className="step k-user">
+      <li className="step k-user" data-prompt={step.id}>
         <span className="node" />
         <div className="step-body">
           <span className="eyebrow">you</span>

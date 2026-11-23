@@ -26,6 +26,7 @@ import { NARROW, PHONE, useMedia } from "./media";
 import { PANES_CHANNEL, listenPanes, parsePaneMsg, type PaneMsg } from "./panes";
 import { OVER_PAGE } from "./surface";
 import { CHORD_MS, chordView, copyKeyOf, pressOf, shortcutFor } from "./shortcuts";
+import { stepPromptRail } from "./components/PromptRail";
 import { TYPES_INTO, ringTakes, type RingPress } from "./kbfocus";
 import { KbWatch, kbCopy, kbEnter, kbHide, kbMove, kbPeek, kbZone } from "./components/KbFocus";
 import { Said } from "./components/Said";
@@ -558,6 +559,15 @@ export function App() {
           if ((st.sheet ? st.sheet.kind !== "run" : over) || !(t instanceof Element) || t.closest(TYPES_INTO)) return;
           e.preventDefault();
           chord.current = { key: "yank", at: Date.now() };
+          return;
+        case "message-prev":
+        case "message-next":
+          // the prompt rail (FR-078), from a run's own message box too
+          // while that box is empty. A draft's, a shell's and a select's
+          // Alt+arrows stay theirs, as any other field's do, and a press
+          // no rail takes is left to the browser.
+          if (t.closest(".xterm, .term-screen, select")) return;
+          if (stepPromptRail(sc.action === "message-next" ? 1 : -1, t)) e.preventDefault();
           return;
         case "new":
           // the new box, focused, over the goals and projects going; ⌘N is

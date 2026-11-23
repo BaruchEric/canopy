@@ -1,7 +1,10 @@
 // Drives a running canopy page the way a person would and says what broke:
 // the first load (what comes with the page, what is fetched once it is up),
 // every view from its URL and by switching inside one page, the runs pill's
-// menu with two runs going, a shell that answers, the two load failures
+// menu with two runs going, the prompt rail of a chat of twelve messages (its
+// ticks, a card, a click, the keys from an empty message box and not from a
+// draft, and a phone's bar), a shell that answers,
+// the two load failures
 // (a view's chunk and xterm's refused), a phone: the top bar's first row
 // on the screen, an open panel's section tabs, and no field small enough for
 // iOS to zoom the page onto, and the manager: a goal kept in the run log
@@ -258,6 +261,167 @@ try {
       : "";
     check(sheet.includes("twin") && sheet.includes("the older chat"), `a pick opens that run and not the newest: "${sheet.replace(/\s+/g, " ").trim().slice(0, 60)}"`);
     await page.close();
+  }
+
+  {
+    // The prompt rail (FR-078). A chat of twelve messages, made up as the
+    // runs pill's two are, each answered with a tool step and a reply long
+    // enough that the timeline scrolls. In the run's sheet: a tick a
+    // message, the newest marked with the timeline at its end; a tick's
+    // card; a click and the keys moving the view and the mark. On a phone:
+    // the bar at the timeline's foot, clear of the last step.
+    const asker = await fresh();
+    const tree = (await (await asker.request.get(`${base}/api/tree`)).json()) as { repos: { id: string; name: string }[] };
+    await asker.close();
+    const steps: Record<string, unknown>[] = [];
+    for (let i = 1; i <= 12; i++) {
+      const at = Date.now() - (13 - i) * 60_000;
+      steps.push({ id: `u${i}`, at, kind: "user", text: `Message ${i}: why does the row wrap at ${300 + i}px?` });
+      steps.push({ id: `t${i}`, at: at + 5000, kind: "tool", tool: { name: "Bash", title: "bun test", status: "ok" } });
+      steps.push({ id: `a${i}`, at: at + 9000, kind: "text", text: `Reply ${i}: the row holds seven buttons.\n\nThe widest is the mic.\n\nAt that width the last one drops to a second line.\n\nShrinking the chips to their glyphs keeps all seven on the screen.` });
+    }
+    const chat = {
+      id: "check-rail",
+      repoId: tree.repos.find((r) => r.name === "demo")?.id ?? "demo",
+      action: "chat",
+      verb: "chat",
+      progress: "",
+      expectsChange: false,
+      chat: true,
+      harness: "claude",
+      note: "",
+      status: "idle",
+      startedAt: Date.now() - 13 * 60_000,
+      steps,
+      prompt: null,
+    };
+    /** the rail of the timeline under `scope`, as the page draws it now */
+    const railOf = (page: Page, scope: string) =>
+      page.evaluate((scope) => {
+        const list = document.querySelector<HTMLElement>(`${scope} .sheet-body.console`);
+        if (!list) return null;
+        const box = list.getBoundingClientRect();
+        const ticks = [...list.querySelectorAll<HTMLElement>(":scope > .prompt-rail .rail-tick")];
+        const track = list.querySelector(":scope > .prompt-rail .rail-ticks")?.getBoundingClientRect();
+        const bar = list.querySelector<HTMLElement>(":scope > .prompt-rail-foot > .rail-bar");
+        const first = [...list.querySelectorAll<HTMLElement>("[data-prompt]")].find((el) => el.getBoundingClientRect().bottom > box.top + 1);
+        const last = [...list.querySelectorAll<HTMLElement>(":scope > .steps > li")].pop();
+        return {
+          ticks: ticks.length,
+          marked: ticks.findIndex((t) => t.getAttribute("aria-current") === "true") + 1,
+          inside: track ? track.top >= box.top && track.bottom <= box.bottom && track.right <= box.right : false,
+          card: list.querySelector<HTMLElement>(":scope > .prompt-rail .rail-card")?.innerText.replace(/\s+/g, " ").trim() ?? "",
+          first: first ? `${first.getAttribute("data-prompt")} ${Math.round(first.getBoundingClientRect().top - box.top)}px down` : "none",
+          fromEnd: Math.round(list.scrollHeight - list.clientHeight - list.scrollTop),
+          bar: bar?.innerText.replace(/\s+/g, " ").trim().slice(0, 40) ?? "",
+          short: bar ? [...bar.querySelectorAll("button")].filter((b) => b.getBoundingClientRect().height < 43.5 || b.getBoundingClientRect().width < 43.5).length : -1,
+          clear: bar && last ? Math.round(bar.getBoundingClientRect().top - last.getBoundingClientRect().bottom) : null,
+          wider: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        };
+      }, scope);
+
+    const page = await fresh(undefined, true);
+    await page.route("**/api/runs", (r) => (r.request().method() === "GET" ? r.fulfill({ json: [chat] }) : r.continue()));
+    await page.goto(`${base}/`, { waitUntil: "load" });
+    await page.waitForSelector(".pill.runs", { timeout: 20_000 });
+    await page.locator(".pill.runs").click();
+    const opened = await page.waitForSelector(".sheet-back .sheet-body.console", { timeout: 5000 }).then(() => true, () => false);
+    await page.waitForTimeout(700);
+    const open = opened ? await railOf(page, ".sheet-back") : null;
+    check(
+      open?.ticks === 12 && open.marked === 12 && open.inside && open.fromEnd <= 1,
+      `a chat of 12 messages has a rail of 12 ticks inside its timeline, the newest marked at the end (${open ? `${open.ticks} ticks, marked ${open.marked}, ${open.fromEnd}px from the end` : "no sheet"})`,
+    );
+    if (open?.ticks === 12) {
+      const tick = page.locator(".sheet-back .rail-tick").nth(2);
+      await tick.hover();
+      await page.waitForTimeout(250);
+      const card = await railOf(page, ".sheet-back");
+      check(
+        (card?.card.startsWith("Message 3:") ?? false) && card!.card.includes("Reply 3:") && card!.card.endsWith("3 of 12") && card!.fromEnd <= 1,
+        `a tick under the pointer shows the message's first words, the reply's and its place, and scrolls nothing: "${card?.card.slice(0, 40)}… ${card?.card.slice(-7)}"`,
+      );
+      await page.screenshot({ path: `${shots}/prompt-rail.png` });
+      await tick.click();
+      await page.waitForTimeout(400);
+      const jumped = await railOf(page, ".sheet-back");
+      check(jumped?.marked === 3 && /^u3 \d{1,2}px down$/.test(jumped.first), `a click brings message 3 to the timeline's top and marks its tick (marked ${jumped?.marked}, first shown ${jumped?.first})`);
+      // the keys, from the message box while it is empty, which keeps the focus
+      await page.evaluate(() => {
+        // a 1 for each arrow press the page took, a 0 for each it left to
+        // the browser. Added after the page's own listener and on the
+        // window as it bubbles, so the page has had the press by then.
+        const seen = document.documentElement.dataset;
+        window.addEventListener("keydown", (e) => {
+          if (e.key.startsWith("Arrow")) seen.railKeys = `${seen.railKeys ?? ""}${e.defaultPrevented ? 1 : 0}`;
+        });
+      });
+      await page.locator(".sheet-back .composer-box").click();
+      await page.keyboard.press("Alt+ArrowDown");
+      await page.waitForTimeout(300);
+      const after = await railOf(page, ".sheet-back");
+      await page.keyboard.press("Alt+ArrowUp");
+      await page.keyboard.press("Alt+ArrowUp");
+      await page.waitForTimeout(300);
+      const before = await railOf(page, ".sheet-back");
+      const typing = await page.evaluate(() => document.activeElement?.classList.contains("composer-box") ?? false);
+      check(
+        after?.marked === 4 && after.first.startsWith("u4 ") && before?.marked === 2 && before.first.startsWith("u2 ") && typing,
+        `Alt and the arrows step to the message after and before, from the empty message box (marked ${after?.marked}, then ${before?.marked}; the box ${typing ? "keeps" : "lost"} the focus)`,
+      );
+      // with a draft in the box the same keys are the draft's own caret moves
+      const box = page.locator(".sheet-back .composer-box");
+      await box.fill("half a thought");
+      await page.evaluate(() => (document.documentElement.dataset.railKeys = ""));
+      await page.keyboard.press("Alt+ArrowDown");
+      await page.keyboard.press("Alt+ArrowUp");
+      await page.waitForTimeout(300);
+      const drafting = await railOf(page, ".sheet-back");
+      const taken = await page.evaluate(() => document.documentElement.dataset.railKeys ?? "");
+      const words = await box.inputValue();
+      await box.fill("");
+      await page.keyboard.press("Alt+ArrowDown");
+      await page.waitForTimeout(300);
+      const emptied = await railOf(page, ".sheet-back");
+      check(
+        drafting?.marked === 2 && drafting.first === before?.first && taken === "00" && words === "half a thought" && emptied?.marked === 3 && emptied.first.startsWith("u3 "),
+        `with a draft in the box the keys stay the browser's and the rail stays put (marked ${drafting?.marked}, presses taken "${taken}"), and with the box emptied they step again (marked ${emptied?.marked})`,
+      );
+      // by hand: the mark follows the view
+      await page.locator(".sheet-back .sheet-body.console").hover();
+      await page.mouse.wheel(0, 50_000);
+      await page.waitForTimeout(500);
+      const end = await railOf(page, ".sheet-back");
+      check(end?.marked === 12 && end.fromEnd <= 1, `scrolled to the end by hand, the newest tick is marked again (marked ${end?.marked})`);
+    }
+    await page.close();
+
+    const phone = await fresh(undefined, true, true);
+    await phone.route("**/api/runs", (r) => (r.request().method() === "GET" ? r.fulfill({ json: [chat] }) : r.continue()));
+    await phone.goto(`${base}/?view=run&run=check-rail`, { waitUntil: "load" });
+    const barred = await phone.waitForSelector(".run-solo .rail-bar", { timeout: 20_000 }).then(() => true, () => false);
+    await phone.waitForTimeout(700);
+    const bar = barred ? await railOf(phone, ".run-solo") : null;
+    check(
+      bar !== null && bar.ticks === 0 && bar.bar.includes("12 of 12") && bar.short === 0 && (bar.clear ?? -1) >= 0 && bar.fromEnd <= 1 && bar.wider <= 0,
+      `on a phone the rail is a bar at the timeline's foot, its buttons a finger's size, the last step clear of it (${bar ? `"${bar.bar}", ${bar.short} short, ${bar.clear}px clear, ${bar.fromEnd}px from the end` : "no bar"})`,
+    );
+    if (bar) {
+      await phone.screenshot({ path: `${shots}/prompt-rail-phone.png` });
+      await phone.locator(".run-solo .rail-where select").selectOption("4");
+      await phone.waitForTimeout(350);
+      const picked = await railOf(phone, ".run-solo");
+      await phone.locator(".run-solo .rail-go").last().tap();
+      await phone.waitForTimeout(350);
+      const next = await railOf(phone, ".run-solo");
+      check(
+        (picked?.bar.includes("5 of 12") ?? false) && picked!.first.startsWith("u5 ") && (next?.bar.includes("6 of 12") ?? false) && next!.first.startsWith("u6 "),
+        `its place opens the list of messages and its arrows step (a pick: "${picked?.bar.slice(0, 12)}" at ${picked?.first}; then ↓: "${next?.bar.slice(0, 12)}" at ${next?.first})`,
+      );
+      const small = await smallFields(phone);
+      check(small.length === 0, `and its picker is no field iOS would zoom onto${small.length ? `: ${[...new Set(small)].join(", ")}` : ""}`);
+    }
+    await phone.close();
   }
 
   {

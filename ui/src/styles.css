@@ -8298,6 +8298,219 @@ a.sweep-title:hover {
   background: var(--wash);
 }
 
+/* the prompt rail (FR-078): a tick per message the user sent, in the
+   console's right gutter. The rail is the first thing in the scrolling
+   body and takes no room there: it sticks to the body's top, and its ticks
+   hang off it for the body's height, which PromptRail.tsx sets as --rail-h.
+   The ticks sit together in the middle, and share the height once there
+   are more than it holds at their own size. */
+.prompt-rail {
+  position: sticky;
+  top: 0;
+  /* over the pinned checklist, which a tick's card may cross */
+  z-index: 2;
+  height: 0;
+}
+.rail-ticks {
+  position: absolute;
+  top: 0;
+  right: -16px;
+  width: 16px;
+  height: var(--rail-h, 0px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  /* only a tick takes the pointer, so the gutter's ends stay the scroller's */
+  pointer-events: none;
+}
+.rail-tick {
+  position: relative;
+  flex: 0 1 9px;
+  /* no floor: more ticks than the body has px still fit inside it */
+  min-height: 0;
+  pointer-events: auto;
+}
+.rail-tick::before {
+  content: "";
+  position: absolute;
+  right: 4px;
+  top: calc(50% - 1px);
+  width: 6px;
+  height: 2px;
+  /* hundreds of ticks are each thinner than a dash: it thins with them, so they stay apart */
+  max-height: 60%;
+  border-radius: 1px;
+  background: var(--ink-faint);
+}
+.rail-tick:hover::before,
+.rail-tick:focus-visible::before {
+  width: 10px;
+  background: var(--ink);
+}
+/* the message in view */
+.rail-tick[aria-current="true"]::before {
+  width: 10px;
+  background: var(--moss);
+}
+/* a thin tick has no room for the page's ring; the card and the long dash say where the focus is */
+.rail-tick:focus-visible {
+  outline: none;
+}
+.rail-tick:focus-visible::before {
+  outline: 2px solid var(--sky);
+  outline-offset: 1px;
+}
+/* a tick's card: the message's first words, the reply's, its place. A
+   floating layer, beside its tick and never under the pointer. */
+.rail-card {
+  position: absolute;
+  right: 6px;
+  width: min(300px, 100% - 12px);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: var(--float);
+  border: 1px solid var(--float-edge);
+  border-radius: 10px;
+  box-shadow:
+    0 2px 6px -2px var(--float-shadow),
+    0 16px 36px -16px var(--float-shadow);
+  font-size: var(--t-md);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.rail-card-words,
+.rail-card-reply {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.rail-card-words {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  font-weight: 600;
+  color: var(--ink);
+}
+.rail-card-reply {
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  color: var(--ink-dim);
+}
+.rail-card-place {
+  font-size: var(--t-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+/* the timeline's end, which the rail watches for, and the foot its bar
+   sits in on a touch screen: stuck to the body's lower edge, as the
+   checklist is to its top, and out to the console's own edges */
+.prompt-rail-end {
+  display: block;
+  height: 1px;
+  margin-top: -1px;
+  pointer-events: none;
+}
+.prompt-rail-foot {
+  position: sticky;
+  bottom: -16px;
+  z-index: 2;
+}
+.prompt-rail-foot:not(:empty) {
+  margin: 10px -16px -16px;
+}
+/* a finger cannot hit a tick: the place, which opens the list of
+   messages, between the one before and the one after */
+.rail-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  background: var(--float);
+  border-top: 1px solid var(--hair);
+}
+.rail-go {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r);
+  font-size: var(--t-xl);
+  color: var(--ink-dim);
+}
+.rail-go:hover,
+.rail-go:active {
+  color: var(--ink);
+  background: var(--wash);
+}
+.rail-where {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  border-radius: var(--r);
+  font-size: var(--t-md);
+}
+.rail-where:focus-within {
+  outline: 2px solid var(--sky);
+  outline-offset: -2px;
+}
+.rail-where-n {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.rail-where-words {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-faint);
+}
+.rail-where-open {
+  flex: none;
+  color: var(--ink-faint);
+}
+/* the browser's own picker over the words: 16px, so iOS does not zoom the page onto it */
+.rail-where select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  font-size: 16px;
+  cursor: pointer;
+}
+/* a timeline inside another scrolling body (a workflow's step at its gate)
+   does not scroll itself, so it has nothing for a rail to step through */
+.console .console .prompt-rail,
+.console .console .prompt-rail-foot {
+  display: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rail-tick::before {
+    transition:
+      width 0.12s ease,
+      background-color 0.12s ease;
+  }
+  /* the message a jump landed on, lit for a moment so the eye finds it */
+  .k-user[data-rail-lit] .step-body {
+    animation: rail-lit 1.1s ease-out;
+  }
+  @keyframes rail-lit {
+    from {
+      background: color-mix(in srgb, var(--moss) 26%, var(--wash));
+    }
+  }
+}
+
 /* plan, then build: the settled plan as a card at the top, the agent's
    checklist pinned above the timeline, a subagent's steps under its call */
 .proposal {

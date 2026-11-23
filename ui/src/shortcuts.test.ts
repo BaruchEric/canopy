@@ -4,14 +4,18 @@ import { GO, SHORTCUTS, YANK, chordView, copyKeyOf, keyCaps, pressOf, shortcutFo
 const press = (key: string, mods: Partial<{ metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) =>
   pressOf({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods });
 
-test("pressOf names ⌘ and Ctrl alike as mod, keeps a bare key as typed, and drops Alt", () => {
+test("pressOf names ⌘ and Ctrl alike as mod, keeps a bare key as typed, and names Alt alone", () => {
   expect(press("k", { metaKey: true })).toBe("mod+k");
   expect(press("k", { ctrlKey: true })).toBe("mod+k");
   expect(press("F", { metaKey: true, shiftKey: true })).toBe("mod+shift+f");
   expect(press("?", { shiftKey: true })).toBe("?");
   expect(press("F", { shiftKey: true })).toBe("F");
   expect(press("Escape")).toBe("Escape");
-  expect(press("k", { altKey: true })).toBeNull();
+  // Alt alone is named with the key as it came; with another modifier it is no shortcut's
+  expect(press("ArrowUp", { altKey: true })).toBe("alt+ArrowUp");
+  expect(press("k", { altKey: true })).toBe("alt+k");
+  expect(press("ArrowUp", { altKey: true, shiftKey: true })).toBeNull();
+  expect(press("k", { altKey: true, metaKey: true })).toBeNull();
 });
 
 test("shortcutFor finds a press on the views it works on and nowhere else", () => {
@@ -29,8 +33,8 @@ test("shortcutFor finds a press on the views it works on and nowhere else", () =
 
 test("shortcutsOn lists every shortcut on git and only the everywhere ones and the view's own elsewhere", () => {
   expect(shortcutsOn("git")).toHaveLength(SHORTCUTS.length);
-  expect(shortcutsOn("manager").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g", "y", "n"]);
-  expect(shortcutsOn("library").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g", "y"]);
+  expect(shortcutsOn("manager").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g", "y", "alt+ArrowUp", "alt+ArrowDown", "n"]);
+  expect(shortcutsOn("library").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g", "y", "alt+ArrowUp", "alt+ArrowDown"]);
 });
 
 test("no press means two things on one view", () => {
@@ -80,6 +84,20 @@ test("keyCaps shows mod as ⌘ on Apple and Ctrl elsewhere", () => {
   expect(keyCaps(" ", true)).toEqual(["Space"]);
   expect(keyCaps("ArrowDown", false)).toEqual(["↓"]);
   expect(keyCaps("Enter", false)).toEqual(["Enter"]);
+  // the prompt rail's arrows: ⌥ on an Apple keyboard, Alt elsewhere
+  expect(keyCaps("alt+ArrowUp", true)).toEqual(["⌥", "↑"]);
+  expect(keyCaps("alt+ArrowDown", false)).toEqual(["Alt", "↓"]);
+});
+
+test("the prompt rail's keys step on every view and from a text box", () => {
+  for (const view of ["git", "manager", "run", "agents"]) {
+    expect(shortcutFor("alt+ArrowUp", view)).toMatchObject({ action: "message-prev", anywhere: true });
+    expect(shortcutFor("alt+ArrowDown", view)).toMatchObject({ action: "message-next", anywhere: true });
+  }
+  // the keys sheet says when a message box gives them up
+  expect(shortcutFor("alt+ArrowUp", "git")?.what).toContain("while the box is empty");
+  // the ring's own arrows are still the ring's
+  expect(shortcutFor("ArrowUp", "git")?.action).toBe("prev");
 });
 
 test("y arms the copy chord on every view, and copyKeyOf names the part a letter copies", () => {
