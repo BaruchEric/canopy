@@ -1,6 +1,6 @@
 import { HealthChip } from "./Health";
 import { CapacityChip } from "./Capacity";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
@@ -39,6 +39,9 @@ import { RangerChip } from "./Ranger";
 import { TasksChip } from "./Tasks";
 import { VoiceButton } from "./Voice";
 import { SourcesMenu } from "./Sources";
+import { chipId, crowdedChips, speaking, type BarChipId } from "../quietbar";
+import { BarMore } from "./BarMore";
+import { useBarChips } from "./useBarChips";
 
 /** The three crowns and a trunk. `live` makes them breathe (loading screen). */
 export function Crowns({ size = 18, live = false }: { size?: number; live?: boolean }) {
@@ -89,6 +92,7 @@ const SORT = [
   { value: "name", label: "name", title: "One flat list, a to z" },
   { value: "user", label: "user", title: "By the git identity each repo commits as" },
   { value: "favorites", label: "★ favorites", title: "Favorites first, then everything else, each newest change first" },
+  { value: "state", label: "state", title: "By what goes on at each repo: needs you, working, unread, idle, each newest change first" },
 ] as const;
 
 /** Live runs across the grove. Absent when nothing is going. One run opens
@@ -940,7 +944,314 @@ function PhoneBar({ nav }: { nav?: ReactNode }) {
  *  the backend itself, each chip absent when it has nothing to say. */
 export function TopBar({ nav }: { nav?: ReactNode }) {
   const phone = useMedia(PHONE);
+  // the intermediate level's bar is the quiet one (FR-079); advanced keeps every chip out
+  const quiet = useStore((s) => s.settings.level === "intermediate");
+  if (quiet) return phone ? <QuietPhoneBar nav={nav} /> : <QuietWideBar nav={nav} />;
   return phone ? <PhoneBar nav={nav} /> : <WideBar nav={nav} />;
+}
+
+/** One chip of the quiet bar: on the bar while it has something to say, put
+ *  away while it has not. Put away it is still mounted, so its shortcut, its
+ *  popover and the bar's menu (`pressChip`) all reach it, and the stylesheet
+ *  shows it for as long as its popover is open. */
+function Tuck({ id, on, children }: { id: BarChipId; on: ReadonlySet<BarChipId>; children: ReactNode }) {
+  return (
+    <span className={on.has(id) ? "tb-tuck" : "tb-tuck quiet"} data-tuck={id}>
+      {children}
+    </span>
+  );
+}
+
+/** A chip that is on the quiet bar only while its popover is open leaves the
+ *  bar when the popover closes, and a popover that hands the focus back to
+ *  its chip hands it to nothing: the next Tab would start at the top of the
+ *  page. After a close by a key (Escape, or a pick with Enter) the focus goes
+ *  to the bar's menu, where the chip was picked. A close by a click leaves
+ *  the focus where the click put it. */
+function useFocusBack(bar: RefObject<HTMLElement | null>): void {
+  useEffect(() => {
+    const el = bar.current;
+    if (!el || typeof MutationObserver !== "function") return;
+    let byKey = false;
+    const onKey = () => {
+      byKey = true;
+    };
+    const onPoint = () => {
+      byKey = false;
+    };
+    const watch = new MutationObserver((changes) => {
+      if (!byKey) return;
+      const shut = changes.some((c) => c.oldValue === "true" && c.target instanceof HTMLElement && c.target.getAttribute("aria-expanded") !== "true" && c.target.closest(".tb-tuck.quiet") !== null);
+      if (!shut) return;
+      // a frame later, once the popover has handed the focus back
+      requestAnimationFrame(() => {
+        const at = document.activeElement;
+        const lost = at === null || at === document.body || (at instanceof HTMLElement && at.closest(".tb-tuck.quiet") !== null && at.getClientRects().length === 0);
+        if (lost) el.querySelector<HTMLElement>(".bar-more-btn")?.focus();
+      });
+    });
+    watch.observe(el, { subtree: true, attributes: true, attributeFilter: ["aria-expanded"], attributeOldValue: true });
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("pointerdown", onPoint, true);
+    return () => {
+      watch.disconnect();
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("pointerdown", onPoint, true);
+    };
+  }, [bar]);
+}
+
+const NO_CHIPS: ReadonlySet<BarChipId> = new Set();
+/** the gap a chip keeps from the one before it, as `.tb-cluster` sets it */
+const CHIP_GAP = 4;
+
+/** The speaking chips the wide quiet bar's row has no room for, so the bar
+ *  stays one row whatever speaks (`crowdedChips`). Measured off the row, as
+ *  `useSplit` measures the advanced bar: what the row holds besides the
+ *  chips, with the filter box at its least, is what the chips cannot have.
+ *  A chip's width is kept from the last time it was drawn, since one that is
+ *  crowded out has no box to measure. The sum leaves out the chips and the
+ *  gap before their run whether or not any shows, so the answer is the same
+ *  before and after it is applied and cannot flip back and forth. */
+function useCrowded(bar: RefObject<HTMLElement | null>, speaks: ReadonlySet<BarChipId>): ReadonlySet<BarChipId> {
+  const [crowded, setCrowded] = useState<ReadonlySet<BarChipId>>(NO_CHIPS);
+  const widths = useRef<Partial<Record<BarChipId, number>>>({});
+  const said = useRef(speaks);
+  said.current = speaks;
+  const key = [...speaks].join(" ");
+  useLayoutEffect(() => {
+    const el = bar.current;
+    const line = el?.querySelector<HTMLElement>(":scope > .tb-line");
+    if (!el || !line) return;
+    const measure = () => {
+      const gap = parseFloat(getComputedStyle(line).columnGap) || 0;
+      const kids = Array.from(line.children, (c) => c.getBoundingClientRect().width).filter((w) => w > 0);
+      const used = kids.reduce((a, b) => a + b, 0) + gap * Math.max(0, kids.length - 1);
+      const box = line.querySelector<HTMLElement>(".tb-show > .search");
+      const give = box ? Math.max(0, box.getBoundingClientRect().width - (parseFloat(getComputedStyle(box).minWidth) || 0)) : 0;
+      // the chips in the filter's run each add their width and a gap
+      let chips = 0;
+      for (const t of line.querySelectorAll<HTMLElement>(".tb-show > [data-tuck]")) {
+        const id = chipId(t.dataset.tuck);
+        const w = t.firstElementChild?.getBoundingClientRect().width ?? 0;
+        if (id === null || w <= 0) continue;
+        widths.current[id] = w;
+        chips += w + CHIP_GAP;
+      }
+      // the run of their own: its whole width, and the group's gap before it
+      const run = line.querySelector<HTMLElement>(".tb-now");
+      const group = run?.parentElement;
+      const before = group ? parseFloat(getComputedStyle(group).columnGap) || 0 : 0;
+      const runWidth = run?.getBoundingClientRect().width ?? 0;
+      if (run && runWidth > 0) {
+        chips += runWidth + before;
+        for (const t of run.querySelectorAll<HTMLElement>("[data-tuck]")) {
+          const id = chipId(t.dataset.tuck);
+          const w = t.firstElementChild?.getBoundingClientRect().width ?? 0;
+          if (id !== null && w > 0) widths.current[id] = w;
+        }
+      }
+      const room = line.clientWidth - (used - give - chips) - before;
+      const next = crowdedChips(said.current, widths.current, room, CHIP_GAP);
+      setCrowded((was) => (was.size === next.size && [...next].every((id) => was.has(id)) ? was : next));
+    };
+    const seen = new ResizeObserver(measure);
+    // the row's items come and go, and each one's width moves with its words
+    const watch = () => {
+      seen.disconnect();
+      seen.observe(el);
+      for (const c of line.children) seen.observe(c);
+      measure();
+    };
+    watch();
+    const kids = new MutationObserver(watch);
+    kids.observe(line, { childList: true });
+    return () => {
+      seen.disconnect();
+      kids.disconnect();
+    };
+  }, [bar, key]);
+  return crowded;
+}
+
+/** the chips a wide quiet bar shows in one run, in the advanced bar's order */
+const NOW_WIDE: readonly BarChipId[] = ["sources", "rescan", "workspaces", "feed", "select", "waiting", "inbox", "notes", "clips", "chan", "runs", "shells", "kept", "tasks", "ranger", "capacity", "health", "backend"];
+/** the same run on a phone, less what its first row keeps */
+const NOW_PHONE: readonly BarChipId[] = ["sort", "sources", "rescan", "workspaces", "feed", "select", "inbox", "notes", "clips", "chan", "runs", "shells", "kept", "ranger", "capacity", "health"];
+
+/** each chip the quiet bar may put away, as the advanced bar draws it */
+function chipOf(id: BarChipId, compact: boolean): ReactNode {
+  switch (id) {
+    case "sort":
+      return <SortMenu />;
+    case "attention":
+      return <AttentionPill />;
+    case "filters":
+      return <FilterMenu />;
+    case "sources":
+      return <SourcesMenu />;
+    case "rescan":
+      return <RescanButton />;
+    case "workspaces":
+      return <WsMenu />;
+    case "feed":
+      return <FeedButton />;
+    case "select":
+      return <SelectPill />;
+    case "waiting":
+      return <WaitingButton />;
+    case "inbox":
+      return <InboxChip />;
+    case "notes":
+      return <NotesChip />;
+    case "clips":
+      return <ClipsChip />;
+    case "chan":
+      return <ChanChip />;
+    case "runs":
+      return <RunsPill />;
+    case "shells":
+      return <ShellsChip />;
+    case "kept":
+      return <KeptShells />;
+    case "tasks":
+      return <TasksChip />;
+    case "ranger":
+      return <RangerChip compact={compact} />;
+    case "capacity":
+      return <CapacityChip />;
+    case "health":
+      return <HealthChip />;
+    case "backend":
+      return <BackendMenu />;
+  }
+}
+
+/** A run of the quiet bar's chips, each in its `Tuck`; the run takes no room
+ *  while none of them speaks. */
+function Tucked({ label, ids, on, compact = false }: { label: string; ids: readonly BarChipId[]; on: ReadonlySet<BarChipId>; compact?: boolean }) {
+  return (
+    <Cluster label={label} className={ids.some((id) => on.has(id)) ? "tb-now" : "tb-now tb-none"}>
+      {ids.map((id) => (
+        <Tuck key={id} id={id} on={on}>
+          {chipOf(id, compact)}
+        </Tuck>
+      ))}
+    </Cluster>
+  );
+}
+
+/** The quiet bar on anything wider than a phone (FR-079): one row. The
+ *  views, the filter box, search, the command line, the mic, + new and
+ *  settings stay; a chip sits between them only while it has something to
+ *  say (`quietbar.ts`), and the menu before settings lists every chip with
+ *  its state. A row with more speaking than it can hold wraps. */
+function QuietWideBar({ nav }: { nav?: ReactNode }) {
+  const narrow = useMedia(NARROW);
+  const bar = useRef<HTMLElement>(null);
+  const chips = useBarChips();
+  const speaks = useMemo(() => speaking(chips), [chips]);
+  const crowded = useCrowded(bar, speaks);
+  useFocusBack(bar);
+  // on the bar: what speaks, less what the row has no room for
+  const on = useMemo(() => new Set([...speaks].filter((id) => !crowded.has(id))), [speaks, crowded]);
+  return (
+    <header ref={bar} className="topbar calm">
+      <div className="tb-line tb-top">
+        <SideToggle />
+        <Wordmark version />
+        {nav}
+        <Cluster label="Show" className="tb-show">
+          <Tuck id="sort" on={on}>
+            <SortMenu />
+          </Tuck>
+          <Tuck id="attention" on={on}>
+            <AttentionPill />
+          </Tuck>
+          <Tuck id="filters" on={on}>
+            <FilterMenu />
+          </Tuck>
+          <FilterBox />
+        </Cluster>
+        <span className="topbar-group topbar-tail">
+          <SignInChips />
+          <ReloadChip />
+          <Tucked label="Right now" ids={NOW_WIDE} on={on} compact={narrow} />
+          <Cluster label="Find and make">
+            <SearchButton />
+            <CliButton />
+            <VoiceButton />
+            <NewButton />
+          </Cluster>
+          <Cluster label="The rest">
+            <BarMore chips={chips} crowded={crowded} />
+            <SettingsMenu />
+          </Cluster>
+        </span>
+      </div>
+    </header>
+  );
+}
+
+/** The quiet bar on a phone: two rows where the advanced bar has three. The
+ *  first keeps the views and the few buttons a thumb reaches for, with what
+ *  waits on you, the tasks and the backend's light only while they speak;
+ *  the second is the filter box, the chips that speak, + new and the
+ *  command line, which scroll sideways when they outgrow it, and the menu,
+ *  which holds its place at the row's end. It folds away with the cards as
+ *  the advanced bar's lower rows do. */
+function QuietPhoneBar({ nav }: { nav?: ReactNode }) {
+  const head = useRef<HTMLElement>(null);
+  const fold = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const [tucked, show] = useTuck(head, fold);
+  useScrollEdges(scroller);
+  useFocusBack(head);
+  const chips = useBarChips();
+  const on = useMemo(() => speaking(chips), [chips]);
+  return (
+    <header ref={head} className={tucked ? "topbar phone calm tucked" : "topbar phone calm"} onFocus={show}>
+      <div className="tb-line">
+        <SideToggle />
+        <Wordmark />
+        {nav}
+        <span className="spacer" />
+        <SignInChips />
+        <ReloadChip />
+        <Tucked label="Waiting and tasks" ids={["waiting", "tasks"]} on={on} />
+        <Cluster label="This page">
+          <Tuck id="backend" on={on}>
+            <BackendMenu />
+          </Tuck>
+          <SearchButton />
+          <VoiceButton />
+          <SettingsMenu />
+        </Cluster>
+      </div>
+      <div className="tb-fold" inert={tucked}>
+        <div ref={fold} className="tb-fold-in">
+          {/* the menu holds its place at the row's end while the rest scrolls */}
+          <div className="tb-line tb-tools tb-pinned">
+            <div ref={scroller} className="tb-line tb-tools tb-scroll">
+              <FilterBox />
+              <Tuck id="attention" on={on}>
+                <AttentionPill />
+              </Tuck>
+              <Tuck id="filters" on={on}>
+                <FilterMenu />
+              </Tuck>
+              <Tucked label="Right now" ids={NOW_PHONE} on={on} compact />
+              <Cluster label="Make">
+                <NewButton />
+                <CliButton />
+              </Cluster>
+            </div>
+            <BarMore chips={chips} />
+          </div>
+        </div>
+      </div>
+    </header>
+  );
 }
 
 function WideBar({ nav }: { nav?: ReactNode }) {

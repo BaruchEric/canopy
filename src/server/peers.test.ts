@@ -287,16 +287,27 @@ describe("applyPeerState broadcasts only on a real change", () => {
     await Bun.$`git clone -q ${stableRoot} ${stableOther}`.quiet();
     await fetch(url("/api/rescan"), { method: "POST" });
 
-    const before1 = await seenAt();
-    await fetch(url("/api/peers/sync"), { method: "POST" });
-    await waitFor(async () => (await seenAt()) > before1);
+    const stableAt = async (): Promise<number | undefined> => {
+      const tree = (await (await fetch(url("/api/tree"))).json()) as { repos: Repo[] };
+      return tree.repos.find((r) => r.id === "stable")?.peers?.at;
+    };
+    // A sync asked for while a pass is pending joins that pass (queuePass),
+    // and the server's own first activity pass, 3 s after it came up, lands
+    // about here. That pass listed its repos before the rescan above, so it
+    // ends with no state for "stable", which under load failed the check on
+    // at1 below. A pass that starts once the joined one has ended does list
+    // the repo, so ask until one has covered it.
+    for (let asked = 0; asked < 5 && (await stableAt()) === undefined; asked++) {
+      const before1 = await seenAt();
+      await fetch(url("/api/peers/sync"), { method: "POST" });
+      await waitFor(async () => (await seenAt()) > before1);
+    }
     // a genuinely settled first pass: past the fs watcher's own 400ms
     // debounce on the git fetch this pass just did, so a watcher-driven
     // status rebroadcast (same peers, unconditional) does not read as a
     // second applyPeerState broadcast below
     await Bun.sleep(500);
-    const tree1 = (await (await fetch(url("/api/tree"))).json()) as { repos: Repo[] };
-    const at1 = tree1.repos.find((r) => r.id === "stable")?.peers?.at;
+    const at1 = await stableAt();
     expect(at1).toBeDefined();
 
     const listener = listenRepo("stable");
@@ -323,6 +334,46 @@ describe("applyPeerState broadcasts only on a real change", () => {
     } finally {
       listener.stop();
     }
+  });
+
+  test("a status re-read under way while a sync lands keeps the peer state the sync set", async () => {
+    const repo = join(root, "reread");
+    await mkdir(repo, { recursive: true });
+    await git(repo, "init", "-q", "-b", "main");
+    await git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "one");
+    await Bun.$`git clone -q ${repo} ${join(other, "reread")}`.quiet();
+    await fetch(url("/api/rescan"), { method: "POST" });
+
+    // git status asks core.fsmonitor's command what changed. This one keeps
+    // its first caller, the re-read's status, waiting for as long as the hold
+    // file is there, and lets every later caller (the sync's own status)
+    // straight through. So the re-read starts from the card as it was before
+    // the sync and ends after it.
+    const hold = join(scratch, "reread-hold");
+    const first = join(scratch, "reread-first");
+    const hook = join(scratch, "reread-fsmonitor");
+    await Bun.write(hold, "");
+    await Bun.write(hook, `#!/bin/sh\nif mkdir '${first}' 2>/dev/null; then while [ -e '${hold}' ]; do sleep 0.05; done; fi\n`);
+    await Bun.$`chmod +x ${hook}`.quiet();
+    await git(repo, "config", "core.fsmonitor", hook);
+    let at: number | undefined;
+    try {
+      const reread = fetch(url("/api/repos/refresh?id=reread"), { method: "POST" });
+      await waitFor(() => existsSync(first));
+      expect(existsSync(first)).toBe(true);
+      const synced = (await (await fetch(url("/api/repos/peer?id=reread"), { method: "POST", body: JSON.stringify({ action: "sync" }) })).json()) as Repo;
+      at = synced.peers?.at;
+      expect(at).toBeDefined();
+      await rm(hold);
+      // what the re-read answers and broadcasts
+      const after = (await (await reread).json()) as Repo;
+      expect(after.peers?.at).toBe(at);
+    } finally {
+      await rm(hold, { force: true });
+    }
+    // and what the tree keeps
+    const tree = (await (await fetch(url("/api/tree"))).json()) as { repos: Repo[] };
+    expect(tree.repos.find((r) => r.id === "reread")?.peers?.at).toBe(at);
   });
 });
 

@@ -95,6 +95,15 @@ describe("boardOrder", () => {
   });
 });
 
+describe("boardOrder by state", () => {
+  test("follows the state groups, so a range runs down the board as it is drawn", () => {
+    const repos = [repo("a/one", "a", {}), repo("b/two", "b", {}), repo("c/three", "c", {})];
+    const state = (r: { id: string }) => (r.id === "c/three" ? "needs" : r.id === "a/one" ? "unread" : "idle");
+    expect(boardOrder(repos, "state", [], undefined, undefined, state)).toEqual(["c/three", "a/one", "b/two"]);
+    expect(boardOrder(repos, "state", ["state:unread"], undefined, undefined, state)).toEqual(["c/three", "b/two"]);
+  });
+});
+
 describe("pickWhere", () => {
   test("picks the repos in one state, never a remote or unreadable one", () => {
     const repos = [

@@ -80,5 +80,6 @@ Press `?` outside a text field for the shortcuts available on the current view.
 | `g`, then `h` | Health |
 | `w` in git | Waiting on you |
 | `x` in git | Toggle repo selection for bulk actions |
+| `Option+Up`, `Option+Down` on Mac, `Alt` elsewhere | In a run, the message you sent before or after the place in view. From the run's message box, only while it is empty |
 
 Type the second key of a `g` sequence within 1.5 seconds. Single-key shortcuts do not apply while typing in text fields or terminals.

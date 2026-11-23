@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CostEntry } from "./costs";
-import { CapacityHeldError, DEFAULT_CAPACITY, HIT_GRACE, HIT_HOLD, READ_EVERY, decide, emptyCapacity, hitOfLimited, hitStands, holdWords, isCapacityWords, isLimitText, laterPriority, limitHit, limitedWords, normalizeCapacity, observe, parsePriority, patchCapacity, readRateLimit, readUsage, resetWord, stale, type Capacity } from "./capacity";
+import { CapacityHeldError, DEFAULT_CAPACITY, HIT_GRACE, HIT_HOLD, READ_EVERY, decide, emptyCapacity, fade, hear, hitOfLimited, hitStands, holdWords, isCapacityWords, isLimitText, laterPriority, limitHit, limitedWords, normalizeCapacity, observe, parsePriority, patchCapacity, readCodexLimits, readRateLimit, readUsage, resetWord, stale, type Capacity } from "./capacity";
 
 // These are synthetic fixtures for the documented response/text shapes, not
 // captured output from a live endpoint or credential.
@@ -204,5 +204,110 @@ describe("plan 2: priorities, holds and the CLI's own reset", () => {
     expect(patchCapacity(DEFAULT_CAPACITY, { normalHold: 2 })).toBe("normalHold must be above 0 and at most 1");
     expect(patchCapacity(DEFAULT_CAPACITY, { observedFiveHourUsd: -3 })).toBe("observedFiveHourUsd must be a dollar figure above 0, or null");
     expect(patchCapacity(DEFAULT_CAPACITY, [])).toBe("the settings must be an object");
+  });
+});
+
+describe("the harness's own count, heard on a run's stream", () => {
+  // the event Claude Code 2.1.330 sent on a Max plan, with other numbers
+  const EVENT = {
+    type: "rate_limit_event",
+    rate_limit_info: {
+      status: "allowed",
+      resetsAt: THU_3PM / 1000,
+      rateLimitType: "seven_day",
+      overageStatus: "rejected",
+      overageDisabledReason: "org_level_disabled",
+      isUsingOverage: false,
+      unifiedWindows: {
+        seven_day: { utilization: 0.56, resetsAt: THU_3PM / 1000, status: "allowed" },
+        seven_day_overage_included: { utilization: 0.37, resetsAt: THU_3PM / 1000, status: "allowed" },
+      },
+    },
+  };
+  const event = (info: Record<string, unknown>) => ({ type: "rate_limit_event", rate_limit_info: info });
+
+  test("readRateLimit reads each window the event names; one it cannot read is left out", () => {
+    expect(readRateLimit(EVENT)).toEqual({ status: "allowed", resetsAt: THU_3PM, window: "weekly", windows: { weekly: { used: 0.56, resetsAt: THU_3PM } } });
+    const both = event({ status: "allowed_warning", unifiedWindows: { five_hour: { utilization: 0.82, resetsAt: AT_3PM / 1000 }, seven_day: { utilization: "lots", resetsAt: THU_3PM / 1000 } } });
+    expect(readRateLimit(both)?.windows).toEqual({ fiveHour: { used: 0.82, resetsAt: AT_3PM } });
+    // a share may pass 1, and a window with no reset is no reading
+    expect(readRateLimit(event({ status: "rejected", unifiedWindows: { five_hour: { utilization: 1.04, resetsAt: AT_3PM / 1000 } } }))?.windows).toEqual({ fiveHour: { used: 1.04, resetsAt: AT_3PM } });
+    expect(readRateLimit(event({ status: "allowed", unifiedWindows: { five_hour: { utilization: 0.1 } } }))).toEqual({ status: "allowed", resetsAt: null, window: null });
+  });
+
+  test("a CLI that names only the limiting window gives that one; a model's own week is not the plan's", () => {
+    expect(readRateLimit(event({ status: "allowed_warning", resetsAt: AT_3PM / 1000, rateLimitType: "five_hour", utilization: 0.91 }))?.windows).toEqual({ fiveHour: { used: 0.91, resetsAt: AT_3PM } });
+    expect(readRateLimit(event({ status: "allowed", resetsAt: THU_3PM / 1000, rateLimitType: "seven_day", utilization: 0.4 }))?.windows).toEqual({ weekly: { used: 0.4, resetsAt: THU_3PM } });
+    expect(readRateLimit(event({ status: "allowed", resetsAt: THU_3PM / 1000, rateLimitType: "seven_day_opus", utilization: 0.4 }))?.windows).toBeUndefined();
+    expect(readRateLimit(event({ status: "allowed", resetsAt: AT_3PM / 1000, rateLimitType: "five_hour" }))?.windows).toBeUndefined();
+  });
+
+  test("readCodexLimits: a window by its length, the share out of 100", () => {
+    // `account/rateLimits/updated` as Codex's app-server sent it, with other numbers
+    const params = { rateLimits: { limitId: "codex", limitName: null, primary: { usedPercent: 3, windowDurationMins: 10080, resetsAt: THU_3PM / 1000 }, secondary: null, credits: { hasCredits: false, unlimited: false, balance: "0" }, planType: "prolite", rateLimitReachedType: null } };
+    expect(readCodexLimits(params)).toEqual({ weekly: { used: 0.03, resetsAt: THU_3PM } });
+    expect(readCodexLimits({ rateLimits: { primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: AT_3PM / 1000 }, secondary: { usedPercent: 12, windowDurationMins: 10080, resetsAt: THU_3PM / 1000 } } })).toEqual({
+      fiveHour: { used: 0.4, resetsAt: AT_3PM },
+      weekly: { used: 0.12, resetsAt: THU_3PM },
+    });
+    // a length canopy has no name for, a window with no reset, and garbage
+    expect(readCodexLimits({ rateLimits: { primary: { usedPercent: 40, windowDurationMins: 60, resetsAt: AT_3PM / 1000 } } })).toBeNull();
+    expect(readCodexLimits({ rateLimits: { primary: { usedPercent: 40, windowDurationMins: 300 } } })).toBeNull();
+    expect(readCodexLimits({})).toBeNull();
+    expect(readCodexLimits("nope")).toBeNull();
+  });
+
+  test("hear: the count becomes the reading, a window it leaves out stays, and a ledger estimate gives way", () => {
+    const first = hear(cap(), { weekly: { used: 0.56, resetsAt: THU_3PM } }, NOW);
+    expect(first).toEqual(cap({ weekly: { used: 0.56, resetsAt: THU_3PM, readAt: NOW }, source: "run" }));
+    const later = NOW + 60_000;
+    expect(hear(first, { fiveHour: { used: 0.2, resetsAt: AT_3PM } }, later)).toEqual(cap({
+      fiveHour: { used: 0.2, resetsAt: AT_3PM, readAt: later },
+      weekly: { used: 0.56, resetsAt: THU_3PM, readAt: NOW },
+      source: "run",
+    }));
+    // the ledger's rolling guess is not the harness's count
+    expect(hear(cap({ fiveHour: win(0.75, null), source: "observed" }), { weekly: { used: 0.56, resetsAt: THU_3PM } }, NOW)).toEqual(cap({ weekly: { used: 0.56, resetsAt: THU_3PM, readAt: NOW }, source: "run" }));
+    // a hit stays through it
+    const hit = limitHit(SPENT, NOW);
+    expect(hear(cap({ hit, source: "observed" }), { fiveHour: { used: 1, resetsAt: AT_3PM } }, NOW)).toMatchObject({ hit, source: "run" });
+  });
+
+  test("hear: an endpoint reading is left alone, and a window already past its reset is no reading", () => {
+    const endpoint = cap({ fiveHour: win(0.3), source: "endpoint" });
+    expect(hear(endpoint, { fiveHour: { used: 0.9, resetsAt: AT_3PM } }, NOW)).toBe(endpoint);
+    expect(hear(cap(), { fiveHour: { used: 0.9, resetsAt: NOW - 1 } }, NOW)).toEqual(cap());
+    expect(hear(cap(), {}, NOW)).toEqual(cap());
+  });
+
+  test("fade: a window past its reset is dropped, and with none left the reading is unknown again", () => {
+    const both = cap({ fiveHour: win(0.9, AT_3PM), weekly: win(0.5, THU_3PM), source: "run" });
+    expect(fade(both, AT_3PM - 1)).toBe(both);
+    expect(fade(both, AT_3PM)).toEqual(cap({ weekly: win(0.5, THU_3PM), source: "run" }));
+    expect(fade(both, THU_3PM)).toEqual(cap());
+    // a standing hit keeps the harness observed, and other sources are not a run's
+    const hit = limitHit(SPENT, NOW);
+    expect(fade(cap({ fiveHour: win(1, NOW + 1), source: "run", hit }), NOW + 1)).toEqual(cap({ source: "observed", hit }));
+    const ledger = cap({ fiveHour: win(0.4, null), source: "observed" });
+    expect(fade(ledger, THU_3PM)).toBe(ledger);
+  });
+
+  test("decide: a run's reading holds until its reset, however old, and nothing after it", () => {
+    const S = DEFAULT_CAPACITY;
+    const old = NOW - 2 * 60 * 60_000;
+    const five = cap({ fiveHour: win(0.95, AT_3PM, old), source: "run" });
+    expect(decide(five, "normal", S, NOW)).toEqual({ hold: "window", until: AT_3PM, why: "the 5-hour window is at 95% (resets 15:00)" });
+    expect(decide(five, "interactive", S, NOW)).toBe("go");
+    expect(decide(five, "normal", S, AT_3PM)).toBe("go");
+    const week = cap({ weekly: win(0.86, THU_3PM, old), source: "run" });
+    expect(decide(week, "low", S, NOW)).toEqual({ hold: "window", until: THU_3PM, why: "the weekly window is at 86% (resets Thu)" });
+    expect(decide(week, "normal", S, NOW)).toBe("go");
+    expect(decide(week, "low", S, THU_3PM)).toBe("go");
+  });
+
+  test("observe leaves a run's reading as it is, figure or no figure", () => {
+    const heard = cap({ weekly: win(0.56, THU_3PM), source: "run" });
+    expect(observe(heard, [row(NOW - 1, 20)], { observedFiveHourUsd: 40 }, NOW)).toBe(heard);
+    expect(observe(heard, [], { observedFiveHourUsd: null }, NOW)).toBe(heard);
   });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Heard } from "./capacity";
 import { answerMisfit, exitOutcome, RunCtx, settleNote, STEP_CAP, type DriveRun, type RememberHook } from "./driver";
 import { rememberedFor } from "./remember";
 import type { RememberedRule } from "./types";
@@ -25,12 +26,13 @@ function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number;
   const wire: [string, string][] = [];
   const emits: string[] = [];
   const ended: string[] = [];
+  const heard: [string, Heard][] = [];
   const ctx = new RunCtx(
     run,
     { cwd: "/r", agent: AGENT, spec, label: "Codex", stage, ...(tap ? { wire: (d: string, l: string) => { wire.push([d, l]); } } : {}), ...(remember ? { remember } : {}) },
-    { emit: (r) => emits.push(r.status), ended: (r) => ended.push(r.status) },
+    { emit: (r) => emits.push(r.status), ended: (r) => ended.push(r.status), heard: (r, h) => heard.push([r.id, h]) },
   );
-  return { run, ctx, emits, ended, wire };
+  return { run, ctx, emits, ended, wire, heard };
 }
 
 const perm = (title: string) => ({ kind: "permission" as const, tool: "Bash", title, detail: title });
@@ -83,6 +85,13 @@ describe("the plan's usage limit (FR-036)", () => {
     b.ctx.rateLimit({ status: "allowed", resetsAt: null, window: null });
     b.ctx.exited({ code: 1, stderr: LIMIT });
     expect([b.run.status, b.run.limited?.resetsAt, b.run.limited?.window]).toEqual(["limited", undefined, undefined]);
+  });
+  test("the harness's own count of its windows goes to the Runner with the run, and changes nothing on the run", () => {
+    const { run, ctx, emits, heard } = makeCtx();
+    const before = JSON.stringify(run);
+    ctx.windows({ weekly: { used: 0.56, resetsAt: 1793286000_000 } });
+    expect(heard).toEqual([["r1", { weekly: { used: 0.56, resetsAt: 1793286000_000 } }]]);
+    expect([JSON.stringify(run), emits]).toEqual([before, []]);
   });
   test("a chat's limited reply goes idle with a note; a second in a row fails the run", () => {
     const { run, ctx } = makeCtx(true);

@@ -60,6 +60,28 @@ test("capacityRows: every backend that answered, in order, one row per harness; 
   expect(capacityWord(expiredHit)).toBe("no reading");
 });
 
+test("a run's count: its windows, when it was read, and the chip falls back to the week with no 5-hour window", () => {
+  const read = NOW - min(12);
+  const week = { used: 0.56, resetsAt: THU_3PM, readAt: read };
+  const mac = info([cap({ weekly: week, source: "run" }), { ...emptyCapacity("codex"), weekly: { used: 0.03, resetsAt: THU_3PM, readAt: NOW }, source: "run" }]);
+  const mini = info([cap({ weekly: { ...week, used: 0.61 }, source: "run" }), emptyCapacity("codex")]);
+  const rows = capacityRows({ mac, mini }, ["mac", "mini"], NOW);
+  expect(rows.map((r) => [r.backend, r.cap.harness, r.lines, r.source])).toEqual([
+    ["mac", "claude", ["week 56% · Thu"], "read from a run, 12m ago"],
+    ["mac", "codex", ["week 3% · Thu"], "read from a run, just now"],
+    ["mini", "claude", ["week 61% · Thu"], "read from a run, 12m ago"],
+    ["mini", "codex", [], "no reading"],
+  ]);
+  expect(capacityWord(rows)).toBe("week 61%");
+  // a 5-hour window anywhere leads, as before
+  const five = capacityRows({ mac, desoto: info([cap({ fiveHour: { used: 0.2, resetsAt: NOW + min(130), readAt: NOW }, weekly: week, source: "run" })]) }, ["mac", "desoto"], NOW);
+  expect(capacityWord(five)).toBe("5h 20%");
+  expect(five[2]?.lines).toEqual(["5h 20% · 2h10", "week 56% · Thu"]);
+  // past the weekly hold the row and the chip turn, on the count alone
+  const high = capacityRows({ mac: info([cap({ weekly: { ...week, used: 0.9 }, source: "run" })]) }, ["mac"], NOW);
+  expect([high[0]?.tone, rowsTone(high)]).toEqual(["lichen", "lichen"]);
+});
+
 test("heldRows: every backend's held starts in order, oldest first within each (FR-036 plan 2)", () => {
   const held = (id: string, since: number) => ({ id, what: id, repoId: "a", priority: "low" as const, why: "waiting for capacity", since });
   const mac = { capacity: [], held: [held("flow:b", 2), held("trigger:a", 1)], settings: DEFAULT_CAPACITY };

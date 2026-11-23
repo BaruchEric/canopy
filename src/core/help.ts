@@ -109,6 +109,9 @@ usage:
   canopy run prune                   remove kept runs past the sweep's transcript span; a live branch's or an open PR's stays
   canopy run ls                      the runs still going, oldest first: id, started, repo, state, what, and the name each goes by
   canopy run name <id> <words…>      give a live run a name of your own; canopy names each from its first message otherwise
+  canopy run side <id> <words…>      ask a side question beside a live run: a chat forked from its session answers, and the run gets no message and works on
+    --model NAME                     the model that answers, for this chat alone (default: the repo's chat setting)
+  canopy run model <id> <model>      another model for a side question's next messages, between its turns
   canopy run stop <id>               end a live run; a chat between turns closes
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy awake [off|always|working]  keep the backend's machine from idle sleep: never, always, or while an agent there works

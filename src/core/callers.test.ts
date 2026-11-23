@@ -79,6 +79,18 @@ describe("needs", () => {
     expect(needs("POST", "/api/runs/fork")).toBe("operate");
   });
 
+  test("a side question starts a chat beside a run, so it and its model operate (FR-077)", () => {
+    for (const p of ["/api/runs/side", "/api/runs/model"]) {
+      expect(needs("POST", p)).toBe("operate");
+      expect(allows("page", needs("POST", p))).toBe(true);
+      expect(allows("cli", needs("POST", p))).toBe(true);
+      expect(allows("shell", needs("POST", p))).toBe(true);
+      // a run's token and a coordinator's hold plan alone
+      expect(allows("run", needs("POST", p))).toBe(false);
+      expect(allows("coordinator", needs("POST", p))).toBe(false);
+    }
+  });
+
   test("repos actions key on the action", () => {
     for (const a of ["run", "pull", "commit", "dropstale", "flow", "refresh", "harness"]) {
       expect(needs("POST", `/api/repos/${a}`)).toBe("operate");
@@ -295,6 +307,8 @@ describe("the coordinator's routes", () => {
       ["POST", "/api/runs/stop"],
       ["POST", "/api/runs/answer"],
       ["POST", "/api/runs/fork"],
+      ["POST", "/api/runs/side"],
+      ["POST", "/api/runs/model"],
       ["POST", "/api/asks/answer"],
       ["POST", "/api/landing/land"],
       ["POST", "/api/landing/fix"],

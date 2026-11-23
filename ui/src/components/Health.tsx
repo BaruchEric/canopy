@@ -16,7 +16,7 @@ import { AgentFix } from "./AgentFix";
 import { Section, useSectionClosed } from "./Surface";
 
 /** every shown backend's rows, recomputed only when one of their inputs moves */
-function useHealthRows(): HealthRow[] {
+export function useHealthRows(): HealthRow[] {
   const { health, order, conns } = useStore(useShallow((s) => ({ health: s.health, order: s.backendOrder, conns: s.conns })));
   return useMemo(() => healthRows(health, order, conns, Date.now()), [health, order, conns]);
 }

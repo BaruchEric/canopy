@@ -1289,6 +1289,17 @@ export const api = {
     const [b, plain] = on(id);
     return from(b, await req<Run>(b, "/api/runs/name", { method: "POST", body: JSON.stringify({ id: plain, name }) }), qRun);
   },
+  /** a side question beside a live run (FR-077): the chat it starts, forked
+   *  from the run's session; `model` is for that chat alone */
+  sideRun: async (id: string, text: string, model?: string) => {
+    const [b, plain] = on(id);
+    return from(b, await req<Run>(b, "/api/runs/side", { method: "POST", body: JSON.stringify({ id: plain, text, ...(model ? { model } : {}), client: clientId() }) }), qRun);
+  },
+  /** another model for a side question's later messages */
+  modelRun: async (id: string, model: string) => {
+    const [b, plain] = on(id);
+    return from(b, await req<Run>(b, "/api/runs/model", { method: "POST", body: JSON.stringify({ id: plain, model }) }), qRun);
+  },
   /** the next message in a chat, or a person's message into any run at
    *  work, which takes it at its next step (FR-066) */
   say: async (id: string, text: string) => {

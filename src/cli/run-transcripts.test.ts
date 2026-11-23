@@ -376,3 +376,62 @@ test("runCommand lists, names and stops live runs (FR-073)", async () => {
     server.stop(true);
   }
 });
+
+test("runCommand asks a side question beside a run and sets its model (FR-077)", async () => {
+  const calls: { path: string; body: unknown }[] = [];
+  const side = { ...run, id: "5ide0001", kept: undefined, endedAt: undefined, action: "chat", verb: "chat", chat: true, status: "working", sideOf: { run: "ab12cd34", title: "slow build" }, agentSettings: { harness: "claude", model: "default", effort: "default" } };
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      const body = (await request.json()) as { id?: string; model?: string };
+      calls.push({ path: url.pathname, body });
+      // "eeeeeeee" stands for a backend from before side questions: the route is not there
+      if (body.id === "eeeeeeee") return Response.json({ error: "not found" }, { status: 404 });
+      if (url.pathname === "/api/runs/side") return body.id === "00000000" ? Response.json({ error: "the run has no session to fork yet: ask once it has begun" }, { status: 409 }) : Response.json(side, { status: 201 });
+      if (url.pathname === "/api/runs/model") return Response.json({ ...side, agentSettings: { ...side.agentSettings, model: body.model } });
+      return Response.json({ error: "unexpected route" }, { status: 404 });
+    },
+  });
+  const logs: string[] = [];
+  const oldLog = console.log;
+  console.log = (line: string) => { logs.push(line); };
+  try {
+    const backend = ["--backend", `http://127.0.0.1:${server.port}`];
+    await runCommand(["side", "ab12cd34", "what", "does", "retryBackoff", "default", "to?", ...backend], { fail });
+    await runCommand(["side", "ab12cd34", "and the port?", "--model", "haiku", ...backend], { fail });
+    // the flag may sit among the words
+    await runCommand(["side", "ab12cd34", "--model", "haiku", "and", "the", "host?", ...backend], { fail });
+    await runCommand(["model", "5ide0001", "sonnet", ...backend], { fail });
+    expect(calls).toEqual([
+      { path: "/api/runs/side", body: { id: "ab12cd34", text: "what does retryBackoff default to?" } },
+      { path: "/api/runs/side", body: { id: "ab12cd34", text: "and the port?", model: "haiku" } },
+      { path: "/api/runs/side", body: { id: "ab12cd34", text: "and the host?", model: "haiku" } },
+      { path: "/api/runs/model", body: { id: "5ide0001", model: "sonnet" } },
+    ]);
+    expect(logs.slice(0, 2)).toEqual([
+      "5ide0001 working",
+      "a side question beside run ab12cd34, which works on; read it with canopy run show 5ide0001, go on with canopy run say 5ide0001 <words…>",
+    ]);
+    expect(logs.at(-1)).toBe("5ide0001 sonnet");
+    await expect(runCommand(["side", "00000000", "hi", ...backend], { fail })).rejects.toThrow("no session to fork yet");
+    await expect(runCommand(["side", "eeeeeeee", "hi", ...backend], { fail })).rejects.toThrow("runs a canopy from before side questions; deploy the current one");
+    await expect(runCommand(["model", "eeeeeeee", "sonnet", ...backend], { fail })).rejects.toThrow("runs a canopy from before side questions");
+    await expect(runCommand(["side", "ab12cd34", ...backend], { fail })).rejects.toThrow("needs the question");
+    await expect(runCommand(["side", "x/y", "hi", ...backend], { fail })).rejects.toThrow("invalid run id");
+    await expect(runCommand(["side", "ab12cd34", "hi", "--model", ...backend], { fail })).rejects.toThrow("--model needs a model's name");
+    await expect(runCommand(["model", "5ide0001", ...backend], { fail })).rejects.toThrow(RUN_USAGE);
+    await expect(runCommand(["model", "5ide0001", "sonnet", "extra", ...backend], { fail })).rejects.toThrow(RUN_USAGE);
+    expect(calls).toHaveLength(7);
+  } finally {
+    console.log = oldLog;
+    server.stop(true);
+  }
+});
+
+test("a side question's lines say which run it sits beside", () => {
+  const side: Run = { ...run, id: "5ide0001", action: "chat", verb: "chat", chat: true, status: "idle", name: "retry default", startedAt: now - H, sideOf: { run: "ab12cd34", title: "slow build" } };
+  const { kept: _kept, endedAt: _ended, result: _result, ...going } = side;
+  expect(liveLines([going], now)).toEqual(["5ide0001  1h   dev-tools/canopy          idle     chat beside ab12cd34  retry default"]);
+  expect(showLines(side).slice(0, 4)).toEqual(["chat in dev-tools/canopy (kept)", "run: 5ide0001", "name: retry default", "side question of: ab12cd34 (slow build)"]);
+});

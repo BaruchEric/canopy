@@ -39,6 +39,7 @@ export const SORT_MODES = [
   "name",
   "user",
   "favorites",
+  "state",
 ] as const;
 export type SortMode = (typeof SORT_MODES)[number];
 
@@ -174,8 +175,10 @@ export interface Settings {
   backends: BackendEntry[];
   /** the backends this browser leaves out; never the home one */
   hiddenBackends: string[];
-  /** how much the repo panel shows: intermediate is the guided, Claude-first
-   *  panel, advanced is every section */
+  /** how much the whole page shows (FR-079): intermediate is the quiet page
+   *  (a top bar of chips with something to say, a timeline that folds a
+   *  turn's commands, one start box, the guided Claude-first panel),
+   *  advanced is everything */
   level: Level;
   /** the guided panel's tour has been seen or skipped */
   onboarded: boolean;

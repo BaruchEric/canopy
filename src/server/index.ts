@@ -80,7 +80,7 @@ import { readEvidence } from "../core/evidence";
 import { FlowFiles, flowsDir, loadFlowRecords, lockFlows, type FlowsLock } from "../core/flowstore";
 import { hasGatewayKey, jev, jevJudge, jevScenario } from "../core/jev";
 import { isDefaultAgent, normalizeAgent } from "../core/agent";
-import { takesEffort, takesModel, takesProvider, type AgentEnv } from "../core/harness";
+import { HARNESS, takesEffort, takesModel, takesProvider, type AgentEnv } from "../core/harness";
 import { paneAgent } from "../core/procs";
 import { effectiveAgents, hasProfile, isAgentScopeName, isProfileName, launchPick, resolveAgent, normalizePick, normalizeRepoAgent, pickRefusal, repoAgentRefusal } from "../core/route";
 import { selfName } from "../core/backends";
@@ -169,6 +169,7 @@ import { RememberedRules, scopeOf } from "../core/remember";
 import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
 import { BRANCH_RUNS_PER_REPO, BranchCapError, QUIET_WAIT, Runner, SteerError, UnknownRunError, type BranchStart, type StartExtras } from "../core/runner";
 import { cleanName } from "../core/runname";
+import { sideRefusal } from "../core/sidequestion";
 import { makeNamer } from "../core/runnamer";
 import { areKin, RUN_CHILD_ACTIONS } from "../core/runtools";
 import { canopyMcpCommand, flowToolsId, mcpConfigPath, removeMcpConfig, removeRunSettings, runConfigLaunch, settingsPath, sweepMcpConfigs, toolsBrief, writeMcpConfig, writeRunSettings } from "./runtools";
@@ -2449,6 +2450,34 @@ async function startForkRun(state: ServerState, b: Record<string, unknown>, clie
   });
 }
 
+/** A side question beside a live run (FR-077): a chat forked from the run's
+ *  session as it stands, in the folder the run works in. The run gets no
+ *  message and works on, and its timeline never shows the question. `b`:
+ *  `id`, the run; `text`, the question; `model`, one for this thread alone
+ *  (the repo's chat route's otherwise); `client`. The chat runs on the
+ *  run's harness, whose session it forks, with no loadout and none of
+ *  canopy's tools. */
+async function startSideQuestion(state: ServerState, b: Record<string, unknown>, client: unknown): Promise<Run> {
+  const id = typeof b["id"] === "string" ? b["id"] : "";
+  if (!RUN_ID.test(id)) throw new HttpError(400, "id must be a run id");
+  const text = typeof b["text"] === "string" ? b["text"] : "";
+  if (!text.trim()) throw new HttpError(400, "write the question first");
+  const model = b["model"];
+  if (model !== undefined && typeof model !== "string") throw new HttpError(400, "model must be a model's name");
+  const parent = state.runner.get(id);
+  if (!parent) throw new HttpError(404, "no such run");
+  const refused = sideRefusal(parent);
+  if (refused) throw new HttpError(409, refused);
+  const repo = state.result.repos.find((r) => r.id === parent.repoId);
+  if (!repo) throw new HttpError(404, `${parent.repoId} is not in the last scan`);
+  if (model !== undefined && !takesModel(parent.harness, model)) throw new HttpError(400, `${HARNESS[parent.harness].label} does not take model ${model}`);
+  const routed = agentFor(await loadConfig(), repo.path, "chat", { harness: parent.harness });
+  const agent = model !== undefined ? { ...routed, model } : routed;
+  await needHarness(state, parent.harness, repo.path);
+  const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+  return steering(() => state.runner.side(id, text, agent, by));
+}
+
 /** A "fix it" run on a branch the landing queue sent back: Claude resumes
  *  the branch's last session with the reason; anything else starts fresh
  *  with the run's note and the reason. Same worktree, same branch. */
@@ -3949,6 +3978,17 @@ function steering<T>(act: () => T): T {
     if (err instanceof UnknownRunError) throw new HttpError(404, "no such run");
     if (err instanceof SteerError) throw new HttpError(409, err.message);
     throw err;
+  }
+}
+
+/** `steering` for an act that settles later */
+async function steeringLater<T>(act: () => Promise<T>): Promise<T> {
+  try {
+    return await act();
+  } catch (err) {
+    return steering(() => {
+      throw err;
+    });
   }
 }
 
@@ -5932,6 +5972,18 @@ async function handleApi(
     return json(steering(() => state.runner.interrupt(id, text)));
   }
   if (path === "/api/runs/child" && method === "POST") return json(await startChildRun(state, caller, await objectBody(req)), 201);
+  // a side question beside a live run, and another model for its later
+  // messages (FR-077)
+  if (path === "/api/runs/side" && method === "POST") {
+    const b = await objectBody(req);
+    return json(await startSideQuestion(state, b, b["client"]), 201);
+  }
+  if (path === "/api/runs/model" && method === "POST") {
+    const b: { id?: unknown; model?: unknown } = await objectBody(req);
+    if (typeof b.id !== "string" || typeof b.model !== "string") return json({ error: "missing run id or model" }, 400);
+    const { id, model } = b;
+    return json(await steeringLater(() => state.runner.remodel(id, model)));
+  }
   // a person's name for a run that is still going (FR-073)
   if (path === "/api/runs/name" && method === "POST") {
     const b: { id?: unknown; name?: unknown } = await objectBody(req);
@@ -7312,6 +7364,12 @@ export async function startServer(opts: {
       // so does a run's, and its mcp.json with it (FR-038), and a loadout
       // run's settings file and mcp.json (FR-065)
       if ((run.canopyTools || run.equip) && !isRunActive(run)) void dropRunTools(state, run.id);
+    },
+    // the harness's own count of the plan's windows is this backend's
+    // capacity reading (FR-036); a run on a named provider is not on the plan
+    onHeard: (run, heard) => {
+      const provider = run.agentSettings?.provider;
+      if (!provider || provider === "default") state.capacity.onHeard(run.harness, heard);
     },
     onGone: (id) => {
       broadcast(state, { type: "run-gone", id });

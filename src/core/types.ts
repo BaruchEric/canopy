@@ -1483,6 +1483,10 @@ export interface Run {
   stall?: RunStall;
   /** the run this one was forked from, and at which step (FR-043 plan 3) */
   forkOf?: RunFork;
+  /** the run this chat is a side question of (FR-077): asked beside it
+   *  while it worked, on a fork of its session, with no word of it in the
+   *  parent's timeline */
+  sideOf?: RunSide;
 }
 
 /** Where a run's name came from: `words`, cut from its first message;
@@ -1514,6 +1518,15 @@ export interface RunFork {
    *  its steps for a fork from the end */
   at: number;
   how: ForkHow;
+}
+
+/** The run a side question was asked beside (FR-077). */
+export interface RunSide {
+  /** the parent run's id */
+  run: string;
+  /** what the parent went by when the question was asked, kept so the side
+   *  thread still says where it started once the parent is gone */
+  title: string;
 }
 
 /** One finished run in the local transcript index. */
@@ -2065,7 +2078,7 @@ export function statusFingerprint(st: RepoStatus | null): string {
 /** A run with a live agent process: working, waiting on a prompt, or a chat
  *  between turns. A repo's checkout takes several at once (FR-073), and each
  *  branch run has a worktree of its own. */
-export const isRunActive = (r: Run): boolean =>
+export const isRunActive = (r: Pick<Run, "status">): boolean =>
   r.status === "working" || r.status === "waiting" || r.status === "idle";
 
 /** A page or CLI asking to be let in, as an admin sees it to approve: the

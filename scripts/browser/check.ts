@@ -1,7 +1,11 @@
 // Drives a running canopy page the way a person would and says what broke:
 // the first load (what comes with the page, what is fetched once it is up),
 // every view from its URL and by switching inside one page, the runs pill's
-// menu with two runs going, a shell that answers, the two load failures
+// menu with two runs going, the prompt rail of a chat of twelve messages (its
+// ticks, a card, a click, the keys from an empty message box and not from a
+// draft, and a phone's bar), a side question asked from a run's box (its
+// line, the ask, the thread beside the run and, on a phone, over it), a
+// shell that answers, the two load failures
 // (a view's chunk and xterm's refused), a phone: the top bar's first row
 // on the screen, an open panel's section tabs, and no field small enough for
 // iOS to zoom the page onto, and the manager: a goal kept in the run log
@@ -12,6 +16,11 @@
 // 1440 and 390px on a goal (its @ menu, a file's chip) and on a project (the
 // words and chip kept, and at 1440 start project sending the form), opened
 // from its address, the command line's new and the top bar's + new.
+// It also drives the level (FR-079): at intermediate the quiet top bar in
+// one row with its menu, a turn's commands folded in a run's timeline and
+// the start box, which opens on a new worktree where the checkout is in
+// use; at advanced the two rows, every step and the pre-flight;
+// the board grouped by state at both; and the bar's rows on a phone at each.
 // check.sh starts a scratch server and runs this; it copies the file into
 // the browser folder first, where "playwright" resolves.
 //   check.ts <base url> <screenshot folder>
@@ -215,6 +224,197 @@ try {
   }
 
   {
+    // The level (FR-079), which a new browser has at intermediate: the quiet
+    // top bar in one row with its menu, a turn's commands folded in a run's
+    // timeline, and one start box in place of the pre-flight. Then the same
+    // page at advanced: every chip in two rows, every step, the pre-flight's
+    // dialog. The board is grouped by state at both. The run is made up, as
+    // the runs pill's are, and the tree says the backend has claude: a
+    // scratch server has none, which switches a card's jobs off.
+    const probe = await fresh(undefined, true);
+    const tree = (await (await probe.request.get(`${base}/api/tree`)).json()) as { repos: { id: string; name: string }[] };
+    await probe.close();
+    const now = Date.now();
+    const tool = (id: string, ago: number, title: string) => ({ id, at: now - ago, kind: "tool", tool: { name: "Bash", title, status: "ok", output: "ok" } });
+    const runs = [
+      {
+        id: "level-chat",
+        repoId: tree.repos.find((r) => r.name === "demo")?.id ?? "demo",
+        action: "chat",
+        verb: "chat",
+        progress: "replying",
+        expectsChange: false,
+        chat: true,
+        harness: "claude",
+        note: "",
+        status: "idle",
+        startedAt: now - 120_000,
+        prompt: null,
+        steps: [
+          { id: "l1", at: now - 100_000, kind: "user", text: "Does the build pass?" },
+          tool("l2", 98_000, "git status"),
+          tool("l3", 90_000, "bun run build"),
+          tool("l4", 62_000, "ls dist/web"),
+          { id: "l5", at: now - 58_000, kind: "text", text: "The build passes." },
+        ],
+      },
+    ];
+    /** the lines the top bar's visible controls sit on: two controls whose
+     *  middles are within 12px of each other share a line, whatever the
+     *  fonts of the machine do to a pixel */
+    const barRows = (page: Page) =>
+      page.evaluate(() => {
+        const mids: number[] = [];
+        for (const el of document.querySelectorAll<HTMLElement>(".topbar button, .topbar a, .topbar input")) {
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          const mid = r.top + r.height / 2;
+          if (!mids.some((m) => Math.abs(m - mid) < 12)) mids.push(mid);
+        }
+        return mids.length;
+      });
+    const at = async (level: "intermediate" | "advanced", phone = false) => {
+      const page = await fresh(undefined, true, phone);
+      await page.addInitScript((saved) => localStorage.setItem("canopy.settings", JSON.stringify(saved)), { level, onboarded: true, sort: "state" });
+      await page.route("**/api/runs", (r) => (r.request().method() === "GET" ? r.fulfill({ json: runs }) : r.continue()));
+      await page.route("**/api/tree", async (r) => {
+        if (r.request().method() !== "GET") return r.continue();
+        const res = await r.fetch();
+        const body = (await res.json()) as { backend?: Record<string, unknown> };
+        return r.fulfill({ response: res, json: { ...body, backend: { ...body.backend, harnesses: ["claude"] } } });
+      });
+      await page.goto(`${base}/`, { waitUntil: "load" });
+      await page.waitForSelector(".card", { timeout: 20_000 });
+      await page.waitForTimeout(500);
+      return page;
+    };
+    const lines = (page: Page) =>
+      page.evaluate(() => [...document.querySelectorAll(".sheet-back .steps > li")].map((li) => [...li.classList].find((c) => c.startsWith("k-")) ?? ""));
+
+    for (const level of ["intermediate", "advanced"] as const) {
+      const quiet = level === "intermediate";
+      const page = await at(level);
+      const groups = await page.evaluate(() =>
+        [...document.querySelectorAll(".grid-group")].map((g) => `${g.querySelector(".head-toggle")?.textContent?.trim().match(/^(needs you|working|unread|idle)/)?.[0] ?? "?"}: ${[...g.querySelectorAll(".card-name")].map((n) => n.textContent).join(",")}`),
+      );
+      check(groups.join(" | ") === "unread: demo | idle: twin", `at ${level} the board grouped by state reads "${groups.join(" | ")}"`);
+
+      const rows = await barRows(page);
+      const more = page.locator(".bar-more-btn");
+      if (quiet) {
+        check(rows === 1 && (await more.count()) === 1, `at intermediate the top bar is one row with its menu at its end (${rows} rows)`);
+        await more.click();
+        const picks = page.locator('.bar-more [role="radio"]');
+        await picks.first().waitFor({ timeout: 4000 }).catch(() => undefined);
+        const names = (await picks.allInnerTexts()).map((t) => t.split("\n")[0]?.trim() ?? "");
+        check(names.length >= 10 && names.some((n) => n.startsWith("live runs")) && names.includes("select repos"), `the bar's menu lists each chip by name: ${names.length}, among them "${names.slice(0, 3).join('", "')}"`);
+        await page.waitForTimeout(300);
+        await page.screenshot({ path: `${shots}/level-bar-menu.png` });
+        // a pick does what the chip does, and a chip with something to say is on the bar
+        await picks.filter({ hasText: "select repos" }).click();
+        await page.waitForTimeout(400);
+        const shown = await page.evaluate(() => document.querySelector('[data-tuck="select"]')?.classList.contains("quiet") === false);
+        // x is the chip's own key, and it still works with the chip put away
+        await page.keyboard.press("x");
+        await page.waitForTimeout(400);
+        const away = await page.evaluate(() => document.querySelector('[data-tuck="select"]')?.classList.contains("quiet") === true);
+        check(shown && away, `a pick of select repos starts the picking and brings its chip to the bar (${shown}); x ends it and the chip leaves (${away})`);
+        // a list opened from the menu by the keys closes on Escape, its chip
+        // leaves the bar, and the focus goes back to the menu's button
+        await more.focus();
+        await page.keyboard.press("Enter");
+        const grouping = page.locator('.bar-more [role="radio"]', { hasText: "grouping" }).first();
+        await grouping.waitFor({ timeout: 4000 }).catch(() => undefined);
+        await grouping.focus();
+        await page.keyboard.press("Enter");
+        const opened = await page.waitForSelector('[data-tuck="sort"] [aria-expanded="true"]', { timeout: 4000 }).then(() => true, () => false);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(400);
+        const back = await page.evaluate(() => document.activeElement?.classList.contains("bar-more-btn") === true);
+        check(opened && back, `the grouping opened from the menu by the keys (${opened}) hands the focus back to the menu's button on Escape (${back})`);
+      } else {
+        check(rows === 2 && (await more.count()) === 0, `at advanced the top bar keeps its two rows and has no menu of the rest (${rows} rows)`);
+      }
+      await page.screenshot({ path: `${shots}/level-${level}.png` });
+
+      // the timeline: one turn of three commands between a message and the reply
+      await page.locator(".card", { has: page.locator(".card-name", { hasText: /^demo$/ }) }).first().locator(".card-more button").first().click();
+      await page.locator('[role="menuitem"].live').first().click();
+      await page.waitForSelector(".sheet-back .steps", { timeout: 5000 });
+      const got = await lines(page);
+      if (quiet) {
+        const fold = page.locator(".sheet-back .fold-line");
+        const says = (await fold.first().innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+        await fold.first().click();
+        const opened = await lines(page);
+        await fold.first().click();
+        const folded = await lines(page);
+        check(
+          got.join(" ") === "k-user k-fold k-text" && says === "worked for 40s · 3 steps" && opened.filter((k) => k === "k-tool").length === 3 && folded.join(" ") === got.join(" "),
+          `at intermediate a turn's commands fold into one line, "${says}", that a click opens and a second folds (${got.join(" ")}; open: ${opened.join(" ")})`,
+        );
+      } else {
+        check(got.join(" ") === "k-user k-tool k-tool k-tool k-text", `at advanced the timeline shows every step (${got.join(" ")})`);
+      }
+      await page.screenshot({ path: `${shots}/level-${level}-timeline.png` });
+      await page.keyboard.press("Escape");
+      await page.waitForSelector(".sheet-back", { state: "detached", timeout: 5000 }).catch(() => undefined);
+
+      // the start: ask on twin
+      const card = page.locator(".card", { has: page.locator(".card-name", { hasText: /^twin$/ }) }).first();
+      await card.locator(".card-more button").first().click();
+      await page.locator('[role="menuitem"]', { hasText: "ask the agent" }).first().click();
+      await page.waitForSelector(".sheet-back .sheet", { timeout: 5000 });
+      await page.waitForTimeout(400);
+      if (quiet) {
+        const chips = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".start-box .start-chip")].map((c) => `${c.dataset["chip"]}${c.tagName === "BUTTON" ? " (menu)" : ""}: ${c.textContent?.trim()}`));
+        const focused = await page.evaluate(() => document.activeElement?.classList.contains("start-words") === true);
+        check(
+          chips.length === 4 && chips[0] === "repo: twin" && chips[1] === "branch (menu): main" && (chips[2]?.startsWith("backend: ") ?? false) && (chips[3]?.startsWith("agent") ?? false) && focused,
+          `at intermediate a start is one box with its chips and the focus in its words: ${chips.join(" | ")}`,
+        );
+        await page.locator('.start-pick[data-chip="branch"]').click();
+        await page.locator(".start-menu [role=menuitemradio]").nth(1).click();
+        const branch = (await page.locator('.start-chip[data-chip="branch"]').innerText()).trim();
+        await page.locator(".start-words").fill("count the parts");
+        await page.waitForTimeout(200);
+        await page.screenshot({ path: `${shots}/level-${level}-start.png` });
+        await page.locator(".start-more").click();
+        const kept = await page.evaluate(() => `${document.querySelector<HTMLTextAreaElement>(".sheet-body.plan .plan-note")?.value} / ${document.querySelector<HTMLInputElement>(".plan-branch input[type=checkbox]")?.checked}`);
+        check(branch === "new worktree" && kept === "count the parts / true", `the branch chip's menu picks a new worktree ("${branch}"), and more options opens the pre-flight with the words and the pick kept (${kept})`);
+        // a checkout in use (FR-080): demo holds the chat, so a start there
+        // opens on a worktree of its own and the box says why
+        await page.keyboard.press("Escape");
+        await page.waitForSelector(".sheet-back", { state: "detached", timeout: 5000 }).catch(() => undefined);
+        const busy = page.locator(".card", { has: page.locator(".card-name", { hasText: /^demo$/ }) }).first();
+        await busy.locator(".card-more button").first().click();
+        await page.locator('[role="menuitem"]', { hasText: "ask the agent" }).first().click();
+        await page.waitForSelector(".start-box", { timeout: 5000 });
+        const own = (await page.locator('.start-chip[data-chip="branch"]').innerText()).trim();
+        const why = await page.locator(".sheet .start-note").allInnerTexts();
+        check(own === "new worktree" && why.length === 1 && (why[0]?.startsWith("This checkout is in use") ?? false), `on a checkout in use the box opens on a new worktree and says why ("${own}": ${why.join(" | ")})`);
+        await page.screenshot({ path: `${shots}/level-${level}-start-busy.png` });
+      } else {
+        const plan = await page.evaluate(() => `${document.querySelectorAll(".sheet-body.plan .plan-note").length} ${document.querySelectorAll(".start-box").length}`);
+        check(plan === "1 0", `at advanced a start is the pre-flight's dialog and no box (${plan})`);
+        await page.screenshot({ path: `${shots}/level-${level}-start.png` });
+      }
+      await page.close();
+    }
+
+    // a phone at intermediate: two rows where the advanced bar takes three
+    for (const level of ["intermediate", "advanced"] as const) {
+      const page = await at(level, true);
+      const rows = await barRows(page);
+      const want = level === "intermediate" ? 2 : 3;
+      const more = level === "intermediate" ? await page.locator(".bar-more-btn").boundingBox() : null;
+      check(rows === want && (level === "advanced" || (more !== null && more.x + more.width <= 390)), `on a phone at ${level} the top bar takes ${rows} rows${level === "intermediate" ? ", its menu on the screen" : ""}`);
+      if (level === "intermediate") await page.screenshot({ path: `${shots}/level-phone.png` });
+      await page.close();
+    }
+  }
+
+  {
     // The runs pill with two runs going. A scratch server has no agent to
     // run, so the two are made up, one per repo, and /api/runs is answered
     // here. The older chat is the one a click on the pill never reached
@@ -258,6 +458,281 @@ try {
       : "";
     check(sheet.includes("twin") && sheet.includes("the older chat"), `a pick opens that run and not the newest: "${sheet.replace(/\s+/g, " ").trim().slice(0, 60)}"`);
     await page.close();
+  }
+
+  // A side question (FR-077). A scratch server has no agent whose session
+  // could be forked, so the run is made up and /api/runs/side is answered
+  // here with the chat the server would start. A message that opens with
+  // btw raises the box's line and goes to the side route, never to the run,
+  // and the thread shows beside the run on a wide sheet and over it, with a
+  // way back, on a phone.
+  for (const phone of [false, true]) {
+    const where = phone ? "on a phone" : "at 1400px";
+    const page = await fresh(undefined, true, phone);
+    const tree = (await (await page.request.get(`${base}/api/tree`)).json()) as { repos: { id: string; name: string }[] };
+    const repoId = (name: string) => tree.repos.find((r) => r.name === name)?.id ?? name;
+    const question = "what does retryBackoff default to?";
+    const going = {
+      id: "check-par",
+      repoId: repoId("demo"),
+      action: "ask",
+      verb: "Ask",
+      progress: "working",
+      expectsChange: false,
+      chat: false,
+      harness: "claude",
+      name: "migrate the billing checkout",
+      note: "Migrate the billing checkout",
+      status: "working",
+      session: "check-session",
+      startedAt: Date.now() - 60_000,
+      steps: [{ id: "p1", at: Date.now() - 50_000, kind: "text", text: "Reading the checkout module." }],
+      prompt: null,
+    };
+    const thread = {
+      ...going,
+      id: "check-side",
+      action: "chat",
+      verb: "chat",
+      chat: true,
+      name: "what does retryBackoff default to",
+      note: question,
+      status: "idle",
+      startedAt: Date.now(),
+      sideOf: { run: going.id, title: going.name },
+      steps: [
+        { id: "s1", at: Date.now(), kind: "user", text: question },
+        { id: "s2", at: Date.now(), kind: "text", text: "500 ms, doubling up to 8 s." },
+      ],
+    };
+    const runs: unknown[] = [going, { ...going, id: "check-twin", repoId: repoId("twin"), name: "another run", steps: [] }];
+    const sent: string[] = [];
+    await page.route("**/api/runs", (r) => (r.request().method() === "GET" ? r.fulfill({ json: runs }) : r.continue()));
+    await page.route("**/api/runs/side", async (r) => {
+      const body = r.request().postDataJSON() as { id?: string; text?: string };
+      sent.push(`side ${body.id}: ${body.text}`);
+      runs.push(thread);
+      await r.fulfill({ status: 201, json: thread });
+    });
+    await page.route("**/api/runs/say", async (r) => {
+      sent.push("say");
+      await r.fulfill({ status: 404, json: { error: "no such run" } });
+    });
+    await page.goto(`${base}/`, { waitUntil: "load" });
+    await page.waitForSelector(".pill.runs", { timeout: 20_000 });
+    await page.locator(".pill.runs").click();
+    const rows = page.locator('.runs-pick [role="radio"]');
+    await rows.first().waitFor({ timeout: 5000 }).catch(() => undefined);
+    const at = (await rows.allInnerTexts()).findIndex((t) => t.includes("demo"));
+    const sheet = page.locator(".sheet-back .sheet");
+    const opened = at >= 0 ? await rows.nth(at).click().then(() => sheet.locator("> .composer .composer-box").waitFor({ timeout: 5000 })).then(() => true, () => false) : false;
+    check(opened, `the made-up run's console opens with its box ${where}`);
+    if (opened) {
+      const box = sheet.locator("> .composer .composer-box");
+      const words = async () => (await sheet.locator("> .composer button").allInnerTexts()).map((t) => t.trim()).filter(Boolean);
+      const plain = await words();
+      await box.fill(`btw ${question}`);
+      const hint = await sheet.locator(".side-hint").innerText({ timeout: 3000 }).then((t) => t.replace(/\s+/g, " ").trim(), () => "");
+      const asking = await words();
+      check(
+        plain.includes("btw") && plain.includes("interrupt") && hint.startsWith("Side question.") && asking.includes("ask beside") && !asking.includes("stop & send"),
+        `a message that opens with btw raises the side question's line ${where}, and the box stops offering to cut the run's turn: "${hint.slice(0, 60)}" with ${asking.join(", ")}`,
+      );
+      await page.screenshot({ path: `${shots}/side-question-hint${phone ? "-phone" : ""}.png` });
+      await box.press("Enter");
+      const column = sheet.locator("> .side-q");
+      await column.waitFor({ timeout: 5000 }).catch(() => undefined);
+      check(sent.length === 1 && sent[0] === `side check-par: ${question}`, `the question goes to the side route and nothing is said to the run ${where}: ${sent.join("; ") || "nothing sent"}`);
+      const head = await column.locator(".side-q-head").innerText().then((t) => t.replace(/\s+/g, " ").trim(), () => "");
+      check(head.includes("Side question") && head.includes(question) && head.includes("Started from: migrate the billing checkout"), `the thread's head says what was asked and what it started from ${where}: "${head.slice(0, 120)}"`);
+      const geo = await page.evaluate(() => {
+        const sheet = document.querySelector<HTMLElement>(".sheet-back .sheet");
+        const col = sheet?.querySelector<HTMLElement>(":scope > .side-q");
+        const body = sheet?.querySelector<HTMLElement>(":scope > .sheet-body");
+        if (!sheet || !col || !body) return null;
+        const [s, c, b] = [sheet.getBoundingClientRect(), col.getBoundingClientRect(), body.getBoundingClientRect()];
+        return { sheet: s.width, mid: s.left + s.width / 2, colLeft: c.left, colWidth: c.width, colHeight: c.height, bodyRight: b.right, body: getComputedStyle(body).visibility, over: col.classList.contains("over"), wider: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+      });
+      if (!geo) check(false, `the thread's column is in the run's sheet ${where}`);
+      else if (phone) {
+        check(geo.over && geo.colWidth >= geo.sheet - 4 && geo.body === "hidden" && geo.colHeight >= 400 && geo.wider <= 0, `on a phone the thread lies over the run: ${Math.round(geo.colWidth)} of ${Math.round(geo.sheet)}px wide, ${Math.round(geo.colHeight)}px tall, the run under it ${geo.body}`);
+      } else {
+        check(!geo.over && Math.abs(geo.colLeft - geo.mid) <= 2 && geo.bodyRight <= geo.colLeft + 1 && geo.body === "visible" && geo.colHeight >= 400 && geo.wider <= 0, `at 1400px the thread has the sheet's right half and the run keeps the left: a ${Math.round(geo.sheet)}px sheet, the run to ${Math.round(geo.bodyRight)}, the thread from ${Math.round(geo.colLeft)}`);
+      }
+      await page.waitForTimeout(300);
+      await page.screenshot({ path: `${shots}/side-question${phone ? "-phone" : ""}.png` });
+      // put away, the thread is still a chat with a tab of its own
+      await column.locator(".side-q-head button.close").click();
+      const tab = sheet.locator(".run-tabs .rtab", { hasText: "retryBackoff" });
+      const closed = await tab.waitFor({ timeout: 3000 }).then(() => true, () => false);
+      const mark = closed ? ((await tab.locator(".rtab-side").textContent()) ?? "").trim() : "";
+      const back = await sheet.locator("> .sheet-body").evaluate((el) => getComputedStyle(el).visibility).catch(() => "");
+      check(closed && mark === "btw" && back === "visible" && (await column.count()) === 0, `closing the thread ${where} shows the run again and leaves the chat a tab marked btw: tab ${closed ? `"${mark}"` : "missing"}, the run ${back}`);
+      await tab.click().catch(() => undefined);
+      check(await column.waitFor({ timeout: 3000 }).then(() => true, () => false), `its tab brings the thread back ${where}`);
+    }
+    await page.close();
+  }
+
+  {
+    // The prompt rail (FR-078). A chat of twelve messages, made up as the
+    // runs pill's two are, each answered with a tool step and a reply long
+    // enough that the timeline scrolls. In the run's sheet: a tick a
+    // message, the newest marked with the timeline at its end; a tick's
+    // card; a click and the keys moving the view and the mark. On a phone:
+    // the bar at the timeline's foot, clear of the last step.
+    const asker = await fresh();
+    const tree = (await (await asker.request.get(`${base}/api/tree`)).json()) as { repos: { id: string; name: string }[] };
+    await asker.close();
+    const steps: Record<string, unknown>[] = [];
+    for (let i = 1; i <= 12; i++) {
+      const at = Date.now() - (13 - i) * 60_000;
+      steps.push({ id: `u${i}`, at, kind: "user", text: `Message ${i}: why does the row wrap at ${300 + i}px?` });
+      steps.push({ id: `t${i}`, at: at + 5000, kind: "tool", tool: { name: "Bash", title: "bun test", status: "ok" } });
+      steps.push({ id: `a${i}`, at: at + 9000, kind: "text", text: `Reply ${i}: the row holds seven buttons.\n\nThe widest is the mic.\n\nAt that width the last one drops to a second line.\n\nShrinking the chips to their glyphs keeps all seven on the screen.` });
+    }
+    const chat = {
+      id: "check-rail",
+      repoId: tree.repos.find((r) => r.name === "demo")?.id ?? "demo",
+      action: "chat",
+      verb: "chat",
+      progress: "",
+      expectsChange: false,
+      chat: true,
+      harness: "claude",
+      note: "",
+      status: "idle",
+      startedAt: Date.now() - 13 * 60_000,
+      steps,
+      prompt: null,
+    };
+    /** the rail of the timeline under `scope`, as the page draws it now */
+    const railOf = (page: Page, scope: string) =>
+      page.evaluate((scope) => {
+        const list = document.querySelector<HTMLElement>(`${scope} .sheet-body.console`);
+        if (!list) return null;
+        const box = list.getBoundingClientRect();
+        const ticks = [...list.querySelectorAll<HTMLElement>(":scope > .prompt-rail .rail-tick")];
+        const track = list.querySelector(":scope > .prompt-rail .rail-ticks")?.getBoundingClientRect();
+        const bar = list.querySelector<HTMLElement>(":scope > .prompt-rail-foot > .rail-bar");
+        const first = [...list.querySelectorAll<HTMLElement>("[data-prompt]")].find((el) => el.getBoundingClientRect().bottom > box.top + 1);
+        const last = [...list.querySelectorAll<HTMLElement>(":scope > .steps > li")].pop();
+        return {
+          ticks: ticks.length,
+          marked: ticks.findIndex((t) => t.getAttribute("aria-current") === "true") + 1,
+          inside: track ? track.top >= box.top && track.bottom <= box.bottom && track.right <= box.right : false,
+          card: list.querySelector<HTMLElement>(":scope > .prompt-rail .rail-card")?.innerText.replace(/\s+/g, " ").trim() ?? "",
+          first: first ? `${first.getAttribute("data-prompt")} ${Math.round(first.getBoundingClientRect().top - box.top)}px down` : "none",
+          fromEnd: Math.round(list.scrollHeight - list.clientHeight - list.scrollTop),
+          bar: bar?.innerText.replace(/\s+/g, " ").trim().slice(0, 40) ?? "",
+          short: bar ? [...bar.querySelectorAll("button")].filter((b) => b.getBoundingClientRect().height < 43.5 || b.getBoundingClientRect().width < 43.5).length : -1,
+          clear: bar && last ? Math.round(bar.getBoundingClientRect().top - last.getBoundingClientRect().bottom) : null,
+          wider: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        };
+      }, scope);
+
+    const page = await fresh(undefined, true);
+    await page.route("**/api/runs", (r) => (r.request().method() === "GET" ? r.fulfill({ json: [chat] }) : r.continue()));
+    await page.goto(`${base}/`, { waitUntil: "load" });
+    await page.waitForSelector(".pill.runs", { timeout: 20_000 });
+    await page.locator(".pill.runs").click();
+    const opened = await page.waitForSelector(".sheet-back .sheet-body.console", { timeout: 5000 }).then(() => true, () => false);
+    await page.waitForTimeout(700);
+    const open = opened ? await railOf(page, ".sheet-back") : null;
+    check(
+      open?.ticks === 12 && open.marked === 12 && open.inside && open.fromEnd <= 1,
+      `a chat of 12 messages has a rail of 12 ticks inside its timeline, the newest marked at the end (${open ? `${open.ticks} ticks, marked ${open.marked}, ${open.fromEnd}px from the end` : "no sheet"})`,
+    );
+    if (open?.ticks === 12) {
+      const tick = page.locator(".sheet-back .rail-tick").nth(2);
+      await tick.hover();
+      await page.waitForTimeout(250);
+      const card = await railOf(page, ".sheet-back");
+      check(
+        (card?.card.startsWith("Message 3:") ?? false) && card!.card.includes("Reply 3:") && card!.card.endsWith("3 of 12") && card!.fromEnd <= 1,
+        `a tick under the pointer shows the message's first words, the reply's and its place, and scrolls nothing: "${card?.card.slice(0, 40)}… ${card?.card.slice(-7)}"`,
+      );
+      await page.screenshot({ path: `${shots}/prompt-rail.png` });
+      await tick.click();
+      await page.waitForTimeout(400);
+      const jumped = await railOf(page, ".sheet-back");
+      check(jumped?.marked === 3 && /^u3 \d{1,2}px down$/.test(jumped.first), `a click brings message 3 to the timeline's top and marks its tick (marked ${jumped?.marked}, first shown ${jumped?.first})`);
+      // the keys, from the message box while it is empty, which keeps the focus
+      await page.evaluate(() => {
+        // a 1 for each arrow press the page took, a 0 for each it left to
+        // the browser. Added after the page's own listener and on the
+        // window as it bubbles, so the page has had the press by then.
+        const seen = document.documentElement.dataset;
+        window.addEventListener("keydown", (e) => {
+          if (e.key.startsWith("Arrow")) seen.railKeys = `${seen.railKeys ?? ""}${e.defaultPrevented ? 1 : 0}`;
+        });
+      });
+      await page.locator(".sheet-back .composer-box").click();
+      await page.keyboard.press("Alt+ArrowDown");
+      await page.waitForTimeout(300);
+      const after = await railOf(page, ".sheet-back");
+      await page.keyboard.press("Alt+ArrowUp");
+      await page.keyboard.press("Alt+ArrowUp");
+      await page.waitForTimeout(300);
+      const before = await railOf(page, ".sheet-back");
+      const typing = await page.evaluate(() => document.activeElement?.classList.contains("composer-box") ?? false);
+      check(
+        after?.marked === 4 && after.first.startsWith("u4 ") && before?.marked === 2 && before.first.startsWith("u2 ") && typing,
+        `Alt and the arrows step to the message after and before, from the empty message box (marked ${after?.marked}, then ${before?.marked}; the box ${typing ? "keeps" : "lost"} the focus)`,
+      );
+      // with a draft in the box the same keys are the draft's own caret moves
+      const box = page.locator(".sheet-back .composer-box");
+      await box.fill("half a thought");
+      await page.evaluate(() => (document.documentElement.dataset.railKeys = ""));
+      await page.keyboard.press("Alt+ArrowDown");
+      await page.keyboard.press("Alt+ArrowUp");
+      await page.waitForTimeout(300);
+      const drafting = await railOf(page, ".sheet-back");
+      const taken = await page.evaluate(() => document.documentElement.dataset.railKeys ?? "");
+      const words = await box.inputValue();
+      await box.fill("");
+      await page.keyboard.press("Alt+ArrowDown");
+      await page.waitForTimeout(300);
+      const emptied = await railOf(page, ".sheet-back");
+      check(
+        drafting?.marked === 2 && drafting.first === before?.first && taken === "00" && words === "half a thought" && emptied?.marked === 3 && emptied.first.startsWith("u3 "),
+        `with a draft in the box the keys stay the browser's and the rail stays put (marked ${drafting?.marked}, presses taken "${taken}"), and with the box emptied they step again (marked ${emptied?.marked})`,
+      );
+      // by hand: the mark follows the view
+      await page.locator(".sheet-back .sheet-body.console").hover();
+      await page.mouse.wheel(0, 50_000);
+      await page.waitForTimeout(500);
+      const end = await railOf(page, ".sheet-back");
+      check(end?.marked === 12 && end.fromEnd <= 1, `scrolled to the end by hand, the newest tick is marked again (marked ${end?.marked})`);
+    }
+    await page.close();
+
+    const phone = await fresh(undefined, true, true);
+    await phone.route("**/api/runs", (r) => (r.request().method() === "GET" ? r.fulfill({ json: [chat] }) : r.continue()));
+    await phone.goto(`${base}/?view=run&run=check-rail`, { waitUntil: "load" });
+    const barred = await phone.waitForSelector(".run-solo .rail-bar", { timeout: 20_000 }).then(() => true, () => false);
+    await phone.waitForTimeout(700);
+    const bar = barred ? await railOf(phone, ".run-solo") : null;
+    check(
+      bar !== null && bar.ticks === 0 && bar.bar.includes("12 of 12") && bar.short === 0 && (bar.clear ?? -1) >= 0 && bar.fromEnd <= 1 && bar.wider <= 0,
+      `on a phone the rail is a bar at the timeline's foot, its buttons a finger's size, the last step clear of it (${bar ? `"${bar.bar}", ${bar.short} short, ${bar.clear}px clear, ${bar.fromEnd}px from the end` : "no bar"})`,
+    );
+    if (bar) {
+      await phone.screenshot({ path: `${shots}/prompt-rail-phone.png` });
+      await phone.locator(".run-solo .rail-where select").selectOption("4");
+      await phone.waitForTimeout(350);
+      const picked = await railOf(phone, ".run-solo");
+      await phone.locator(".run-solo .rail-go").last().tap();
+      await phone.waitForTimeout(350);
+      const next = await railOf(phone, ".run-solo");
+      check(
+        (picked?.bar.includes("5 of 12") ?? false) && picked!.first.startsWith("u5 ") && (next?.bar.includes("6 of 12") ?? false) && next!.first.startsWith("u6 "),
+        `its place opens the list of messages and its arrows step (a pick: "${picked?.bar.slice(0, 12)}" at ${picked?.first}; then ↓: "${next?.bar.slice(0, 12)}" at ${next?.first})`,
+      );
+      const small = await smallFields(phone);
+      check(small.length === 0, `and its picker is no field iOS would zoom onto${small.length ? `: ${[...new Set(small)].join(", ")}` : ""}`);
+    }
+    await phone.close();
   }
 
   {

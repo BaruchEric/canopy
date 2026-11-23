@@ -105,6 +105,8 @@ describe("shapes", () => {
     expect(coord.tasks?.[0]?.branch).toBeUndefined();
     expect(qRun(q, { ...run, parent: "r0" } as Run).parent).toBe("mac|r0");
     expect(qRun(q, { ...run, forkOf: { run: "r0", step: "s3", at: 3, how: "cut" } } as Run).forkOf).toEqual({ run: "mac|r0", step: "s3", at: 3, how: "cut" });
+    // a side question names the run it was asked beside (FR-077)
+    expect(qRun(q, { ...run, sideOf: { run: "r0", title: "the parent" } }).sideOf).toEqual({ run: "mac|r0", title: "the parent" });
     const f = qFlow(q, flow);
     expect(f).toMatchObject({ id: "mac|f1", repoId: "mac|a/b", fleetId: "mac|fl1" });
     expect(f.steps[0]?.runId).toBe("mac|r1");

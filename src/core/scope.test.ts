@@ -143,6 +143,12 @@ describe("the routes a scoped caller reaches", () => {
     expect(scopeBodyRefusal("POST", "/api/repos/run", null)).toBeNull();
   });
 
+  test("a run's writes name the run in the body, a side question and a new model among them", () => {
+    for (const p of ["/api/runs/answer", "/api/runs/stop", "/api/runs/name", "/api/runs/side", "/api/runs/model"]) {
+      expect(scopeRule("POST", p)).toEqual({ hold: "ids", from: "body", keys: ["id"], maybe: [], self: false, fresh: false });
+    }
+  });
+
   test("a run's token names its own run without saying it", () => {
     expect(scopeRule("POST", "/api/runs/say")).toEqual({ hold: "ids", from: "body", keys: ["id"], maybe: [], self: true, fresh: false });
     expect(scopeRule("POST", "/api/runs/child")).toEqual({ hold: "ids", from: "body", keys: ["parent"], maybe: ["repo"], self: true, fresh: false });

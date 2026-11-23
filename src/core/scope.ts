@@ -145,6 +145,9 @@ const EXACT: Readonly<Record<string, ScopeRule>> = {
   "POST /api/runs/fork": body("id"),
   "POST /api/runs/interrupt": body("id"),
   "POST /api/runs/name": body("id"),
+  // a side question beside a run, and another model for its later messages (FR-077)
+  "POST /api/runs/side": body("id"),
+  "POST /api/runs/model": body("id"),
   "POST /api/runs/say": ids("body", ["id"], { self: true }),
   "POST /api/runs/child": ids("body", ["parent"], { maybe: ["repo"], self: true }),
   // a run's own: its work item's note, and a wake for itself, which may

@@ -11,16 +11,27 @@ const NOW = Date.UTC(2026, 9, 26, 12);
 const rows = capacityRows({ mac: { capacity: [emptyCapacity("claude"), emptyCapacity("codex")], held: [], settings: DEFAULT_CAPACITY } }, ["mac"], NOW);
 const count = (html: string, words: string): number => html.split(words).length - 1;
 
-test("a harness with no reading says so once, and the Claude hint points at the figure from where the reader is", () => {
+test("a harness with no reading says so once and says what gives one: its next run on that backend", () => {
   const chip = renderToStaticMarkup(<ReadingRows rows={rows} now={NOW} where="chip" />);
   expect(count(chip, "no reading")).toBe(2);
-  expect(chip).toContain("set the observed dollar figure in the costs view to estimate from the ledger");
+  expect(chip).toContain("the next Claude Code run on mac reports it");
+  expect(chip).toContain("the next Codex run on mac reports it");
+  // nothing to set: the dollar figure is the costs view's own, for Claude alone
+  expect(chip).not.toContain("dollar");
   const costs = renderToStaticMarkup(<ReadingRows rows={rows} now={NOW} where="costs" />);
   expect(count(costs, "no reading")).toBe(2);
-  expect(costs).toContain("set a 5-hour window in Claude $ below to estimate from the ledger");
-  expect(costs).not.toContain("costs view");
-  // one hint, for Claude; Codex has no ledger to estimate from
-  expect([count(chip, "capacity-hint"), count(costs, "capacity-hint")]).toEqual([1, 1]);
+  expect(costs).toContain("the next Claude Code run on mac reports it; until then a 5-hour window in Claude $ below estimates it from the ledger");
+  expect(count(costs, "Claude $")).toBe(1);
+  expect([count(chip, "capacity-hint"), count(costs, "capacity-hint")]).toEqual([2, 2]);
+});
+
+test("a harness with a run's count shows its windows and when they were read, and no hint", () => {
+  const counted = capacityRows({ mac: { capacity: [{ ...emptyCapacity("claude"), weekly: { used: 0.56, resetsAt: Date.UTC(2026, 9, 29, 15), readAt: NOW - 3 * 60_000 }, source: "run" }], held: [], settings: DEFAULT_CAPACITY } }, ["mac"], NOW);
+  const html = renderToStaticMarkup(<ReadingRows rows={counted} now={NOW} where="chip" />);
+  expect(html).toContain("week 56% · Thu");
+  expect(html).toContain("read from a run, 3m ago");
+  expect(html).not.toContain("capacity-hint");
+  expect(html).not.toContain("no reading");
 });
 
 const pristine = useStore.getState();

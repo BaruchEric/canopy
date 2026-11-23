@@ -29,7 +29,7 @@ export function windowLine(name: "5h" | "week", w: Window | null, now: number): 
 }
 
 const sourceWord = (c: Capacity): string =>
-  c.source === "endpoint" ? "read from the usage endpoint" : c.source === "observed" ? "observed from the ledger" : "no reading";
+  c.source === "endpoint" ? "read from the usage endpoint" : c.source === "run" ? "read from a run" : c.source === "observed" ? "observed from the ledger" : "no reading";
 
 /** One backend's answer as lines: a line per harness, its hit under it, the
  *  held starts and the thresholds. `paint` colours a harness's line. */

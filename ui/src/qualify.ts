@@ -79,6 +79,8 @@ export const qRun = (q: Q, r: Run): Run => ({
   ...(r.alsoIn ? { alsoIn: r.alsoIn.map(q) } : {}),
   // a fork names the run it was forked from (FR-043 plan 3)
   ...(r.forkOf ? { forkOf: { ...r.forkOf, run: q(r.forkOf.run) } } : {}),
+  // a side question names the run it was asked beside (FR-077)
+  ...(r.sideOf ? { sideOf: { ...r.sideOf, run: q(r.sideOf.run) } } : {}),
   ...(r.tasks
     ? {
         tasks: r.tasks.map((t) => ({

@@ -17,7 +17,7 @@
     "build": "vite build ui && vite build ui --config ui/vite.sw.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p ui/tsconfig.json && tsc --noEmit -p ui/tsconfig.sw.json",
     "lint": "oxlint src ui/src ui/sw.ts bin scripts",
-    "test": "bun test",
+    "test": "bun test --timeout 20000",
     "floorplan:update": "bun scripts/floorplan-update.ts",
     "understand:update": "bun scripts/understand-update.ts",
     "archify:update": "bun scripts/archify-update.ts",

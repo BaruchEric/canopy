@@ -66,6 +66,11 @@ if (tmpdir().length > 56) process.env["TMPDIR"] = "/tmp";
 // session or a git clone while the rest of the suite runs: under load (a
 // merge running the gates in several trees at once) one such test or its
 // beforeEach hook went over on five tries in a row, a different one each
-// time, and each passed alone. 20 s is the default for every test and hook;
-// a file or a test that sets its own keeps it.
+// time, and each passed alone. The suite's limit is 20 s for every test and
+// hook, and it comes from `--timeout 20000` in package.json's test script, so
+// the suite runs as `bun run test`. setDefaultTimeout covers one file: called
+// from this preload it reaches the first file of a run and no other (measured
+// on Bun 1.4.5), a hook cannot raise the limit of a test already registered,
+// and bunfig.toml has no key for it. The call stays so that `bun test <file>`
+// gets 20 s as well. A file or a test that sets its own limit keeps it.
 setDefaultTimeout(20_000);

@@ -49,6 +49,7 @@ import { historyFor, isRunActive, type Repo } from "../../../src/core/types";
 import { onBox } from "../front";
 import { kbKey } from "../kbfocus";
 import { useKb } from "../kbring";
+import { useStateOf } from "./useStateOf";
 
 /** What a machine chip's tooltip says about its backend. */
 function machineTitle(backend: string, state: string, reason: string | undefined, repo: Repo): string {
@@ -410,6 +411,7 @@ export function RepoGrid() {
   const selecting = useStore((s) => s.selecting);
   const box = useRef<HTMLElement>(null);
   const { zoom, entry: zoomEntry } = useZoom("board");
+  const stateOf = useStateOf(sort === "state");
   const groups = useMemo(
     () => groupRepos(
         repos,
@@ -417,8 +419,9 @@ export function RepoGrid() {
         undefined,
         many && cards.length > 0 ? boardChangedAt(useStore.getState()) : undefined,
         many && cards.length > 0 ? boardFavorite(useStore.getState()) : undefined,
+        stateOf,
       ),
-    [repos, cards, many, sort],
+    [repos, cards, many, sort, stateOf],
   );
   // the groups showing, which the gear's and Alt+click's folds act on
   const shownKeys = groups.map((g) => sectionKey(sort, g.key));

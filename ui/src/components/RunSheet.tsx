@@ -55,8 +55,14 @@ import { forkLine, stepWords } from "../../../src/core/handoff";
 import { branchTask, branchTaskWords, devTask as devTaskOf, renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
 import { AGENT_NAME, CHAT_BRANCH_HINT, OWN_BRANCH_NOTE, harnessOf, hideTodoSteps, nestSteps, resultLine, runBesideFlow, runPanelLabel, settledProposal, tokenTitle, type SettledProposal } from "../runs";
 import { RunTabs } from "./RunTabs";
+import { PromptRail, PromptRailEnd } from "./PromptRail";
+import { SideColumn, SideLine, useSideBox, type SideFrom } from "./SideQuestion";
 import { HARNESS } from "../../../src/core/harness";
 import { CENTERED } from "../pop";
+import { foldTurns } from "../turnfold";
+import { TurnFold } from "./TurnFold";
+import { NEW_WORKTREE, agentChip, boxFits, boxHeld, boxNotes, placeChips, routeWords } from "../startbox";
+import { StartBox } from "./StartBox";
 import { PopGear, PopGrip, PopHere } from "./PopGrip";
 import { api } from "../api";
 import { openSectionElsewhere, parseRoute } from "../routes";
@@ -365,6 +371,10 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   // a branch run whose note opens with #123 or an issue URL starts from
   // that GitHub issue; the backend reads it with gh (core/issue)
   const issue = branchable && onBranch ? parseIssueRef(note) : null;
+  // FR-079: at the intermediate level one plain run or chat starts from one
+  // box, this same state drawn small; "more options" is the pre-flight below
+  const quiet = useStore((s) => s.settings.level === "intermediate");
+  const [more, setMore] = useState(false);
 
   const go = async () => {
     if (!ready) return;
@@ -379,6 +389,43 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
       setBusy(false);
     }
   };
+
+  if (quiet && !more && boxFits(action)) {
+    return (
+      <StartBox
+        agentName={name}
+        workspace={workspace}
+        verb={spec.verb}
+        repoText={idText(repo.id)}
+        top={placeChips({ repo: repo.name, workspace: workspace ?? null, branch: repo.status?.branch ?? null, branchable, onBranch, beside: ownBeside, backend: backendOf(repo.id), host: repo.host ?? null })}
+        agent={agentChip({
+          loadouts: loadoutOffered ? loadouts.map((l) => ({ name: l.name, label: loadoutLabel(l), note: l.note })) : [],
+          pick: loadoutPick,
+          inherited: inheritedLabel(inherited, loadouts),
+          inherits: inheritedLoadout !== undefined,
+          loadout: loadout ? loadoutLabel(loadout) : null,
+          route: routeWords(agent, AGENT_NAME[agent.harness]),
+        })}
+        onPick={(id, value) => {
+          if (id === "branch") setOnBranch(value === NEW_WORKTREE);
+          if (id === "agent") setLoadoutPick(value);
+        }}
+        note={note}
+        setNote={setNote}
+        noteBox={noteBox}
+        mentions={mentions}
+        placeholder={words.notePlaceholder}
+        notes={boxNotes({ besideFlow, memberFlows: besideMemberFlows, ownBranch: ownBeside && onBranch, branch: repo.status?.branch ?? null, chatHint: chatOnBranch && !note.trim() ? CHAT_BRANCH_HINT : null })}
+        held={boxHeld({ branchable, onBranch, free, slots: GROUP_MAX })}
+        error={error}
+        busy={busy}
+        ready={ready}
+        onSend={() => void go()}
+        onMore={() => setMore(true)}
+        onClose={close}
+      />
+    );
+  }
 
   return (
     <>
@@ -563,6 +610,8 @@ export function Timeline({
   const nodes = nestSteps(hideTodoSteps(steps, todos.length > 0));
   // the latest plan, once settled: the one waiting shows in its form below
   const settled = settledProposal(run);
+  // FR-079: the intermediate level folds each turn's commands into one line
+  const quiet = useStore((s) => s.settings.level === "intermediate");
 
   return (
     <div
@@ -573,6 +622,7 @@ export function Timeline({
         stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
       }}
     >
+      <PromptRail steps={steps} list={list} onFollow={(on) => (stuck.current = on)} />
       {run.note && (
         <p className="run-note">
           <span className="eyebrow">your note</span>
@@ -596,9 +646,15 @@ export function Timeline({
         </ol>
       )}
       <ol className="steps">
-        {nodes.map((n) => (
-          <Step key={n.step.id} step={n.step} kids={n.kids} />
-        ))}
+        {quiet
+          ? foldTurns(nodes, { live: run.status === "working", end: run.status === "working" ? Date.now() : (run.endedAt ?? null) }).map((item) =>
+              item.kind === "fold" ? (
+                <TurnFold key={`fold ${item.id}`} fold={item} renderStep={(n) => <Step key={n.step.id} step={n.step} kids={n.kids} />} />
+              ) : (
+                <Step key={item.node.step.id} step={item.node.step} kids={item.node.kids} />
+              ),
+            )
+          : nodes.map((n) => <Step key={n.step.id} step={n.step} kids={n.kids} />)}
         {run.status === "working" && run.steps.length === 0 && (
           <li className="step k-note thinking">
             <span className="node" />
@@ -669,6 +725,7 @@ export function Timeline({
       )}
       {extra}
       {error && <p className="note err">{error}</p>}
+      <PromptRailEnd />
     </div>
   );
 }
@@ -784,6 +841,7 @@ export function Console({ run, repo, onClose, go }: { run: Run; repo: Repo | und
       <RunTabs run={run} repo={repo} go={go} />
       {(run.parent || run.group || run.branch?.group) && <ParentLine run={run} />}
       {run.forkOf && <ForkLine run={run} />}
+      {run.sideOf && <SideLine run={run} solo={go !== undefined} />}
       {run.branch && <BranchBlock run={run} act={act} />}
       {run.branch && !run.kept && <BranchApp run={run} act={act} />}
       {run.branch?.work && <WorkBlock run={run} />}
@@ -823,6 +881,7 @@ export function Console({ run, repo, onClose, go }: { run: Run; repo: Repo | und
           onSend={(text) => act(() => sayRun(run.id, text), true)}
           hidden={cardsOnly}
           {...(draft ? { draft } : {})}
+          {...(asksBeside(run) ? { side: { run } } : {})}
         />
       )}
 
@@ -872,6 +931,7 @@ export function Console({ run, repo, onClose, go }: { run: Run; repo: Repo | und
           {active ? "hide" : "close"}
         </button>
       </footer>
+      <SideColumn run={run} repo={repo} />
     </>
   );
 }
@@ -1384,7 +1444,10 @@ export function RunPane({ run, repo, onSend, hint }: {
   const sayRun = useStore((s) => s.sayRun);
   const interruptRun = useStore((s) => s.interruptRun);
   const draft = useStore((s) => s.chatDrafts[run.id]);
+  const showRun = useStore((s) => s.showRun);
   const [error, setError] = useState<string | null>(null);
+  // a viewer's pane reads the run and has no box (FR-074)
+  const reads = useLacks(run.repoId, "operate");
   const act = (fn: () => Promise<void>, propagate = false) => {
     setError(null);
     return run.kept ? Promise.resolve() : runConsoleAction(fn, setError, propagate);
@@ -1392,7 +1455,7 @@ export function RunPane({ run, repo, onSend, hint }: {
   return (
     <div className="run-pane" data-voice-run={run.id}>
       <Timeline run={run} repo={repo} error={error} onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))} />
-      {!run.kept && isRunActive(run) && (
+      {!run.kept && isRunActive(run) && !reads && (
         <Composer
           who={AGENT_NAME[harnessOf(run)]}
           repoId={run.repoId}
@@ -1402,6 +1465,8 @@ export function RunPane({ run, repo, onSend, hint }: {
           onSend={(text) => act(() => (onSend ? onSend(text) : sayRun(run.id, text)), true)}
           quiet
           {...(draft ? { draft } : {})}
+          // a pane has no room for a column: the run's console opens with it
+          {...(!onSend && asksBeside(run) ? { side: { run, reveal: () => showRun(run.id) } } : {})}
         />
       )}
     </div>
@@ -1426,9 +1491,14 @@ function composerMode(run: Run, onStop: (text: string) => Promise<void>): Compos
   return run.status === "idle" ? { kind: "turn" } : { kind: "steer", chat: run.chat, onStop };
 }
 
+/** whether a run's box offers a side question (FR-077): a side question's
+ *  own box sends its words to that thread, and a coordinator takes none */
+const asksBeside = (run: Run): boolean => !run.sideOf && !isCoordinator(run);
+
 /** A run's message box: a chat's next message, or a person's words into any
  *  run at work. Enter sends, shift-enter breaks a line; `/`, `$` and `@`
- *  open the agent's commands, skills and the repo's files. */
+ *  open the agent's commands, skills and the repo's files. A message that
+ *  opens with `btw` is a side question, which goes beside the run (`side`). */
 function Composer({
   who,
   repoId,
@@ -1439,6 +1509,7 @@ function Composer({
   quiet = false,
   hidden = false,
   first = false,
+  side,
 }: {
   /** the agent's name, for the box's placeholder while it works */
   who: string;
@@ -1457,16 +1528,19 @@ function Composer({
   /** nothing has been said yet: this message starts the agent inside
    *  canopy's prompt, where the CLI reads no slash command */
   first?: boolean;
+  /** the run a side question from this box is asked beside (FR-077) */
+  side?: SideFrom;
 }) {
   const [text, setText] = useState(draft);
   const [busy, setBusy] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const ready = mode.kind === "turn";
   const typed = text.trim().length > 0;
-  const can = !busy && typed;
+  const mentions = useMentions({ box, text, setText, repoId, harness, bare: !first });
+  const beside = useSideBox({ from: side, text, setText, box });
+  const can = !busy && typed && beside.to !== "held";
   // a job stops its turn only for words to go on with: Stop ends the run
   const canStop = mode.kind === "steer" && !busy && (typed || mode.chat);
-  const mentions = useMentions({ box, text, setText, repoId, harness, bare: !first });
 
   // Back to the box as soon as the agent has answered, unless it is out of
   // sight. Coming back into sight is no answer, so it takes no focus: on a
@@ -1493,7 +1567,7 @@ function Composer({
     }
   };
   const send = async () => {
-    if (can) await deliver(onSend);
+    if (can) await deliver(beside.to === "side" ? beside.send : onSend);
   };
   const stop = async () => {
     if (canStop) await deliver(mode.onStop);
@@ -1501,6 +1575,7 @@ function Composer({
 
   return (
     <div className="composer" hidden={hidden}>
+      {beside.hint}
       <div className="mention-host">
         {/* first, so it opens over the box; the timeline gives it room */}
         {mentions.menu}
@@ -1524,7 +1599,9 @@ function Composer({
         />
       </div>
       <DictateButton target={box} />
-      {mode.kind === "steer" && (
+      {beside.button}
+      {/* a side question leaves the run's turn alone, so nothing stops it */}
+      {mode.kind === "steer" && beside.to === "run" && (
         <button
           type="button"
           className="mini"
@@ -1546,7 +1623,9 @@ function Composer({
         className="mini strong"
         disabled={!can}
         title={
-          mode.kind === "relay"
+          beside.to !== "run"
+            ? "↩ asks it beside the run, which gets no message and works on"
+            : mode.kind === "relay"
             ? `↩ sends: ${mode.hint}`
             : ready
               ? `↩ sends, shift-↩ for a new line; ${harness === "codex" ? "/ or $ for a skill" : "/ for a command or skill"}, @ for a file`
@@ -1554,7 +1633,7 @@ function Composer({
         }
         onClick={() => void send()}
       >
-        send
+        {beside.to === "run" ? "send" : "ask beside"}
       </button>
     </div>
   );
@@ -1617,7 +1696,7 @@ function Step({ step, kids = [] }: { step: RunStep; kids?: readonly RunStep[] })
   }
   if (step.kind === "user") {
     return (
-      <li className="step k-user">
+      <li className="step k-user" data-prompt={step.id}>
         <span className="node" />
         <div className="step-body">
           <span className="eyebrow">you</span>

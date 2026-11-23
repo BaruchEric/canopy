@@ -33,8 +33,8 @@ import { HARNESS_SHARE, harnessShareMaxOf, type Palette } from "../settings";
 const PANEL_KEEPS = 240;
 
 const LEVEL = [
-  { value: "intermediate", label: "intermediate", title: "Agent first: run your app, save your work, and the rest one click away" },
-  { value: "advanced", label: "advanced", title: "Every section: changes, tasks, history, peers, launch and more" },
+  { value: "intermediate", label: "intermediate", title: "The quiet page: the top bar shows a chip only while it has something to say, a run's commands fold into one line a turn, a run starts from one box, and a repo's panel is agent first. The rest is one click away." },
+  { value: "advanced", label: "advanced", title: "Everything: every chip on the top bar, every step of a run, the full pre-flight, and every section of a repo's panel" },
 ] as const;
 
 const OPEN_IN = [
@@ -382,11 +382,16 @@ export function SettingsMenu() {
         {
           tab: "layout",
           key: "panel",
-          words: "repo panel intermediate advanced tour close buttons middle click screen width height zoom font size window",
+          words: "level quiet simple page top bar chips timeline fold start box repo panel intermediate advanced tour close buttons middle click screen width height zoom font size window",
           node: (
             <section className="settings-row">
-              <h3 className="panel-label">repo panel</h3>
-              <Seg label="How much a repo's panel shows" value={settings.level} options={LEVEL} onChange={(v) => setSetting("level", v)} />
+              <h3 className="panel-label">level and repo panel</h3>
+              <Seg label="How much the whole page shows" value={settings.level} options={LEVEL} onChange={(v) => setSetting("level", v)} />
+              <p className="settings-hint">
+                {settings.level === "intermediate"
+                  ? "The quiet page: the top bar keeps a chip only while it has something to say, a run's commands fold into one line a turn, a run starts from one box, and a repo's panel is the guided one."
+                  : "Everything shows: every chip on the top bar, every step of a run, the full pre-flight and every section of a repo's panel."}
+              </p>
               <button type="button" className="mini" onClick={() => setSetting("onboarded", false)}>
                 show the tour again
               </button>

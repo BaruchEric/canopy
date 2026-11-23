@@ -36,6 +36,24 @@ With Codex, a provider value names an entry already configured on the backend. C
 
 In chat, later messages continue the conversation. **end chat** closes it.
 
+Once a run holds two messages of yours, a rail of ticks runs down the right edge of its console, one tick per message. Point at a tick to see that message's first words, the start of the reply and its place, such as "49 of 96". Click it to bring the message to the top. `Option+Up` and `Option+Down` on a Mac, `Alt` with the same arrows elsewhere, step to the message before or after. They also work from the run's message box while it is empty. Once the box holds a draft, they move the caret as they do in any text field. On a phone or a touch screen the ticks become a bar under the console: the place, which opens the list of your messages, between an up and a down button.
+
+## Ask a side question while a run works
+
+A question for a run that is busy does not have to wait for its turn or cut into it. Start the message with `btw` in the run's box, or press **btw** beside send:
+
+```text
+btw what does retryBackoff default to?
+```
+
+- The box says the message is a side question and offers a model for it. **send it to the run instead** sends the words to the run as typed.
+- The answer comes in a thread beside the run, or over it on a phone. The thread starts with what the run knew when you asked, so it can answer about files the run has read. The run gets no message and keeps working.
+- Go on in the thread's own box. Its model select changes the model for the messages that follow.
+- Close the column to put the thread away. Its tab, marked `btw`, brings it back. **end chat** ends it, and ending the run leaves the thread open.
+- The thread is told to answer and to change no file unless you ask. It counts as one of the checkout's runs.
+
+A run that has ended takes no side question; fork it from its replay instead. On the CLI, `canopy run side RUN_ID "your question"` starts one and prints the new chat's ID, and `canopy run say` goes on in it.
+
 ## Run several at once on one repo
 
 A repo's checkout takes up to 8 runs at once, so an open chat does not stop a job or a second chat from starting. An incubator project is the exception and keeps one run at a time.

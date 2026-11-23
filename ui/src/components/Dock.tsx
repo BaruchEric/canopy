@@ -1531,8 +1531,8 @@ function PanelGear({
         ...moreWindows,
         closeEntry(panelClose, setSetting),
       ] satisfies GearEntry[]),
-    { type: "item", label: "intermediate panel", on: level === "intermediate", run: () => setSetting("level", "intermediate") },
-    { type: "item", label: "advanced panel", on: level === "advanced", run: () => setSetting("level", "advanced") },
+    { type: "item", label: "intermediate level", title: "The quiet page: this panel as the guided one, and the top bar, a run's timeline and the start box at their simplest", on: level === "intermediate", run: () => setSetting("level", "intermediate") },
+    { type: "item", label: "advanced level", title: "Everything, in this panel and across the page", on: level === "advanced", run: () => setSetting("level", "advanced") },
     {
       type: "item",
       label: "sections as tabs",

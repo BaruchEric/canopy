@@ -12,6 +12,8 @@ export type KeyAction =
   | "find"
   | "go"
   | "yank"
+  | "message-prev"
+  | "message-next"
   | "new"
   | "filter"
   | "filters"
@@ -32,7 +34,7 @@ export type KeyAction =
 
 export interface Shortcut {
   action: KeyAction;
-  /** the press as `pressOf` says it: a bare key, or `mod+` (⌘ or Ctrl) with a lowercase one */
+  /** the press as `pressOf` says it: a bare key, `mod+` (⌘ or Ctrl) with a lowercase one, or `alt+` with the key as it came */
   press: string;
   what: string;
   /** the views it works on, every view when absent */
@@ -52,6 +54,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { action: "command", press: ":", what: "The command line" },
   { action: "go", press: "g", what: "Then a letter, go to a view (below)" },
   { action: "yank", press: "y", what: "Then a letter, copy from the ringed card or row, or the open run sheet (below)" },
+  { action: "message-prev", press: "alt+ArrowUp", what: "In a run's timeline, the message you sent before the place in view; from its message box too, while the box is empty", anywhere: true },
+  { action: "message-next", press: "alt+ArrowDown", what: "The message you sent after it, then the newest step", anywhere: true },
   { action: "find", press: "mod+shift+f", what: "Search the files of every repo in view", views: GIT, anywhere: true },
   { action: "new", press: "n", what: "Something new, a goal or a project: the new box, focused", views: ["git", "manager"] },
   { action: "filter", press: "/", what: "Filter the repos", views: GIT },
@@ -117,10 +121,12 @@ export interface KeyPress {
 /**
  * A key press as the table names it: `mod+` for ⌘ or Ctrl, then `shift+`
  * when held, then the key in lowercase; a bare key as it came, since Shift
- * is what types `?`, `*` and `:`. Null with Alt, which no shortcut uses.
+ * is what types `?`, `*` and `:`. Alt alone is `alt+` and the key as it
+ * came (the prompt rail's arrows, FR-078); Alt with another modifier is
+ * null, which no shortcut uses.
  */
 export function pressOf(e: KeyPress): string | null {
-  if (e.altKey) return null;
+  if (e.altKey) return e.metaKey || e.ctrlKey || e.shiftKey ? null : `alt+${e.key}`;
   if (e.metaKey || e.ctrlKey) return `mod+${e.shiftKey ? "shift+" : ""}${e.key.toLowerCase()}`;
   return e.key;
 }
@@ -145,11 +151,14 @@ export const copyKeyOf = (key: string): CopyKey | null => YANK.find((y) => y.key
 const NAMED_CAPS: Readonly<Record<string, string>> = { Escape: "Esc", " ": "Space", Enter: "Enter", ArrowDown: "↓", ArrowUp: "↑" };
 
 /** A press as the sheet shows it, one string per key: `mod` is ⌘ on an
- *  Apple keyboard and Ctrl elsewhere. */
+ *  Apple keyboard and Ctrl elsewhere, and `alt` is ⌥ there and Alt
+ *  elsewhere. */
 export function keyCaps(press: string, apple: boolean): string[] {
   const named = NAMED_CAPS[press];
   if (named) return [named];
-  if (!press.startsWith("mod+")) return [press];
+  if (!press.startsWith("mod+") && !press.startsWith("alt+")) return [press];
   const parts = press.split("+");
-  return parts.map((p) => (p === "mod" ? (apple ? "⌘" : "Ctrl") : p === "shift" ? (apple ? "⇧" : "Shift") : p.toUpperCase()));
+  return parts.map((p) =>
+    p === "mod" ? (apple ? "⌘" : "Ctrl") : p === "shift" ? (apple ? "⇧" : "Shift") : p === "alt" ? (apple ? "⌥" : "Alt") : (NAMED_CAPS[p] ?? p.toUpperCase()),
+  );
 }

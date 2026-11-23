@@ -349,6 +349,14 @@ export class ClaudeDriver implements RunDriver {
     return this.agents.size > 0 || (this.held !== null && !this.woke);
   }
 
+  /** Another model from the next turn on: the CLI's `set_model` control
+   *  request, which takes its aliases ("default" among them) and answers
+   *  with the model it resolved to. */
+  async model(model: string): Promise<string | null> {
+    const reply = await this.request("set_model", { model });
+    return reply.ok ? null : reply.error;
+  }
+
   /** A chat between turns closes stdin and the CLI exits on its own;
    *  anything else is killed. */
   stop(): void {

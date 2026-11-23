@@ -18,6 +18,8 @@ import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
 import { harnessNames, harnessWeeks, isHarnessCard } from "../../src/core/harnessshare";
 import { changedAt, foldGroups as foldGroupList } from "./grouping";
+import { cardState, stateIn, type BoardState } from "./boardstate";
+import { lastEnded } from "./cardlive";
 import { foldKeys, sectionsHidden, withZoom, zoomOf, ZOOM_MAX, ZOOM_MIN, type SectionKey } from "./surface";
 import { addItemTab, addSectionTab, dropSectionTab, itemTabId, sectionTabId, type SectionPlace, type TabRef } from "./sectiontabs";
 import { applyTabs, captureTabs, type TabCard } from "./tabtemplates";
@@ -118,6 +120,7 @@ import {
   DEFAULT_LAUNCH,
   effectivePrimary,
   isFlowActive,
+  isLiveAgent,
   isRunActive,
   type About,
   type AgentPick,
@@ -918,6 +921,10 @@ export interface CanopyState {
   /** an accepted lesson's text by chat run id, which that chat's message box
    *  starts with; the user sends it, or not */
   chatDrafts: Record<string, string>;
+  /** the side question on show beside a run, by that run's id (FR-077):
+   *  the column its console draws. Closing the column drops the entry and
+   *  leaves the chat open. */
+  sideShown: Record<string, string>;
   /** the user's own workflow file an accepted lesson named, until put away,
    *  with the backend whose machine it is on */
   adviceFile: (Extract<AdviceAccepted, { kind: "file" }> & { backend: string }) | null;
@@ -1695,6 +1702,17 @@ export interface CanopyState {
   /** gives a live run a name of the user's own, over the one canopy cut
    *  from its first message or a model wrote (FR-073) */
   renameRun: (runId: string, name: string) => Promise<void>;
+  /** asks a side question beside a live run (FR-077): a chat forked from
+   *  the run's session, shown beside the run, which gets no message */
+  askSide: (runId: string, text: string, model?: string) => Promise<void>;
+  /** shows a side question beside the run it was asked of, or closes that
+   *  run's column with null; the chat stays open either way */
+  showSide: (parentId: string, sideId: string | null) => void;
+  /** brings a side question forward: beside the run it was asked of while
+   *  that run is on the page, else in a console of its own */
+  openSide: (sideId: string) => void;
+  /** another model for a side question's later messages */
+  modelRun: (runId: string, model: string) => Promise<void>;
   dismissRun: (runId: string) => Promise<void>;
   /** edits a coordinator's proposed or queued card; the run's broadcast brings it back */
   coordPlanEdit: (runId: string, taskId: string, change: CoordEdit) => Promise<void>;
@@ -2603,6 +2621,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   advice: {},
   harnessSaid: readHarnessSaid(),
   chatDrafts: {},
+  sideShown: {},
   adviceFile: null,
   inboxOpen: false,
   inboxFocus: null,
@@ -5663,6 +5682,28 @@ export const useStore = create<CanopyState>((set, get) => ({
     const run = await answered(runId, api.renameRun(runId, name));
     if (run) set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
   },
+  askSide: async (runId, text, model) => {
+    const side = await api.sideRun(runId, text, model);
+    // the stream may have brought the new run already, a step or two on
+    set((s) => ({ runs: s.runs[side.id] ? s.runs : { ...s.runs, [side.id]: side }, sideShown: { ...s.sideShown, [runId]: side.id } }));
+  },
+  showSide: (parentId, sideId) =>
+    set((s) => {
+      if (sideId) return { sideShown: { ...s.sideShown, [parentId]: sideId } };
+      const { [parentId]: _closed, ...sideShown } = s.sideShown;
+      return { sideShown };
+    }),
+  openSide: (sideId) => {
+    const parent = get().runs[sideId]?.sideOf?.run;
+    if (parent === undefined || !get().runs[parent]) return get().showRun(sideId);
+    get().showSide(parent, sideId);
+    get().showRun(parent);
+  },
+  modelRun: async (runId, model) => {
+    if (get().runs[runId]?.kept) return;
+    const run = await answered(runId, api.modelRun(runId, model));
+    if (run) set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+  },
   coordPlanEdit: (runId, taskId, change) => api.coordTask(runId, taskId, change),
   coordRemove: (runId, taskId) => api.coordTask(runId, taskId, { remove: true }),
   coordStart: (runId, ids) => api.coordStart(runId, ids),
@@ -5751,6 +5792,7 @@ export const useStore = create<CanopyState>((set, get) => ({
           s.collapsed,
           many ? boardChangedAt(s) : undefined,
           many ? boardFavorite(s) : undefined,
+          s.settings.sort === "state" ? stateIn(boardStates(s, Date.now())) : undefined,
         );
         const ids = rangeIds(order, s.selectAnchor, repoId);
         return { selected: setPick(s.selected, ids, s.selected.includes(s.selectAnchor)) };
@@ -6695,6 +6737,50 @@ export function boardFavorite(s: CanopyState): (r: Repo) => boolean {
     const card = cardOf(s, r.id);
     return card ? cardFavorite(card) : r.favorite === true;
   };
+}
+
+/** What goes on at each card in view, by the checkout it leads with, for
+ *  the board's "state" grouping (FR-079, boardstate.ts): a card's agents
+ *  as its live row reads them, canopy's runs and workflows on any of its
+ *  checkouts as its chip does (no flow's step, no flow on a branch of its
+ *  own, no snapshot opened from the run log), and when the last thing left
+ *  its row. A new object each call: select it with useShallow, which holds
+ *  it still while no card's state moves. */
+export function boardStates(s: CanopyState, now: number): Record<string, BoardState> {
+  const runsAt = new Map<string, Run[]>();
+  for (const r of Object.values(s.runs)) {
+    if (r.kept || !ownRun(s.flowRuns, r)) continue;
+    const list = runsAt.get(r.repoId);
+    if (list) list.push(r);
+    else runsAt.set(r.repoId, [r]);
+  }
+  const flowsAt = new Map<string, Flow[]>();
+  for (const f of Object.values(s.flows)) {
+    if (f.branch) continue;
+    const list = flowsAt.get(f.repoId);
+    if (list) list.push(f);
+    else flowsAt.set(f.repoId, [f]);
+  }
+  const status = statusOf(s);
+  const many = multi(s);
+  const split = (id: string): [string, string] => [backendOf(id), plainOf(id)];
+  const out: Record<string, BoardState> = {};
+  for (const repo of visibleRepos(s)) {
+    const card = many ? cardOf(s, repo.id) : undefined;
+    const ids = card ? card.checkouts.map((c) => c.id) : [repo.id];
+    const agents = agentsOn(s, repo.id);
+    const tasks = s.taskAll.filter((t) => ids.includes(t.repoId));
+    out[repo.id] = cardState(
+      {
+        agents: agents.filter(isLiveAgent).map(status),
+        runs: ids.flatMap((id) => runsAt.get(id) ?? []),
+        flows: ids.flatMap((id) => flowsAt.get(id) ?? []),
+        endedAt: lastEnded({ lead: repo.id, agents, tasks, split })?.at ?? null,
+      },
+      now,
+    );
+  }
+  return out;
 }
 
 /** Whether the card a repo is on is starred; a boolean, so a selector over
