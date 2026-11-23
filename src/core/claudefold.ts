@@ -234,9 +234,11 @@ export function foldClaude(state: ClaudeFold, m: Record<string, unknown>, out: F
   }
   if (type === "rate_limit_event") {
     // the CLI's word on the plan's window: a refusal's exact reset rides on
-    // the run's limited mark (FR-036)
+    // the run's limited mark, and the windows it counted are the backend's
+    // capacity reading (FR-036)
     const info = readRateLimit(m);
     if (info) out.rateLimit?.(info);
+    if (info?.windows) out.windows?.(info.windows);
     return;
   }
   if (type === "result") {

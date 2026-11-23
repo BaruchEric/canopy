@@ -14,12 +14,18 @@ import { ageWord, CAPACITY_GLYPH, capacityRows, capacityWord, heldRows, holdPerc
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/** What gives a harness with no reading one: its next run on that backend,
+ *  whose stream carries the harness's own count of its windows. The costs
+ *  view adds Claude's stopgap, the dollar figure in the form below it. */
+const readingHint = (row: CapacityRow, where: "chip" | "costs"): string => {
+  const next = `the next ${AGENT_NAME[row.cap.harness]} run ${row.backend ? `on ${row.backend}` : "here"} reports it`;
+  return where === "costs" && row.cap.harness === "claude" ? `${next}; until then a 5-hour window in Claude $ below estimates it from the ledger` : next;
+};
+
 /** One row per backend and harness: the windows, the source, a standing
- *  hit. With no reading the source line says so on its own, and Claude's
- *  row points at the observed dollar figure from wherever the reader is:
- *  the chip sends them to the costs view, the costs view to its own form. */
+ *  hit. With no reading the source line says so on its own, and the line
+ *  under it says what gives one. */
 export function ReadingRows({ rows, now, where }: { rows: CapacityRow[]; now: number; where: "chip" | "costs" }) {
-  const hint = where === "chip" ? "set the observed dollar figure in the costs view to estimate from the ledger" : "set a 5-hour window in Claude $ below to estimate from the ledger";
   return (
     <div className="capacity-rows">
       {rows.map((row) => (
@@ -29,7 +35,7 @@ export function ReadingRows({ rows, now, where }: { rows: CapacityRow[]; now: nu
             <span className={`capacity-reading ${row.tone}`} key={line}>{line}</span>
           ))}
           <span className="capacity-source">{row.source}</span>
-          {row.lines.length === 0 && row.cap.harness === "claude" && <span className="capacity-hint">{hint}</span>}
+          {row.lines.length === 0 && <span className="capacity-hint">{readingHint(row, where)}</span>}
           {row.cap.hit !== null && hitStands(row.cap.hit, now) && (
             <span className="capacity-hit">limit hit {ageWord(now - row.cap.hit.at)}: {row.cap.hit.text}</span>
           )}
@@ -219,7 +225,7 @@ export function CapacityBlock() {
       <details className="capacity-holds">
         <summary>the governor's holds</summary>
         <p className="cost-note">
-          Interactive work (a run, chat or ask you start) is never held. Normal work (a PR's auto-fix, a coordinator's cards, a flow's later steps) waits past the normal hold or on a limit hit; low work (triggers, best-of-N groups) waits past the low holds too. With no usage endpoint, the 5-hour share is the ledger's Claude dollars over the last five hours against the figure below; with no figure, nothing is held until a limit is hit.
+          Interactive work (a run, chat or ask you start) is never held. Normal work (a PR's auto-fix, a coordinator's cards, a flow's later steps) waits past the normal hold or on a limit hit; low work (triggers, best-of-N groups) waits past the low holds too. Each window is the harness's own count, read from the stream of its runs on that backend and good until the window resets. Before a run has reported one, the 5-hour share is the ledger's Claude dollars over the last five hours against the figure below; with neither, nothing is held until a limit is hit.
         </p>
         {order.filter((b) => capacity[b]).map((b) => (
           <SettingsForm key={b} backend={b} info={capacity[b]!} />

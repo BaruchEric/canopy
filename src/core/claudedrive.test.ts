@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Heard } from "./capacity";
 import { ClaudeDriver, claudeAccounting, cliArgs, parseQuestions, permissionAsk, serversDown, toolPaths } from "./claudedrive";
 import { BUILTIN_MENTIONS, builtinMentions, noteCliCommands } from "./mentions";
 import type { RpcSpawn } from "./codexrpc";
@@ -67,6 +68,8 @@ async function drive(
   /** when each wire line came, as the run log would stamp it */
   const stamps: number[] = [];
   const ended: string[] = [];
+  /** the windows the CLI counted, as the Runner would hear them */
+  const heard: Heard[] = [];
   const ctx = new RunCtx(
     run,
     {
@@ -88,7 +91,7 @@ async function drive(
         if (d === "out") opts.onWire?.(run, l);
       },
     },
-    { emit: opts.emit ?? (() => {}), ended: (r) => ended.push(r.status) },
+    { emit: opts.emit ?? (() => {}), ended: (r) => ended.push(r.status), heard: (_r, h) => heard.push(h) },
   );
   const driver = new ClaudeDriver({
     command: [process.execPath, FAKE],
@@ -113,7 +116,7 @@ async function drive(
       .filter(Boolean)
       .map((l) => JSON.parse(l) as Record<string, unknown>);
   const done = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "limited" || r.status === "stopped";
-  return { run, ctx, driver, until, sent, done, ended, wire, stamps };
+  return { run, ctx, driver, until, sent, done, ended, wire, stamps, heard };
 }
 
 const responseTo = (log: Record<string, unknown>[], id: string) =>
@@ -224,6 +227,12 @@ describe("the plan's usage limit (FR-036)", () => {
     const d = await drive("ratelimited");
     const run = await d.until(d.done, "the limit");
     expect([run.status, run.limited?.text, run.limited?.resetsAt, run.limited?.window]).toEqual(["limited", LIMIT, 1793026800 * 1000, "fiveHour"]);
+  });
+  test("the windows a rate_limit_event counted are heard once, as the backend's capacity reading", async () => {
+    const d = await drive("ratelimited");
+    await d.until(d.done, "the limit");
+    // the refusal after it counts no window of its own
+    expect(d.heard).toEqual([{ fiveHour: { used: 0.97, resetsAt: 1793000000 * 1000 }, weekly: { used: 0.4, resetsAt: 1793400000 * 1000 } }]);
   });
   test("a limit with no refusal event carries the text alone", async () => {
     const d = await drive("limited");

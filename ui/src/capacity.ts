@@ -58,7 +58,8 @@ export interface CapacityRow {
   tone: "moss" | "lichen" | "rust";
   /** The two lines, or none for `unknown` with no hit. */
   lines: string[];
-  /** "endpoint, read 3m ago", "observed from the ledger", or "no reading". */
+  /** "endpoint, read 3m ago", "read from a run, 3m ago", "observed from
+   *  the ledger", or "no reading". */
   source: string;
 }
 
@@ -80,6 +81,7 @@ export function capacityRows(info: Readonly<Record<string, CapacityInfo>>, order
         newest === null || (window !== null && window.readAt > newest) ? window.readAt : newest, null);
       const source = original.source === "endpoint"
         ? newestRead === null ? "endpoint, no reading" : `endpoint, read ${ageWord(now - newestRead)}`
+        : original.source === "run" && newestRead !== null ? `read from a run, ${ageWord(now - newestRead)}`
         : original.source === "observed" ? "observed from the ledger" : "no reading";
       rows.push({ backend, cap, tone, lines, source });
     }
@@ -87,14 +89,19 @@ export function capacityRows(info: Readonly<Record<string, CapacityInfo>>, order
   return rows;
 }
 
-/** The chip's word: a standing hit, else the highest 5-hour share. */
+/** The chip's word: a standing hit, else the highest 5-hour share, else the
+ *  highest weekly one when no row has a 5-hour window (a plan with the
+ *  week alone). */
 export function capacityWord(rows: readonly CapacityRow[]): string {
   if (rows.some((row) => row.cap.hit !== null)) return "limit";
-  const highest = rows.reduce<number | null>((share, row) => {
-    const used = row.cap.fiveHour?.used;
+  const highest = (kind: CapacityWindow): number | null => rows.reduce<number | null>((share, row) => {
+    const used = row.cap[kind]?.used;
     return used === undefined ? share : share === null ? used : Math.max(share, used);
   }, null);
-  return highest === null ? "no reading" : `5h ${Math.round(highest * 100)}%`;
+  const five = highest("fiveHour");
+  if (five !== null) return `5h ${Math.round(five * 100)}%`;
+  const week = highest("weekly");
+  return week === null ? "no reading" : `week ${Math.round(week * 100)}%`;
 }
 
 /** The most urgent row's tone, or moss with no rows. */

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import type { Heard } from "./capacity";
 import { absolutePath, claudeFold, foldClaude, toolPaths } from "./claudefold";
+import { codexFold, foldCodex } from "./codexfold";
 import type { FoldOut } from "./driver";
 import type { Run, RunResult, RunStep } from "./types";
 import { redactReplay, replayWire } from "./wirereplay";
@@ -100,6 +102,42 @@ test("redactReplay redacts every word a step shows with the secrets known now", 
   );
   expect(JSON.stringify(got)).not.toContain("s3cret");
   expect(got.steps[1]?.tool).toEqual({ name: "Bash", title: "echo <redacted:API_KEY>", status: "ok", output: "<redacted:API_KEY>", paths: ["<redacted:API_KEY>.txt"] });
+});
+
+describe("the folds hand over the harness's own count of its windows", () => {
+  const RESET = 1793286000;
+  const listen = () => {
+    const heard: Heard[] = [];
+    const steps: string[] = [];
+    const out: FoldOut = { step: (s) => { steps.push(s.kind); return { id: "1", at: 0, ...s }; }, changed: () => {}, note: (t) => { steps.push(t); }, todos: () => {}, result: () => {}, windows: (h) => heard.push(h) };
+    return { heard, steps, out };
+  };
+
+  test("Claude Code's rate_limit_event: the windows it counted, and no step", () => {
+    const { heard, steps, out } = listen();
+    const state = claudeFold("/repo", "/home/me", 100);
+    foldClaude(state, { type: "rate_limit_event", rate_limit_info: { status: "allowed", resetsAt: RESET, rateLimitType: "seven_day", unifiedWindows: { seven_day: { utilization: 0.56, resetsAt: RESET, status: "allowed" } } } }, out);
+    // an event that counted nothing says nothing
+    foldClaude(state, { type: "rate_limit_event", rate_limit_info: { status: "allowed" } }, out);
+    expect(heard).toEqual([{ weekly: { used: 0.56, resetsAt: RESET * 1000 } }]);
+    expect(steps).toEqual([]);
+  });
+
+  test("Codex's account/rateLimits/updated: the same, whatever thread is open", () => {
+    const { heard, steps, out } = listen();
+    const state = codexFold("/repo");
+    state.thread = "thr-1";
+    expect(foldCodex(state, "account/rateLimits/updated", { rateLimits: { limitId: "codex", primary: { usedPercent: 3, windowDurationMins: 10080, resetsAt: RESET }, secondary: null } }, out, 0)).toBeNull();
+    foldCodex(state, "account/rateLimits/updated", { rateLimits: { primary: null, secondary: null } }, out, 0);
+    expect(heard).toEqual([{ weekly: { used: 0.03, resetsAt: RESET * 1000 } }]);
+    expect(steps).toEqual([]);
+  });
+
+  test("a replay of a kept wire with those lines rebuilds the same steps and reads no capacity", () => {
+    const event = { type: "rate_limit_event", rate_limit_info: { status: "allowed", unifiedWindows: { seven_day: { utilization: 0.56, resetsAt: RESET } } } };
+    const got = replayWire([start(), line(event), line(say("done"))], run({ steps: [] }), { cwd: "/repo", home: "/home/me" });
+    expect(got.steps.map((s) => [s.kind, s.text])).toEqual([["text", "done"]]);
+  });
 });
 
 describe("claudefold", () => {

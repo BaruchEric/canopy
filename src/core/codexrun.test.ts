@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { TOOL_SETS } from "./actions";
+import type { Heard } from "./capacity";
 import {
   appServerArgs,
   approvalFacts,
@@ -634,6 +635,8 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
   const wire: [string, string][] = [];
   /** when each wire line came, as the run log would stamp it */
   const stamps: number[] = [];
+  /** the windows Codex counted, as the Runner would hear them */
+  const heard: Heard[] = [];
   const ctx = new RunCtx(
     run,
     {
@@ -644,7 +647,7 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
       label: "Codex",
       wire: (d, l) => { wire.push([d, l]); stamps.push(Date.now()); },
     },
-    { emit: () => {} },
+    { emit: () => {}, heard: (_r, h) => heard.push(h) },
   );
   const driver = new CodexDriver({ command: [process.execPath, FAKE], graceMs: opts.graceMs ?? 3_000 });
   driver.start(ctx, opts.message ?? "do the thing");
@@ -673,7 +676,7 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
     driver.stop();
   };
   const ended = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "limited" || r.status === "stopped";
-  return { run, ctx, driver, repo, until, sent, stop, ended, wire, stamps };
+  return { run, ctx, driver, repo, until, sent, stop, ended, wire, stamps, heard };
 }
 
 const replyTo = (log: Record<string, unknown>[], id: number) =>
@@ -756,6 +759,8 @@ describe("a Codex run", () => {
                 },
               },
             },
+            // the account's own notification names no thread
+            { notify: "account/rateLimits/updated", params: { rateLimits: { limitId: "codex", primary: { usedPercent: 3, windowDurationMins: 10080, resetsAt: 1793400000 }, secondary: null, planType: "prolite" } } },
             { complete: "completed", durationMs: 1234 },
           ],
         ],
@@ -764,6 +769,8 @@ describe("a Codex run", () => {
     );
     const run = await d.until(d.ended, "the end");
     expect(run.status).toBe("done");
+    // Codex's count of its windows is heard as the backend's capacity reading
+    expect(d.heard).toEqual([{ weekly: { used: 0.03, resetsAt: 1793400000 * 1000 } }]);
     expect(run.session).toBe("thr-1");
     expect(run.result).toEqual({
       text: "Done: edited a.ts.",

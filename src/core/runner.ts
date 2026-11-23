@@ -13,7 +13,7 @@
 
 import { branchPrompt, buildPrompt, busyWith, checkoutFull, sharingNote, type ActionSpec } from "./actions";
 import { normalizeAgent } from "./agent";
-import { CapacityHeldError, type Decision } from "./capacity";
+import { CapacityHeldError, type Decision, type Heard } from "./capacity";
 import { ClaudeDriver, cliArgs } from "./claudedrive";
 import { isGoalAnchor } from "./coordinator";
 import type { RpcProc } from "./codexrpc";
@@ -177,6 +177,9 @@ export const QUIET_WAIT = 5_000;
 export interface RunnerHooks {
   onChange: (run: Run) => void;
   onGone: (id: string) => void;
+  /** a run's harness counted the plan's windows on its stream: the
+   *  capacity hub's reading (FR-036) */
+  onHeard?: (run: Run, heard: Heard) => void;
   /** a fresh git status for the repo, read when a run ends, to tell whether
    *  the run changed anything the card shows; null when unreadable */
   status?: (repoId: string) => Promise<RepoStatus | null>;
@@ -597,7 +600,7 @@ export class Runner {
         ...(coordinate && client ? { track: (proc: RpcProc) => this.track(live, cwd, proc, client, this.coordProcs) } : {}),
       },
       // `live` is read only once the run has ended, long after it is set
-      { emit: (r) => this.hooks.onChange(r), ended: () => {
+      { emit: (r) => this.hooks.onChange(r), heard: (r, heard) => this.hooks.onHeard?.(r, heard), ended: () => {
         void Promise.all([this.finish(live), this.release(live)]).finally(() => {
           this.logged.delete(run.id);
           this.owned.delete(run.id);

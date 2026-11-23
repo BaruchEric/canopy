@@ -298,6 +298,18 @@ For Eric:
    endpoint read stays unwired and the governor runs on `observed` and
    the CLI's `rate_limit_event`. It is looked at again only if Anthropic's
    terms name reading usage with the CLI's credential.
+   2026-11-22: the endpoint is no longer needed for a reading. With no
+   dollar figure set, every backend said "no reading". Claude Code's
+   `rate_limit_event` carries `unifiedWindows` (`five_hour` and
+   `seven_day`, each with `utilization` and `resetsAt`, seen on 2.1.330)
+   and Codex's app-server sends `account/rateLimits/updated` (`primary`
+   and `secondary`, each with `usedPercent`, `windowDurationMins` and
+   `resetsAt`). Both arrive on the stream of a run canopy already drives,
+   so reading them asks nothing of Anthropic or OpenAI and touches no
+   credential. They are a third source, `run`, between `endpoint` and
+   `observed`: good until the window's reset, kept in `capacity.json`,
+   and leading the ledger estimate. A plan whose events name only the
+   week has no 5-hour line, and the chip then shows the week.
 9. **The observed dollar figure.** With no endpoint, `observedFiveHourUsd`
    is a guess at what one window is worth in Claude dollars; a week of
    ledger rows against the windows' resets gives a number.

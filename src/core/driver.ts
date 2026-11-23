@@ -20,7 +20,7 @@
 import type { RpcProc, RpcSpawn } from "./codexrpc";
 // a type alone: codexrun imports this module at run time
 import type { ApprovalFacts } from "./codexrun";
-import { isLimitText, type RateLimitInfo } from "./capacity";
+import { isLimitText, type Heard, type RateLimitInfo } from "./capacity";
 import { stageEnv, workEnv } from "./envnames";
 import { EDIT_TOOLS } from "./shellwords";
 import { STAGE_AWAY } from "./stagewire";
@@ -187,6 +187,12 @@ export interface DriveCtx {
    *  run's limited mark when the turn then ends on the limit. Optional, as
    *  Codex has no such event. */
   rateLimit?(info: RateLimitInfo): void;
+  /** The harness's own count of the plan's windows, heard on the run's
+   *  stream (Claude Code's `rate_limit_event`, Codex's
+   *  `account/rateLimits/updated`): the backend's capacity reading. It is
+   *  the Runner's to pass on and changes nothing on the run. Optional, as a
+   *  replay of a kept wire has no use for it. */
+  windows?(heard: Heard): void;
   /** The process is gone. Called once, whatever ended it. Whether that is a
    *  stop, the end of a chat, or a failure is the Runner's call. */
   exited(exit: DriveExit): void;
@@ -195,7 +201,7 @@ export interface DriveCtx {
 /** What a harness's fold (`foldClaude`, `foldCodex`) writes into: the live
  *  run's ctx, or the plain list a replay of its kept wire builds
  *  (`core/wirereplay.ts`). The fold itself is pure. */
-export type FoldOut = Pick<DriveCtx, "step" | "changed" | "note" | "todos" | "result" | "rateLimit">;
+export type FoldOut = Pick<DriveCtx, "step" | "changed" | "note" | "todos" | "result" | "rateLimit" | "windows">;
 
 /** The environment a run's process starts with: canopy's live one with the
  *  run's own laid over it, and for an incubator stage without what
@@ -368,6 +374,8 @@ export interface RunCtxHooks {
   emit: (run: DriveRun) => void;
   /** the run just ended: the Runner reads git status for its outcome */
   ended?: (run: DriveRun) => void;
+  /** the harness counted the plan's windows on this run's stream */
+  heard?: (run: DriveRun, heard: Heard) => void;
 }
 
 /** The Runner's half of one run: what runner.ts does in `step`, `ask`,
@@ -638,6 +646,10 @@ export class RunCtx implements DriveCtx {
     // only a refusal names the reset the limit waits on; an allowed word
     // after one means the window opened again
     this.refused = info.status === "rejected" ? { resetsAt: info.resetsAt, window: info.window } : null;
+  }
+
+  windows(heard: Heard): void {
+    this.hooks.heard?.(this.run, heard);
   }
 
   /** The run's limited mark: the text, and the refusal's reset and window

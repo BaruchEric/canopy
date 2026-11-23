@@ -7204,6 +7204,12 @@ export async function startServer(opts: {
       // run's settings file and mcp.json (FR-065)
       if ((run.canopyTools || run.equip) && !isRunActive(run)) void dropRunTools(state, run.id);
     },
+    // the harness's own count of the plan's windows is this backend's
+    // capacity reading (FR-036); a run on a named provider is not on the plan
+    onHeard: (run, heard) => {
+      const provider = run.agentSettings?.provider;
+      if (!provider || provider === "default") state.capacity.onHeard(run.harness, heard);
+    },
     onGone: (id) => {
       broadcast(state, { type: "run-gone", id });
       recountAwake(state);

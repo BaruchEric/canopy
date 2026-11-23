@@ -1,9 +1,10 @@
 /**
- * The capacity readings: one `Capacity` per harness from the ledger, every
- * limited run and, when configured, a usage reader; the hits across restarts
- * in `capacity.json`; the governor's `may` for the Runner and the pumps; the
- * starts the pumps hold, read from their owners; the routes and the event.
- * Bun-only.
+ * The capacity readings: one `Capacity` per harness from the harness's own
+ * count of its windows on each run's stream, the ledger, every limited run
+ * and, when configured, a usage reader; the hits and a run's count across
+ * restarts in `capacity.json`; the governor's `may` for the Runner and the
+ * pumps; the starts the pumps hold, read from their owners; the routes and
+ * the event. Bun-only.
  */
 
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -16,6 +17,8 @@ import {
   READ_IDLE,
   decide,
   emptyCapacity,
+  fade,
+  hear,
   hitOfLimited,
   hitStands,
   observe,
@@ -24,7 +27,10 @@ import {
   type Capacity,
   type CapacityHit,
   type CapacitySettings,
+  type CapacitySource,
   type Decision,
+  type Heard,
+  type Window,
 } from "../core/capacity";
 import type { CostEntry } from "../core/costs";
 import { configDir } from "../core/store";
@@ -90,6 +96,17 @@ const isCapacityHit = (value: unknown): value is CapacityHit => {
   );
 };
 
+/** a window as `capacity.json` keeps a run's count; null for anything else */
+const keptWindow = (value: unknown): Window | null =>
+  isRecord(value) && finite(value["used"]) && value["used"] >= 0 && finite(value["resetsAt"]) && finite(value["readAt"])
+    ? { used: value["used"], resetsAt: value["resetsAt"], readAt: value["readAt"] }
+    : null;
+
+/** A hit's source: an endpoint's or a run's reading stays what it is, and
+ *  anything else is observed from the hit. */
+const hitSource = (source: CapacitySource): CapacitySource =>
+  source === "endpoint" || source === "run" ? source : "observed";
+
 export class CapacityHub {
   private readonly readings = new Map<Harness, Capacity>();
   private readonly seenRuns = new Map<string, number>();
@@ -117,11 +134,11 @@ export class CapacityHub {
     for (const harness of HARNESSES) this.readings.set(harness, emptyCapacity(harness));
   }
 
-  /** Read persisted hits, drop expired ones, read current usage and start the clock. */
+  /** Read the kept hits and counts, drop expired ones, read current usage and start the clock. */
   async start(): Promise<void> {
     if (this.started || this.stopped) return;
     this.started = true;
-    await this.readHits();
+    await this.readKept();
     if (this.dropExpired(this.now())) await this.persist();
     await this.refresh();
   }
@@ -143,16 +160,26 @@ export class CapacityHub {
     if (!hit) return;
     this.seenRuns.set(run.id, limited.at);
     const current = this.get(run.harness);
-    this.readings.set(run.harness, {
-      ...current,
-      hit,
-      source: current.source === "endpoint" ? "endpoint" : "observed",
-    });
-    void this.persist().catch((error: unknown) => {
-      console.error(`capacity: could not write ${this.deps.file}`, error);
-    });
+    this.readings.set(run.harness, { ...current, hit, source: hitSource(current.source) });
+    this.keep();
     this.changed();
     this.schedule(true);
+  }
+
+  /** A harness's own count of its windows, heard on the stream of a run
+   *  here (Claude Code's `rate_limit_event`, Codex's
+   *  `account/rateLimits/updated`): the reading while no endpoint gives one.
+   *  It is kept across a restart, since only a run can say it again. */
+  onHeard(harness: Harness, heard: Heard): void {
+    const current = this.get(harness);
+    const next = hear(current, heard, this.now());
+    if (next === current) return;
+    this.readings.set(harness, next);
+    this.keep();
+    this.changed();
+    // a new reset is a new time to read again; the share moving alone must
+    // not push the clock back with every event
+    if (next.fiveHour?.resetsAt !== current.fiveHour?.resetsAt || next.weekly?.resetsAt !== current.weekly?.resetsAt) this.schedule();
   }
 
   get(harness: Harness): Capacity {
@@ -247,48 +274,65 @@ export class CapacityHub {
     return json(this.info());
   }
 
-  private async readHits(): Promise<void> {
+  /** What `capacity.json` kept: each harness's hit, and the windows a run
+   *  counted. A run that already spoke since the start is not overwritten. */
+  private async readKept(): Promise<void> {
     let parsed: unknown;
     try {
       parsed = JSON.parse(await readFile(this.deps.file, "utf8"));
     } catch {
       return;
     }
-    if (!isRecord(parsed) || !isRecord(parsed["hits"])) return;
-    for (const [name, value] of Object.entries(parsed["hits"])) {
+    if (!isRecord(parsed)) return;
+    for (const [name, value] of Object.entries(isRecord(parsed["windows"]) ? parsed["windows"] : {})) {
+      if (!isHarness(name) || !isRecord(value)) continue;
+      const current = this.get(name);
+      if (current.source !== "unknown") continue;
+      const fiveHour = keptWindow(value["fiveHour"]);
+      const weekly = keptWindow(value["weekly"]);
+      if (fiveHour || weekly) this.readings.set(name, { ...current, fiveHour, weekly, source: "run" });
+    }
+    for (const [name, value] of Object.entries(isRecord(parsed["hits"]) ? parsed["hits"] : {})) {
       if (!isHarness(name) || !isCapacityHit(value)) continue;
       const current = this.get(name);
-      this.readings.set(name, {
-        ...current,
-        hit: value,
-        source: current.source === "endpoint" ? "endpoint" : "observed",
-      });
+      this.readings.set(name, { ...current, hit: value, source: hitSource(current.source) });
     }
   }
 
+  /** Drops what has ended: a hit past its reset and grace, and a run's
+   *  window past its reset. True when the kept file is now wrong. */
   private dropExpired(now: number): boolean {
     let dropped = false;
     for (const harness of HARNESSES) {
       const current = this.get(harness);
-      if (current.hit && !hitStands(current.hit, now)) {
-        this.readings.set(harness, {
-          ...current,
-          hit: null,
-          source: harness === "codex" && current.source === "observed" ? "unknown" : current.source,
-        });
-        dropped = true;
+      let next = current;
+      if (next.hit && !hitStands(next.hit, now)) {
+        next = { ...next, hit: null, source: harness === "codex" && next.source === "observed" ? "unknown" : next.source };
       }
+      next = fade(next, now);
+      if (next === current) continue;
+      this.readings.set(harness, next);
+      dropped = true;
     }
     return dropped;
   }
 
+  /** Writes the file after a change; a failure is said and the reading stands. */
+  private keep(): void {
+    void this.persist().catch((error: unknown) => {
+      console.error(`capacity: could not write ${this.deps.file}`, error);
+    });
+  }
+
   private persist(): Promise<void> {
     const hits: Partial<Record<Harness, CapacityHit>> = {};
+    const windows: Partial<Record<Harness, Pick<Capacity, "fiveHour" | "weekly">>> = {};
     for (const harness of HARNESSES) {
-      const hit = this.get(harness).hit;
-      if (hit) hits[harness] = hit;
+      const current = this.get(harness);
+      if (current.hit) hits[harness] = current.hit;
+      if (current.source === "run") windows[harness] = { fiveHour: current.fiveHour, weekly: current.weekly };
     }
-    const content = JSON.stringify({ hits });
+    const content = JSON.stringify(Object.keys(windows).length > 0 ? { hits, windows } : { hits });
     const write = async (): Promise<void> => {
       await mkdir(dirname(this.deps.file), { recursive: true });
       await writeFile(this.deps.file, content, { mode: 0o600 });
@@ -308,8 +352,14 @@ export class CapacityHub {
     // a hit's end comes at its reset plus the grace: read again then, so
     // the work held on it goes as soon as it may rather than a read later
     for (const harness of HARNESSES) {
-      const hit = this.get(harness).hit;
+      const current = this.get(harness);
+      const hit = current.hit;
       if (hit && hitStands(hit, now)) wait = Math.min(wait, Math.max(0, hit.resetsAt + HIT_GRACE - now) + 250);
+      // a run's window ends at its reset, and what is held on it goes then
+      if (current.source !== "run") continue;
+      for (const window of [current.fiveHour, current.weekly]) {
+        if (window !== null && window.resetsAt !== null) wait = Math.min(wait, Math.max(0, window.resetsAt - now) + 250);
+      }
     }
     this.timer = setTimeout(() => {
       this.timer = null;

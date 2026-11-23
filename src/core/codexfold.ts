@@ -14,6 +14,7 @@
  *  Pure and browser-safe: no node or bun import, the clock passed in. */
 
 import { describeTool, toolDetail } from "./actions";
+import { readCodexLimits } from "./capacity";
 import type { DriveResult, DriveTokens, FoldOut } from "./driver";
 import { writtenPaths } from "./explain";
 import { unwrapShell } from "./shellwords";
@@ -297,6 +298,13 @@ export function foldCodex(state: CodexFold, method: string, params: Record<strin
     case "thread/tokenUsage/updated":
       state.tokens = tokensOf(rec(params["tokenUsage"])["total"]) ?? state.tokens;
       return null;
+    case "account/rateLimits/updated": {
+      // the account's, so it names no thread: Codex's own count of the
+      // plan's windows, which is the backend's capacity reading (FR-036)
+      const heard = readCodexLimits(params);
+      if (heard) out.windows?.(heard);
+      return null;
+    }
     case "turn/completed": {
       const turn = rec(params["turn"]);
       state.steps.clear();

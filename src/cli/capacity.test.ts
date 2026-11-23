@@ -39,6 +39,21 @@ describe("canopy capacity's lines", () => {
     ]);
   });
 
+  test("a run's count is said as one, and a window it lacks reads as none", () => {
+    const info: CapacityInfo = {
+      capacity: [
+        { ...emptyCapacity("claude"), weekly: { used: 0.56, resetsAt: THU_3PM, readAt: NOW }, source: "run" },
+        { ...emptyCapacity("codex"), fiveHour: { used: 0.4, resetsAt: AT_3PM, readAt: NOW }, weekly: { used: 0.03, resetsAt: THU_3PM, readAt: NOW }, source: "run" },
+      ],
+      held: [],
+      settings: DEFAULT_CAPACITY,
+    };
+    expect(plain(capacityLines("mac", info, NOW)).slice(1, 3)).toEqual([
+      "  claude  5h no reading   week 56% · resets Thu  (read from a run)",
+      "  codex   5h 40% · resets 15:00   week 3% · resets Thu  (read from a run)",
+    ]);
+  });
+
   test("the tone follows the holds", () => {
     const tones: string[] = [];
     const info = (used: number): CapacityInfo => ({ capacity: [{ ...emptyCapacity("claude"), fiveHour: { used, resetsAt: null, readAt: NOW }, source: "observed" }], held: [], settings: DEFAULT_CAPACITY });

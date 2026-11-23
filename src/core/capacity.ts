@@ -1,9 +1,11 @@
 /**
  * Capacity readings for a backend's agent harness. Endpoint readings come
- * from the harness usage endpoint; observed readings estimate Claude's
- * five-hour spend from the cost ledger; unknown means there is no reading.
- * This module is pure and browser-safe. The response fixtures are synthetic;
- * the limit text follows the CLI's wording as the probes record observed it.
+ * from the harness usage endpoint; run readings are the harness's own count
+ * of its windows, heard on the stream of a run canopy drives; observed
+ * readings estimate Claude's five-hour spend from the cost ledger; unknown
+ * means there is no reading. This module is pure and browser-safe. The
+ * response fixtures are synthetic; the limit text follows the CLI's wording
+ * as the probes record observed it.
  */
 
 import type { CostEntry } from "./costs";
@@ -27,7 +29,17 @@ export interface Window {
 }
 
 export type CapacityWindow = "fiveHour" | "weekly";
-export type CapacitySource = "endpoint" | "observed" | "unknown";
+export type CapacitySource = "endpoint" | "run" | "observed" | "unknown";
+
+/** A window as a harness counted it on a run's own stream. */
+export interface HeardWindow {
+  /** the share spent, 0 to 1; it may pass 1 */
+  used: number;
+  resetsAt: number;
+}
+
+/** The windows one event named; a window the account lacks is left out. */
+export type Heard = Partial<Record<CapacityWindow, HeardWindow>>;
 
 export interface CapacityHit {
   window: CapacityWindow;
@@ -41,8 +53,9 @@ export interface Capacity {
   harness: Harness;
   fiveHour: Window | null;
   weekly: Window | null;
-  /** endpoint: read from the usage endpoint; observed: inferred from a
-   *  limit hit and the ledger; unknown: never read */
+  /** endpoint: read from the usage endpoint; run: the harness's own count,
+   *  heard on a run's stream, good until each window's reset; observed:
+   *  inferred from a limit hit and the ledger; unknown: never read */
   source: CapacitySource;
   /** a limit hit the harness reported, until its reset passes */
   hit: CapacityHit | null;
@@ -256,15 +269,50 @@ export function limitHit(text: string, now: number): CapacityHit | null {
 export const hitStands = (hit: CapacityHit | null, now: number): boolean =>
   hit !== null && now < hit.resetsAt + HIT_GRACE;
 
-/** Estimate Claude's five-hour spend from ledger dollars when no endpoint
- *  reading is available. A missing dollar figure leaves the reading unknown. */
+/** A window that is still open: its reset is known and has not come. */
+const open = (window: Window | null, now: number): Window | null =>
+  window !== null && window.resetsAt !== null && window.resetsAt > now ? window : null;
+
+/** A run's reading past its reset says nothing: that window is dropped, and
+ *  with none left the reading is unknown again, or observed while a hit
+ *  stands. Any other source is left as it is. */
+export function fade(capacity: Capacity, now: number): Capacity {
+  if (capacity.source !== "run") return capacity;
+  const fiveHour = open(capacity.fiveHour, now);
+  const weekly = open(capacity.weekly, now);
+  if (fiveHour === null && weekly === null) {
+    return { ...capacity, fiveHour: null, weekly: null, source: hitStands(capacity.hit, now) ? "observed" : "unknown" };
+  }
+  return fiveHour === capacity.fiveHour && weekly === capacity.weekly ? capacity : { ...capacity, fiveHour, weekly };
+}
+
+/** A harness's own count becomes the reading: a window the event names
+ *  replaces the one held, a window it leaves out stays until its reset, and
+ *  a ledger estimate gives way, since the count is the plan's own number.
+ *  An endpoint reading is left as it is. */
+export function hear(capacity: Capacity, heard: Heard, now: number): Capacity {
+  if (capacity.source === "endpoint") return capacity;
+  const kept = capacity.source === "run";
+  const window = (name: CapacityWindow): Window | null => {
+    const said = heard[name];
+    if (said === undefined) return kept ? capacity[name] : null;
+    return { used: said.used, resetsAt: said.resetsAt, readAt: now };
+  };
+  const next = fade({ ...capacity, fiveHour: window("fiveHour"), weekly: window("weekly"), source: "run" }, now);
+  // nothing named and nothing held: the reading it had stands
+  return next.source !== "run" && !kept ? capacity : next;
+}
+
+/** Estimate Claude's five-hour spend from ledger dollars when neither an
+ *  endpoint nor a run has given a reading. A missing dollar figure leaves
+ *  the reading unknown. */
 export function observe(
   capacity: Capacity,
   rows: readonly CostEntry[],
   settings: Pick<CapacitySettings, "observedFiveHourUsd">,
   now: number,
 ): Capacity {
-  if (capacity.harness !== "claude" || capacity.source === "endpoint") return capacity;
+  if (capacity.harness !== "claude" || capacity.source === "endpoint" || capacity.source === "run") return capacity;
   const figure = settings.observedFiveHourUsd;
   if (figure === null || !Number.isFinite(figure) || figure <= 0) {
     return {
@@ -327,8 +375,12 @@ export function decide(capacity: Capacity, priority: Priority, settings: Capacit
       why: `the ${windowName} window is spent (resets ${resetWord(hit.resetsAt, now)})`,
     };
   }
-  const fiveHour = capacity.source === "endpoint" && stale(capacity.fiveHour, now) ? null : capacity.fiveHour;
-  const weekly = capacity.source === "endpoint" && stale(capacity.weekly, now) ? null : capacity.weekly;
+  // an endpoint's window must be fresh; a run's stands until its reset,
+  // since a share only grows inside its window
+  const usable = (window: Window | null): Window | null =>
+    capacity.source === "endpoint" ? (stale(window, now) ? null : window) : capacity.source === "run" ? open(window, now) : window;
+  const fiveHour = usable(capacity.fiveHour);
+  const weekly = usable(capacity.weekly);
   if (priority === "normal") {
     return fiveHour !== null && fiveHour.used >= settings.normalHold
       ? windowHold("5-hour", fiveHour, now)
@@ -388,12 +440,29 @@ export class CapacityHeldError extends Error {
 /** The CLI's `rate_limit_event` in stream-json: `rate_limit_info` with
  *  `status` ("allowed", "allowed_warning", "rejected"), `resetsAt` in unix
  *  seconds and `rateLimitType` ("five_hour", "seven_day", or a model's own
- *  weekly window). Null for any other line or a shape it does not know. */
+ *  weekly window). Those three describe the window that limits now. The
+ *  event also carries `unifiedWindows` (seen on 2.1.330): `five_hour` and
+ *  `seven_day`, each with `utilization` as a share and `resetsAt`, which
+ *  the CLI reads off the API's response headers. A CLI that sends none may
+ *  give `utilization` for the limiting window alone. Null for any other
+ *  line or a shape it does not know. */
 export interface RateLimitInfo {
   status: string;
   resetsAt: number | null;
   window: CapacityWindow | null;
+  /** the windows the event counted, when it counted any */
+  windows?: Heard;
 }
+
+/** One counted window: a share of 0 or more and a reset in unix seconds. */
+const heardWindow = (used: unknown, seconds: unknown): HeardWindow | null => {
+  if (!isFiniteNumber(used) || used < 0 || !isFiniteNumber(seconds) || seconds <= 0) return null;
+  const resetsAt = seconds * 1000;
+  return Number.isFinite(new Date(resetsAt).getTime()) ? { used, resetsAt } : null;
+};
+
+const heardOf = (fiveHour: HeardWindow | null, weekly: HeardWindow | null): Heard | null =>
+  fiveHour === null && weekly === null ? null : { ...(fiveHour ? { fiveHour } : {}), ...(weekly ? { weekly } : {}) };
 
 export function readRateLimit(message: unknown): RateLimitInfo | null {
   if (!isRecord(message) || message["type"] !== "rate_limit_event") return null;
@@ -405,7 +474,44 @@ export function readRateLimit(message: unknown): RateLimitInfo | null {
   const window: CapacityWindow | null = kind === "five_hour"
     ? "fiveHour"
     : typeof kind === "string" && kind.startsWith("seven_day") ? "weekly" : null;
-  return { status: info["status"], resetsAt: ms !== null && Number.isFinite(new Date(ms).getTime()) ? ms : null, window };
+  const unified = info["unifiedWindows"];
+  const counted = (name: string): HeardWindow | null => {
+    if (isRecord(unified)) {
+      const each = unified[name];
+      return isRecord(each) ? heardWindow(each["utilization"], each["resetsAt"]) : null;
+    }
+    // the plan's own window only: a model's weekly window is not the week's
+    return kind === name ? heardWindow(info["utilization"], seconds) : null;
+  };
+  const windows = heardOf(counted("five_hour"), counted("seven_day"));
+  return {
+    status: info["status"],
+    resetsAt: ms !== null && Number.isFinite(new Date(ms).getTime()) ? ms : null,
+    window,
+    ...(windows ? { windows } : {}),
+  };
+}
+
+const CODEX_FIVE_HOURS = 300;
+const CODEX_WEEK = 10_080;
+
+/** Codex's `account/rateLimits/updated`: `rateLimits.primary` and
+ *  `.secondary`, each with `usedPercent` (0 to 100), `windowDurationMins`
+ *  and `resetsAt` in unix seconds. A window is known by its length: 300
+ *  minutes is the 5-hour one, 10080 the week's. Null when it names
+ *  neither. */
+export function readCodexLimits(params: unknown): Heard | null {
+  const limits = isRecord(params) ? params["rateLimits"] : null;
+  if (!isRecord(limits)) return null;
+  const counted = (minutes: number): HeardWindow | null => {
+    for (const slot of [limits["primary"], limits["secondary"]]) {
+      if (!isRecord(slot) || slot["windowDurationMins"] !== minutes) continue;
+      const percent = slot["usedPercent"];
+      return heardWindow(isFiniteNumber(percent) ? percent / 100 : null, slot["resetsAt"]);
+    }
+    return null;
+  };
+  return heardOf(counted(CODEX_FIVE_HOURS), counted(CODEX_WEEK));
 }
 
 /** A run's limited mark as a hit: the text read as `limitHit` reads it,

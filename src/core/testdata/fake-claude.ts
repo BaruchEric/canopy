@@ -13,12 +13,16 @@
  *          and once the first is answered finishes with a result whose text
  *          is `env:$CANOPY_RUN`
  *    chat  answers every user message with a text and a result
+ *    counted  the same, after a rate_limit_event that counts both windows:
+ *          the 5-hour one at 62% with an hour left, the week at 40% with
+ *          three days left, as of when it runs
  *    canopytool  calls canopy's own status tool, as probe P1 saw it, and ends
  *    die   writes "boom" to stderr and exits 3 before any result
  *    limited answers every user message with a synthetic usage-limit result
  *    limitdie writes a synthetic usage limit to stderr and exits 1
- *    ratelimited is limited with the CLI's rate_limit_event first: a refusal
- *          of the five-hour window that resets at unix 1793026800
+ *    ratelimited is limited with the CLI's rate_limit_event first: an
+ *          allowed one that counts both windows, then a refusal of the
+ *          five-hour window that resets at unix 1793026800
  *    async starts a background Agent and sends a result while it runs, then
  *          a permission request from inside the subagent; once that is
  *          answered, the task notification and the real result
@@ -181,7 +185,7 @@ function onUser(): void {
     process.exit(1);
   }
   if (mode === "ratelimited") {
-    out({ type: "rate_limit_event", rate_limit_info: { status: "allowed", resetsAt: 1793000000, rateLimitType: "five_hour" }, session_id: "sess-1" });
+    out({ type: "rate_limit_event", rate_limit_info: { status: "allowed", resetsAt: 1793000000, rateLimitType: "five_hour", unifiedWindows: { five_hour: { utilization: 0.97, resetsAt: 1793000000, status: "allowed" }, seven_day: { utilization: 0.4, resetsAt: 1793400000, status: "allowed" } } }, session_id: "sess-1" });
     out({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 1793026800, rateLimitType: "five_hour" }, session_id: "sess-1" });
   }
   if (mode === "limited" || mode === "ratelimited") {
@@ -220,7 +224,12 @@ function onUser(): void {
     else queued = true;
     return;
   }
-  if (mode === "chat") {
+  if (mode === "counted") {
+    const now = Math.floor(Date.now() / 1000);
+    const five = { utilization: 0.62, resetsAt: now + 3600, status: "allowed" };
+    out({ type: "rate_limit_event", rate_limit_info: { status: "allowed", resetsAt: five.resetsAt, rateLimitType: "five_hour", isUsingOverage: false, unifiedWindows: { five_hour: five, seven_day: { utilization: 0.4, resetsAt: now + 3 * 86400, status: "allowed" } } }, session_id: "sess-1" });
+  }
+  if (mode === "chat" || mode === "counted") {
     out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "text", text: `reply ${turns}` }] } });
     out({ type: "result", subtype: "success", is_error: false, result: `reply ${turns}`, num_turns: 1, total_cost_usd: 0.01, duration_ms: 3, session_id: "sess-1" });
     return;
