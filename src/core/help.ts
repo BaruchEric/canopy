@@ -26,6 +26,9 @@ usage:
   canopy people me [--name "<name>"]   who this token is held for and what it holds; --name renames you
   canopy people teams               the teams; teams add "<name>" [--folder <path>]..., teams set <team> [--name N] [--folder P]..., teams remove <team>
   canopy people activity            who did what, newest first; --person <person>, --limit N
+  canopy tenant add <name> --root <dir>   a canopy of its own on this host for a group that must not reach your files (run on the host)
+                                    --port 7880-7899, --origins <origin,...>, --url <address your page dials>, --dry-run
+  canopy tenant list | up <name> | remove <name> [--purge]   the tenants here | start one again on the new build | stop one and drop it from the registry
   canopy commit <repo> -m "msg"     commit staged changes
   canopy commit <repo> --ai [--all] [--push]   AI message; --all stages everything
   canopy suggest <repo>              print an AI-suggested commit message
@@ -262,7 +265,7 @@ export function asksHelp(args: readonly string[]): boolean {
 
 /** words the CLI takes for another command's: notes is note, and tree is
  *  the bare canopy [dir] */
-const SAME_AS: Readonly<Record<string, string>> = { notes: "note", clips: "clip", sources: "source", tree: "[dir]" };
+const SAME_AS: Readonly<Record<string, string>> = { notes: "note", clips: "clip", sources: "source", tenants: "tenant", tree: "[dir]" };
 
 /** one command's lines from the help: each "  canopy <verb> ..." line and
  *  the deeper-indented lines under it; undefined for a verb it does not list */

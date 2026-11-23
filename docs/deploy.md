@@ -1622,6 +1622,24 @@ backend:
    machine chips, and clicking the non-home one should open that checkout's
    panel and, from there, a shell on the other machine.
 
+## Tenants
+
+A tenant (FR-074, plan 3) is a canopy of its own for a group that must not reach the owner's files. Make one on the host, never in a canopy shell, since the container cannot run docker or launchd:
+
+```bash
+ssh macmini-ts
+cd ~/dev/dev-tools/canopy
+bun bin/canopy.ts tenant add acme --root /home/eric/clients/acme
+```
+
+On the mini that writes `~/.local/share/canopy-tenants/acme/` (`tenant.json`, the project's `.env` and the tenant's `home/`) and runs `docker compose -p canopy-t-acme -f docker-compose.tenant.yml up -d` from the images the main stack built, so deploy first. The project mounts the tenant's folder and its own home and nothing of the owner's: no `~/.claude`, `~/.claude.json`, `~/.ssh`, `~/.codex`, `GH_TOKEN` or secrets socket. Its one port (the first free of 7880 to 7899) is on loopback, and `sudo -n tailscale serve --bg --https=<port>` puts it on the tailnet at `https://macmini-2018.tail2d2c60.ts.net:<port>`; the main stack's registry names it there, through `docker exec canopy-canopy-1`. It answers every page in the main stack's `CANOPY_ORIGINS` and `CANOPY_PUBLIC_ORIGIN`. A redeploy leaves tenants running on the image they started with; `canopy tenant up acme` on the host then recreates the project on the new one.
+
+What comes next is printed: open its address and type the first code its log printed (`docker logs canopy-t-acme-canopy-1`), then give it a claude login of its own, a provider file in its config's `providers/` (`docker exec -it canopy-t-acme-canopy-1 sh`) on a key the group pays for, or `claude` signed in from one of its shells.
+
+`canopy tenant list` says which are up. `canopy tenant remove acme` takes the project down, turns serve off and drops the registry entry, keeping the volume `canopy-t-acme_config` and the folder; `--purge` deletes both.
+
+On a Mac the same command makes a launchd agent, `canopy.tenant.<name>`, on loopback with its own config dir and `HOME` under `~/.config/canopy/tenants/<name>/`. It keeps the roster and the claude login apart and runs as your OS user, so it is no wall for files.
+
 ## Deploying the other backends
 
 `scripts/redeploy.sh` keeps a list of the backends a Mac deploys to, as

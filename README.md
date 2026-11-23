@@ -72,6 +72,7 @@ canopy people invite | uninvite <person>             # a new invite | drop their
 canopy people role <person> <role>                   # owner | admin | member | viewer; rename, team, off, on, remove
 canopy people teams add "Rio" --folder ~/dev/rio     # a team and the folders it works in; teams set, teams remove
 canopy people activity             # who did what, newest first
+canopy tenant add <name> --root <dir>   # a canopy of its own on this host for a group that must not reach your files
 canopy mcp                         # an MCP server on stdio: canopy's tools with $CANOPY_TOKEN's rights (claude mcp add canopy -- canopy mcp)
 canopy mcp tools                   # the tools that token holds
 canopy <any command> --token T     # send this caller token (default: the token file, else $CANOPY_TOKEN)
@@ -605,9 +606,20 @@ Turning a person off signs them out of everything at once and keeps their record
 
 The top bar shows who else is on, a repo's card shows who else has it open, and a run or a kept shell says who started it when that was not you. The People view's log says who did what. A viewer's page offers nothing their role refuses: no menus of things to start, no commit box, no pull or push, no run or save buttons and no answers to a run, and the top bar says "viewing" at every level.
 
-A team is a name, its people and the folders they work in. A member or a viewer on a team with folders sees and reaches only the repos under them: the board, their runs, shells and tasks, and the People view. The Library, the kit, notes, secrets, the landing queue and the other views are closed to them, and the backend refuses those routes whatever asks. Owners and admins see everything. For a viewer that is exact. A member's agent or shell still runs as the one OS user canopy runs as and could read a sibling folder with `cat`, so two groups that must not reach each other's files get a backend each, and one page shows both. `canopy auth status` names the folders a held person reaches.
+A team is a name, its people and the folders they work in. A member or a viewer on a team with folders sees and reaches only the repos under them: the board, their runs, shells and tasks, and the People view. The Library, the kit, notes, secrets, the landing queue and the other views are closed to them, and the backend refuses those routes whatever asks. Owners and admins see everything. For a viewer that is exact. A member's agent or shell still runs as the one OS user canopy runs as and could read a sibling folder with `cat`, so two groups that must not reach each other's files get a backend each, a tenant, and one page shows both. `canopy auth status` names the folders a held person reaches.
 
 Runs spend the backend's own `claude` login, and a Max plan is one person's. A backend several people start runs on should run them through a provider file on a key the team pays for (`providers/<id>.json`).
+
+A tenant is a canopy of its own for such a group. Run this on the host, not in canopy's container:
+
+```bash
+canopy tenant add acme --root ~/clients/acme   # its own people, callers, state and port (7880-7899); prints its first sign-in code
+canopy tenant list                             # the tenants here, up or down, and where each logs
+canopy tenant up acme                          # start it again on a new deploy's build
+canopy tenant remove acme [--purge]            # stop it and drop it from the registry; --purge deletes its state too
+```
+
+On the mini a tenant is a compose project that mounts the tenant's folder and a home of its own and nothing of yours: no `~/.claude`, `~/.ssh`, `GH_TOKEN` or secrets. `tailscale serve` puts it on the tailnet over https, and the main stack's registry names it, so the page lists it after a reload. On a Mac it is a launchd agent on loopback with its own config and `HOME`, which keeps its people, its claude login and your GitHub keychain login apart from yours but runs as your OS user, so its agents could read your files and ssh would use your keys. Either way it starts with no claude login: give it a provider file in its config's `providers/` or sign claude in from one of its shells.
 
 Roles are refused only where the backend enforces (`CANOPY_CALLERS=enforce`). In the default `log` mode a role is counted and not refused, though adding people and minting invites always take an admin.
 

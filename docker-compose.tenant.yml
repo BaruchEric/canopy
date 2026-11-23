@@ -1,0 +1,78 @@
+# A tenant (FR-074, plan 3): a canopy of its own for a group that must not
+# reach the owner's files. `canopy tenant add <name> --root <dir>`, run on the
+# host, writes the project's .env under ~/.local/share/canopy-tenants/<name>/
+# and runs
+#
+#   docker compose -p canopy-t-<name> --env-file <that .env> -f docker-compose.tenant.yml up -d
+#
+# It uses the images the main stack built (canopy-shells, canopy-backend) and
+# none of the main stack's binds, so any number of tenants run beside it. It
+# mounts the tenant's folder and the tenant's own home, and nothing of the
+# owner's: no ~/.claude, ~/.claude.json, ~/.ssh, ~/.codex, GH_TOKEN or secrets
+# socket, any one of which would hand the tenant the owner's login, keys or
+# plan. So a tenant starts with no claude login: give it a provider file or
+# sign claude in from one of its shells (docs/deploy.md, "Tenants").
+# No incubator, coordinator, secret store, previews or tunnel.
+services:
+  shells:
+    image: canopy-shells:latest
+    environment:
+      - CANOPY_CONFIG_DIR=/config
+      - BROWSER=none
+    volumes:
+      - ${TENANT_ROOT:?}:${TENANT_ROOT:?}
+      - config:/config
+      - ${TENANT_HOME:?}/.claude:/home/bun/.claude
+      - ${TENANT_HOME:?}/.claude.json:/home/bun/.claude.json
+      - ${TENANT_HOME:?}/.codex:/home/bun/.codex
+      - ${TENANT_HOME:?}/.config/git:/home/bun/.config/git
+      - /etc/localtime:/etc/localtime:ro
+    # one port. On loopback when canopy tenant add can put it on the
+    # tailnet over https with tailscale serve (as the main stack's 7849 is),
+    # else on the main stack's CANOPY_LISTEN, plain
+    ports:
+      - "${TENANT_LISTEN:-127.0.0.1}:${TENANT_PORT:?}:7850"
+    healthcheck:
+      test: ["CMD", "tmux", "-S", "/config/tmux.sock", "list-sessions"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    init: true
+    restart: unless-stopped
+
+  canopy:
+    image: canopy-backend:latest
+    depends_on:
+      shells:
+        condition: service_healthy
+        restart: true
+    network_mode: "service:shells"
+    pid: "service:shells"
+    environment:
+      - CANOPY_CONFIG_DIR=/config
+      - CANOPY_TMUX=1
+      - CANOPY_BIND=0.0.0.0
+      # a tenant always checks who calls
+      - CANOPY_CALLERS=enforce
+      - CANOPY_ORIGINS=${TENANT_ORIGINS:-}
+      - CANOPY_PREVIEW_PORTS=0
+      - CANOPY_TAILCHAN_URL=off
+      - TENANT_ROOT=${TENANT_ROOT:?}
+      - TZ=${TZ:-}
+    volumes:
+      - ${TENANT_ROOT:?}:${TENANT_ROOT:?}
+      - config:/config
+      - ${TENANT_HOME:?}/.claude:/home/bun/.claude
+      - ${TENANT_HOME:?}/.claude.json:/home/bun/.claude.json
+      - ${TENANT_HOME:?}/.codex:/home/bun/.codex
+      - ${TENANT_HOME:?}/.config/git:/home/bun/.config/git
+      - /etc/localtime:/etc/localtime:ro
+    command:
+      - sh
+      - -c
+      - mkdir -p /config/bin && cp /app/dist/canopy-mcp.js /config/bin/canopy-mcp.js && exec bun bin/canopy.ts ui "$$TENANT_ROOT" --port 7850 --no-open
+    restart: unless-stopped
+
+volumes:
+  config:
