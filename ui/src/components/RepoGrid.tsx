@@ -16,6 +16,7 @@ import {
   isOnline,
   multi,
   runFor,
+  runsFor,
   statusOf,
   useStore,
   visibleCards,
@@ -134,6 +135,8 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
   const away = useStore((s) => card !== undefined && !card.checkouts.some((c) => isOnline(s, backendOf(c.id))));
   const updatedAt = useStore((s) => s.updatedAt[repo.id]);
   const run = useStore((s) => runFor(s, repo.id));
+  // the runs going here beside the one the chip shows (FR-073)
+  const moreRuns = useStore(useShallow((s) => runsFor(s, repo.id).filter((r) => r.id !== runFor(s, repo.id)?.id)));
   const flow = useStore((s) => flowFor(s, repo.id));
   const activeFlow = useStore((s) => activeFlowFor(s, repo.id));
   // what the leaf edge does about the agents here, with no run of canopy's to say
@@ -319,7 +322,7 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
           </span>
         )}
         <span className="card-state">
-          {activeFlow ? <FlowChip flow={activeFlow} /> : run ? <RunChip run={run} /> : flow && <FlowChip flow={flow} />}
+          {activeFlow ? <FlowChip flow={activeFlow} /> : run ? <RunChip run={run} more={moreRuns} /> : flow && <FlowChip flow={flow} />}
           <TaskChip repoId={repo.id} />
           <NoteChip repoId={repo.id} />
           <RepoHealthChip repoId={repo.id} />

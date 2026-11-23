@@ -13,7 +13,7 @@ export const PATHS_SHOWN = 5;
 
 export interface Touched {
   run: string;
-  /** the words chips and notes name the run by: its branch, else "<verb> run <id>" */
+  /** the words chips and notes name the run by (`touchName`) */
   name: string;
   /** the branch's id for a branch run, so the origin and its "fix it" runs read as one */
   origin?: string;
@@ -32,7 +32,9 @@ export interface Collision {
   run: string;
   /** that run's name, as `Touched.name` */
   name: string;
-  with: { kind: "run"; run: string; verb: string; name: string } | { kind: "branch"; origin: string; branch: string } | { kind: "checkout" };
+  /** `shared` on a run: both runs work in the repo's checkout (FR-073), so
+   *  they edit the same files on disk and nothing rebases one onto the other */
+  with: { kind: "run"; run: string; verb: string; name: string; shared?: true } | { kind: "branch"; origin: string; branch: string } | { kind: "checkout" };
   paths: string[];
   at: number;
 }
@@ -90,11 +92,16 @@ export function addStep(t: Touched, step: RunStep): Touched {
   return t;
 }
 
+/** What a collision calls a run: its branch, else its verb with the name
+ *  it goes by (FR-073), else "<verb> run <id>". */
+export const touchName = (run: Pick<Run, "id" | "verb" | "branch" | "name">): string =>
+  run.branch?.name ?? (run.name ? `${run.verb} "${run.name}"` : `${run.verb} run ${run.id}`);
+
 /** the set from every step so far; `group` is the run's best-of-N group */
-export function touchedOf(run: Pick<Run, "id" | "verb" | "steps" | "branch">, group?: string): Touched {
+export function touchedOf(run: Pick<Run, "id" | "verb" | "steps" | "branch" | "name">, group?: string): Touched {
   const touched: Touched = {
     run: run.id,
-    name: run.branch?.name ?? `${run.verb} run ${run.id}`,
+    name: touchName(run),
     ...(run.branch ? { origin: run.branch.origin } : {}),
     ...(group !== undefined ? { group } : {}),
     paths: new Set(),
@@ -174,7 +181,7 @@ export function flipped(c: Collision, verb: string): Collision {
     ...c,
     run: c.with.run,
     name: c.with.name,
-    with: { kind: "run", run: c.run, verb, name: c.name },
+    with: { kind: "run", run: c.run, verb, name: c.name, ...(c.with.shared ? { shared: true as const } : {}) },
   };
 }
 
@@ -234,6 +241,7 @@ export function withName(w: Collision["with"]): string {
 
 /** the note on the touching run's timeline */
 export function collisionLine(c: Collision): string {
+  if (c.with.kind === "run" && c.with.shared) return `also being edited in this checkout by ${c.with.name}: ${pathList(c.paths)}`;
   if (c.with.kind === "run") return noteLine({ verb: c.with.verb, run: c.with.run }, c.paths);
   if (c.with.kind === "branch") return `also in queued branch ${c.with.branch}: ${pathList(c.paths)}`;
   return `also changed in the main checkout, uncommitted: ${pathList(c.paths)}`;
@@ -249,6 +257,8 @@ export function collisionNotice(c: Collision): string {
 export function collisionSay(c: Collision, when: string): string {
   const paths = c.paths.join(", ");
   if (c.with.kind === "checkout") return `canopy: the main checkout has uncommitted changes to these files: <<< ${paths} >>>. Carry on; the landing waits for them.`;
+  // two runs in one checkout write the same files on disk: there is no queue to rebase one onto the other
+  if (c.with.kind === "run" && c.with.shared) return `canopy: another run in this checkout (${c.with.name}, started ${when}) has edited these files: <<< ${paths} >>>. Read a file again before you change it, and leave the other run's changes in place.`;
   const other = c.with.kind === "branch" ? `a queued branch (${c.with.branch})` : `another run (${c.with.verb}, started ${when})`;
   return `canopy: ${other} has edited these files since you started: <<< ${paths} >>>. Carry on; the queue rebases when you land.`;
 }

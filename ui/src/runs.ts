@@ -4,6 +4,7 @@
    cost where it reports a cost (Claude Code). Pure; tested in runs.test.ts. */
 
 import { HARNESS } from "../../src/core/harness";
+import { runSubject } from "../../src/core/runname";
 import { TODO_TOOLS } from "../../src/core/todos";
 import type { Harness, ProposalState, Run, RunAnswer, RunResult, RunStep } from "../../src/core/types";
 
@@ -150,15 +151,88 @@ function goneWord(ms: number): string {
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
 }
 
+/** `text` cut to the most a row shows */
+const cut = (text: string): string => (text.length > NOTE_CUT ? `${text.slice(0, NOTE_CUT - 1).trimEnd()}…` : text);
+
 /** The line under a run's repo in the pill's menu, which is what tells two
- *  runs apart: its word, how long it has gone, and the first line of what
- *  was asked of it. */
-export function pillLine(run: Worded & Pick<Run, "startedAt" | "note">, now: number): string {
+ *  runs apart: its word, how long it has gone, and the name it goes by
+ *  (FR-073), or the first line of what was asked of it while it has none. */
+export function pillLine(run: Worded & Pick<Run, "startedAt" | "note" | "name">, now: number): string {
   // a backend older than notes sends none
-  const asked = (run.note ?? "").trim().split("\n")[0] ?? "";
+  const asked = runSubject({ name: run.name, note: run.note ?? "" });
   const parts = [runWord(run, true), goneWord(now - run.startedAt)];
-  if (asked) parts.push(asked.length > NOTE_CUT ? `${asked.slice(0, NOTE_CUT - 1).trimEnd()}…` : asked);
+  if (asked) parts.push(cut(asked));
   return parts.join(" · ");
+}
+
+/* ---------- several runs on one repo (FR-073) ---------- */
+
+/** a live run's dot wherever runs are listed, in the tones its chip has on
+ *  a card: one that waits on an answer, a chat between turns; a run at work
+ *  takes the list's own */
+export const RUN_DOT: Partial<Record<Run["status"], string>> = { waiting: "dot lichen", idle: "dot moss" };
+
+/** how much a live run wants a person: one waiting on an answer, then one
+ *  at work, then a chat between turns */
+const NEED: Partial<Record<Run["status"], number>> = { waiting: 2, working: 1 };
+
+/** Whether `a` is the run a repo's one chip should show over `b`, both
+ *  live: the one that needs a person more, the newer of two alike. */
+export const needsMore = (a: Pick<Run, "status" | "startedAt">, b: Pick<Run, "status" | "startedAt">): boolean => {
+  const na = NEED[a.status] ?? 0;
+  const nb = NEED[b.status] ?? 0;
+  return na !== nb ? na > nb : a.startedAt > b.startedAt;
+};
+
+type Live = Pick<Run, "id" | "status" | "chat" | "startedAt" | "branch">;
+
+const newest = <R extends Live>(runs: readonly R[]): R | undefined => runs.reduce<R | undefined>((best, r) => (!best || r.startedAt > best.startedAt ? r : best), undefined);
+
+/** The chat a message for a repo's agent goes into: the newest one between
+ *  turns. None means a new chat starts with the message. */
+export const chatToSay = <R extends Live>(live: readonly R[]): R | undefined => newest(live.filter((r) => r.chat && r.status === "idle"));
+
+/** The chat a plain "chat" opens: the newest one going, whatever its turn. */
+export const chatToShow = <R extends Live>(live: readonly R[]): R | undefined => newest(live.filter((r) => r.chat));
+
+/** The run a workflow waits for: one at work in the repo's checkout. A chat
+ *  between turns and a run on its own branch hold nothing a workflow needs. */
+export const runAtWork = <R extends Live>(live: readonly R[]): R | undefined => live.find((r) => !r.branch && r.status !== "idle");
+
+/** What a run's own panel or tab is called: the name it goes by, or its
+ *  verb while it has none, and its repo. */
+export const runPanelLabel = (run: Pick<Run, "verb" | "name">, repoName: string): string => `${run.name ?? run.verb} · ${repoName}`;
+
+/** the most of a run's name a chip in a row of chips shows */
+const CHIP_NAME_CUT = 32;
+
+/** A run's name for a chip that says one: the name it goes by, or the
+ *  first line of what was asked, cut short. "" for a run with neither. */
+export function chipName(run: Pick<Run, "note" | "name">): string {
+  const subject = runSubject({ name: run.name, note: run.note ?? "" });
+  return subject.length > CHIP_NAME_CUT ? `${subject.slice(0, CHIP_NAME_CUT - 1).trimEnd()}…` : subject;
+}
+
+/** The tooltip's line for the runs a chip counts but does not show. */
+export function moreTitle(more: readonly Pick<Run, "status" | "verb" | "note" | "name">[]): string {
+  const rows = more.map((r) => {
+    const row = menuRun(r);
+    return row.fact === "show" ? row.text : `${row.text} (${row.fact})`;
+  });
+  return `also going here: ${rows.join("; ")}`;
+}
+
+/** A live run's row in its repo's menu: the name it goes by with its verb
+ *  and state beside it, or the old words for a run with nothing to call it. */
+export function menuRun(run: Pick<Run, "status" | "verb" | "note" | "name">): { text: string; fact: string } {
+  const subject = runSubject({ name: run.name, note: run.note ?? "" });
+  if (!subject) {
+    const text = run.status === "waiting" ? `${run.verb} needs you` : run.status === "idle" ? "chat open, your turn" : `${run.verb} in progress`;
+    return { text, fact: "show" };
+  }
+  const state = run.status === "waiting" ? "needs you" : run.status === "idle" ? "your turn" : "working";
+  // short, since the fact shares the row with the name and the name is what tells runs apart
+  return { text: cut(subject), fact: `${run.verb}, ${state}` };
 }
 
 /** A revise is a deny that carries a note. An empty one still says what it

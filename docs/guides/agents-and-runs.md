@@ -34,7 +34,17 @@ With Codex, a provider value names an entry already configured on the backend. C
 5. If it needs input, open the prompt in the console or **waiting on you**. Answer the question or choose the appropriate permission response.
 6. When the run finishes, inspect its result, changed files, and checks. A completed agent turn is not proof that the requested behavior works.
 
-In chat, later messages continue the conversation. **end chat** closes it. A chat can retain the repo's ordinary run slot between messages, so end an unused chat if it prevents another job from starting.
+In chat, later messages continue the conversation. **end chat** closes it.
+
+## Run several at once on one repo
+
+A repo's checkout takes up to 8 runs at once, so an open chat does not stop a job or a second chat from starting. An incubator project is the exception and keeps one run at a time.
+
+- Each run has a name. Canopy cuts one from the first message, and a moment later your own `claude` writes a shorter one. Start a run under your own name with `--name` on the CLI.
+- The row of tabs under a run's head lists every run going on the repo. Press another tab to switch to that run. Press this run's tab to rename it; a name you type is never replaced. **+ chat** starts another chat.
+- The repo menu lists each run with its name and state. The card's chip shows the run that most needs you, with `+N` for the others.
+- Runs in one checkout share its files. Each is told to leave the others' changes alone and to commit only its own files, and Canopy tells both when they have edited the same file. For a job that should not share, choose **on a branch of its own**.
+- A workflow waits for a run that is at work in the checkout. While a workflow runs, new chats and jobs on that repo wait for it.
 
 ## Start from an issue
 
@@ -75,6 +85,9 @@ These commands target a running backend. Replace the repo path and run ID with y
 
 ```bash
 canopy run /path/to/repo ask -m "Fix the empty-state message and run the relevant checks"
+canopy run ls
+canopy run name RUN_ID "empty state copy"
+canopy run stop RUN_ID
 canopy run
 canopy run show RUN_ID
 canopy run export RUN_ID --out run-notes.md
@@ -83,4 +96,4 @@ canopy queue
 
 Use `--backend URL` when targeting another backend. For remote starts, a repo ID known to that backend avoids requiring the checkout path to exist on the CLI's machine.
 
-The run list includes kept transcripts. Export one when you need a durable copy outside Canopy's retention window. Review the transcript before sharing it, since it can contain project content and command output.
+`canopy run ls` lists the runs going now with their names, `run name` renames one and `run stop` stops one and leaves the others going. `canopy run` alone lists kept transcripts. Export one when you need a durable copy outside Canopy's retention window. Review the transcript before sharing it, since it can contain project content and command output.

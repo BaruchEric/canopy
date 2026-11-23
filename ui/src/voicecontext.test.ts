@@ -31,7 +31,7 @@ describe("voice invocation context", () => {
     const sent: string[] = [];
     await sendVoicePrompt(context, "fix it", { ...state, sayRun: async (id, text) => { sent.push(`${id}: ${text}`); }, openChat: async () => { throw new Error("wrong chat"); } });
     expect(sent).toEqual(["a: fix it"]);
-    await expect(sendVoicePrompt(context, "fix it", { ...state, runs: { a: { ...state.runs.a, status: "working" } }, sayRun: async () => { throw new Error("must not send"); }, openChat: async () => {} })).rejects.toThrow("still working");
+    await expect(sendVoicePrompt(context, "fix it", { ...state, runs: { a: { ...state.runs.a, status: "working" } }, sayRun: async () => { throw new Error("must not send"); }, openChat: async () => "" })).rejects.toThrow("still working");
   });
   test("a missing invocation target cannot fall through to a different repository", async () => {
     const state = page();

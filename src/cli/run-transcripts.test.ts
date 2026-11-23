@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { KeptRunHead, Run } from "../core/types";
 import { askText } from "./health";
 import { RUN_USAGE, runCommand } from "./run";
-import { keptLines, replayLines, showLines } from "./run-transcripts";
+import { keptLines, liveLines, replayLines, showLines } from "./run-transcripts";
 
 const now = Date.UTC(2026, 9, 26, 12);
 const H = 3_600_000;
@@ -306,6 +306,68 @@ test("runCommand says words into a live run and interrupts its turn, the server'
     await expect(runCommand(["say", "ab12cd34", ...backend], { fail })).rejects.toThrow("needs the words");
     await expect(runCommand(["say", "x/y", "hi", ...backend], { fail })).rejects.toThrow("invalid run id");
     expect(calls).toHaveLength(3);
+  } finally {
+    console.log = oldLog;
+    server.stop(true);
+  }
+});
+
+test("liveLines lists the runs still going, oldest first, each with its name (FR-073)", () => {
+  const live = (over: Partial<Run>): Run => ({ ...run, kept: undefined, endedAt: undefined, result: undefined, steps: [], status: "working", ...over }) as Run;
+  expect(liveLines([
+    live({ id: "22222222", status: "idle", chat: true, verb: "chat", name: "peer sync", startedAt: now - 2 * H }),
+    live({ id: "11111111", verb: "ask", note: "look at the build\nand more", startedAt: now - 5 * H }),
+    live({ id: "33333333", verb: "propose", name: "top bar", startedAt: now - H, branch: { name: "run/top-bar", target: "main", base: "b", dir: "/w", origin: "o", state: "working" } }),
+    live({ id: "44444444", status: "done" }),
+    live({ id: "55555555", verb: "chat", chat: true, status: "idle", startedAt: now }),
+  ], now)).toEqual([
+    "11111111  5h   dev-tools/canopy          working  ask  look at the build",
+    "22222222  2h   dev-tools/canopy          idle     chat  peer sync",
+    "33333333  1h   dev-tools/canopy          working  propose on run/top-bar  top bar",
+    "55555555  0m   dev-tools/canopy          idle     chat",
+  ]);
+});
+
+test("a kept run's line and head carry its name", () => {
+  expect(keptLines([head({ name: "peer sync" })], now)[0]?.endsWith("$0.42  peer sync")).toBe(true);
+  expect(showLines({ ...run, name: "peer sync" }).slice(0, 3)).toEqual(["Build in dev-tools/canopy (kept)", "run: ab12cd34", "name: peer sync"]);
+});
+
+test("runCommand lists, names and stops live runs (FR-073)", async () => {
+  const calls: { path: string; body: unknown }[] = [];
+  const going = { ...run, kept: undefined, endedAt: undefined, status: "working", name: "slow build" };
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      if (request.method === "GET" && url.pathname === "/api/runs") return Response.json([going, { ...going, id: "ffffffff", status: "done" }]);
+      const body = (await request.json()) as { id?: string; name?: string };
+      calls.push({ path: url.pathname, body });
+      if (url.pathname === "/api/runs/name") return body.id === "00000000" ? Response.json({ error: "no such run" }, { status: 404 }) : Response.json({ ...going, name: body.name });
+      if (url.pathname === "/api/runs/stop") return Response.json({ ...going, status: "stopped" });
+      return Response.json({ error: "unexpected route" }, { status: 404 });
+    },
+  });
+  const logs: string[] = [];
+  const oldLog = console.log;
+  console.log = (line: string) => { logs.push(line); };
+  try {
+    const backend = ["--backend", `http://127.0.0.1:${server.port}`];
+    await runCommand(["ls", ...backend], { fail });
+    expect(logs).toEqual(liveLines([going as Run]));
+    expect(logs[0]?.endsWith("Build  slow build")).toBe(true);
+    await runCommand(["name", "ab12cd34", "the", "landing", "queue", ...backend], { fail });
+    await runCommand(["stop", "ab12cd34", ...backend], { fail });
+    expect(calls).toEqual([
+      { path: "/api/runs/name", body: { id: "ab12cd34", name: "the landing queue" } },
+      { path: "/api/runs/stop", body: { id: "ab12cd34" } },
+    ]);
+    expect(logs.slice(1)).toEqual(["ab12cd34 the landing queue", "ab12cd34 stopped"]);
+    await expect(runCommand(["name", "00000000", "x", ...backend], { fail })).rejects.toThrow("no such run");
+    await expect(runCommand(["name", "ab12cd34", ...backend], { fail })).rejects.toThrow("needs the name");
+    await expect(runCommand(["name", "x/y", "hi", ...backend], { fail })).rejects.toThrow("invalid run id");
+    await expect(runCommand(["stop", "ab12cd34", "extra", ...backend], { fail })).rejects.toThrow(RUN_USAGE);
+    await expect(runCommand(["ls", "extra", ...backend], { fail })).rejects.toThrow(RUN_USAGE);
   } finally {
     console.log = oldLog;
     server.stop(true);

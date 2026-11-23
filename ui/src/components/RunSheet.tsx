@@ -53,7 +53,8 @@ import {
 } from "../../../src/core/types";
 import { forkLine, stepWords } from "../../../src/core/handoff";
 import { branchTask, branchTaskWords, devTask as devTaskOf, renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
-import { AGENT_NAME, harnessOf, hideTodoSteps, nestSteps, resultLine, settledProposal, tokenTitle, type SettledProposal } from "../runs";
+import { AGENT_NAME, harnessOf, hideTodoSteps, nestSteps, resultLine, runPanelLabel, settledProposal, tokenTitle, type SettledProposal } from "../runs";
+import { RunTabs } from "./RunTabs";
 import { HARNESS } from "../../../src/core/harness";
 import { CENTERED } from "../pop";
 import { PopGear, PopGrip, PopHere } from "./PopGrip";
@@ -136,7 +137,7 @@ export function RunSheet() {
 
   if (!sheet) return null;
   // the tab finds the run again by the key the store keeps it under
-  const tab: TabRef | undefined = run && sheet.kind === "run" ? { kind: "run", ref: sheet.runId, label: `${run.verb} · ${repoName ?? ""}`, repoId: run.repoId } : undefined;
+  const tab: TabRef | undefined = run && sheet.kind === "run" ? { kind: "run", ref: sheet.runId, label: runPanelLabel(run, repoName ?? ""), repoId: run.repoId } : undefined;
   const pop = { name: `sheet ${sheet.kind}`, anchor: CENTERED, gap: 24, ...(tab ? { tab } : {}) };
   return (
     <div className="sheet-back" onPointerDown={(e) => {
@@ -683,7 +684,7 @@ export function useSecondPress(go: () => void): { armed: boolean; press: () => v
   return { armed: armedAt !== null, press, disarm: () => set(null) };
 }
 
-export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefined; onClose?: () => void }) {
+export function Console({ run, repo, onClose, solo }: { run: Run; repo: Repo | undefined; onClose?: () => void; /** a window of its own, with nowhere to show the repo's other runs */ solo?: boolean }) {
   // in a shell window's tab (FR-030) the ✕ closes the tab, not the sheet
   const closeSheet = useStore((s) => s.closeSheet);
   const close = onClose ?? closeSheet;
@@ -755,6 +756,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
         </button>
       </header>
 
+      <RunTabs run={run} repo={repo} {...(solo ? { solo } : {})} />
       {(run.parent || run.group || run.branch?.group) && <ParentLine run={run} />}
       {run.forkOf && <ForkLine run={run} />}
       {run.branch && <BranchBlock run={run} act={act} />}

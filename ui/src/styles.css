@@ -6637,6 +6637,114 @@ button.dl-gut.has {
   cursor: pointer;
 }
 
+/* the runs going on a run's repo, under the console's head (FR-073,
+   RunTabs.tsx): this run's tab holds its name and opens a field to rename
+   it, the others show their runs. One row that scrolls sideways, so eight
+   runs on a phone never push the timeline down. */
+.run-tabs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--hair);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.run-tabs::-webkit-scrollbar {
+  display: none;
+}
+.rtab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  font-size: var(--t-md);
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+button.rtab:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--wash);
+}
+.rtab.on {
+  color: var(--ink);
+  border-color: var(--hair);
+  background: var(--well);
+}
+.rtab .dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  background: var(--tone, var(--ink-faint));
+}
+.rtab-name {
+  min-width: 0;
+  max-width: 26ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rtab.on .rtab-name {
+  max-width: 40ch;
+}
+.rtab-pen {
+  color: var(--ink-faint);
+}
+button.rtab:hover .rtab-pen {
+  color: var(--ink);
+}
+.rtab.add {
+  color: var(--ink-faint);
+}
+.rtab:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.rtab-edit {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: min(100%, 240px);
+}
+.rtab-edit .settings-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+.run-tabs-err {
+  flex: none;
+  font-size: var(--t-sm);
+  color: var(--rust);
+}
+@media (pointer: coarse) {
+  .rtab,
+  .rtab-edit .mini {
+    min-height: 36px;
+  }
+}
+/* on a phone the name field takes the row while it is open, so the whole
+   name shows as it is typed; the other runs' tabs come back with the row */
+@media (max-width: 760px) {
+  .run-tabs:has(.rtab-edit) > .rtab {
+    display: none;
+  }
+}
+/* how many more runs go on the repo beside the one a chip shows */
+.run-more {
+  color: var(--ink-faint);
+}
+/* a chip a run, when a repo's panel has several going */
+.panel-run {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
 /* a coordinator's child: who started it, with a way back (FR-010) */
 .run-parent {
   display: flex;

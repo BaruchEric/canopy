@@ -4,7 +4,7 @@
  *  every timestamp here (PeerState.at, PeerWip.at, PeerSeen.at) rides in as
  *  milliseconds and is turned to ago()'s seconds at the call site. */
 
-import { type PeerBranch, type PeerSeen, type PeerState, type Repo, type Run } from "../../src/core/types";
+import { type PeerBranch, type PeerSeen, type PeerState, type Repo } from "../../src/core/types";
 import { isLaunchSource } from "./backends";
 import { ago } from "./util";
 
@@ -93,14 +93,3 @@ export function peerLines(prev: PeerState | undefined, next: PeerState | undefin
   return out;
 }
 
-/** What "merge with claude" should do about a repo's active run, if any:
- *  start a fresh chat when there is none, send into an idle chat's next
- *  turn (a chat between turns is the only run status that means "waiting
- *  for a message", never a run actually busy), or refuse when one is
- *  genuinely in progress. */
-export type MergeAction = "new" | "say" | "busy";
-
-export function mergeAction(active: Run | undefined): MergeAction {
-  if (!active) return "new";
-  return active.status === "idle" ? "say" : "busy";
-}

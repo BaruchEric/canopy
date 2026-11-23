@@ -1203,6 +1203,11 @@ export const api = {
     const [b, plain] = on(id);
     return from(b, await req<Run>(b, "/api/runs/stop", { method: "POST", body: JSON.stringify({ id: plain }) }), qRun);
   },
+  /** a name of the user's own for a live run (FR-073) */
+  renameRun: async (id: string, name: string) => {
+    const [b, plain] = on(id);
+    return from(b, await req<Run>(b, "/api/runs/name", { method: "POST", body: JSON.stringify({ id: plain, name }) }), qRun);
+  },
   /** the next message in a chat, or a person's message into any run at
    *  work, which takes it at its next step (FR-066) */
   say: async (id: string, text: string) => {

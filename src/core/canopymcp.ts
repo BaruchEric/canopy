@@ -120,7 +120,7 @@ export const TOOLS_FOR: Record<CallerKind, readonly ToolName[]> = {
 };
 
 /** One line per repo that is not archived: id, branch, ahead and behind,
- *  changed files, and the run working in it. */
+ *  changed files, and the runs going on it (a checkout takes several). */
 export function foldStatus(repos: readonly Repo[], runs: readonly Run[]): string {
   const lines: string[] = [];
   for (const repo of repos) {
@@ -134,16 +134,18 @@ export function foldStatus(repos: readonly Repo[], runs: readonly Run[]): string
     if (status.ahead > 0) parts.push(`${status.ahead} ahead`);
     if (status.behind > 0) parts.push(`${status.behind} behind`);
     if (status.files.length > 0) parts.push(`${status.files.length} changed`);
-    const active = runs.find((run) => run.repoId === repo.id && (run.status === "working" || run.status === "waiting" || run.status === "idle"));
+    const active = runs.filter((run) => run.repoId === repo.id && (run.status === "working" || run.status === "waiting" || run.status === "idle"));
     const summary = `${repo.id}  ${status.branch}${parts.length > 0 ? ` ${parts.join(" ")}` : ""}`;
-    lines.push(active ? `${summary}  run: ${active.verb} ${active.status}` : summary);
+    lines.push(active.length > 0 ? `${summary}  ${active.length === 1 ? "run" : "runs"}: ${active.map((run) => `${run.verb} ${run.status}`).join(", ")}` : summary);
   }
   return lines.length > 0 ? lines.join("\n") : "no repos";
 }
 
+/** A run in one line: id, repo, status, verb, its name in quotes when it
+ *  has one, and its note's first line. */
 const runLine = (run: Run): string => {
   const note = run.note.split("\n", 1)[0];
-  return `${run.id}  ${run.repoId}  ${run.status}  ${run.verb}${note ? `  ${note}` : ""}`;
+  return `${run.id}  ${run.repoId}  ${run.status}  ${run.verb}${run.name ? ` "${run.name}"` : ""}${note ? `  ${note}` : ""}`;
 };
 
 /** One line per run in API order; an id adds its error and last ten steps. */

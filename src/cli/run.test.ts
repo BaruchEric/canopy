@@ -281,3 +281,20 @@ test("canopy run pickup posts {id} and prints the flow's id and status", async (
   expect(requests).toEqual([{ method: "POST", path: "/api/flows/pickup", body: { id: "f-1" } }]);
   expect(lines).toEqual(["f-1 working"]);
 });
+
+test("parseRunArgs takes a name for one run and refuses it for a group or a coordinator (FR-073)", () => {
+  expect(parseRunArgs(["app", "ask", "-m", "look", "--name", " slow build "])).toMatchObject({ repo: "app", action: "ask", note: "look", name: "slow build" });
+  expect(parseRunArgs(["app", "ask", "--name"])).toBe("--name needs the run's name");
+  expect(parseRunArgs(["app", "ask", "--name", "  "])).toBe("--name needs the run's name");
+  expect(parseRunArgs(["app", "ask", "--name", "x", "--times", "2"])).toBe("--name names one run; a group's members share its note");
+  expect(parseRunArgs(["app", "coordinate", "--name", "x"])).toBe("a coordinator takes no name");
+});
+
+test("the run dispatcher sends ls, name and stop to the transcript handler", async () => {
+  const seen: string[][] = [];
+  const deps = { fail: (m: string): never => { throw new Error(m); }, transcripts: (argv: string[]) => { seen.push(argv); } };
+  await dispatchRunCommand(["ls"], deps);
+  await dispatchRunCommand(["name", "ab12cd34", "slow", "build"], deps);
+  await dispatchRunCommand(["stop", "ab12cd34"], deps);
+  expect(seen).toEqual([["ls"], ["name", "ab12cd34", "slow", "build"], ["stop", "ab12cd34"]]);
+});

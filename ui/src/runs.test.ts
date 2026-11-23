@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { settleNote } from "../../src/core/driver";
 import type { Run, RunStep } from "../../src/core/types";
-import { AGENT_NAME, agentWord, clock, harnessOf, hideTodoSteps, nestSteps, pillLine, pillRuns, pillText, progressWord, ranUnchanged, resultLine, reviseAnswer, runWord, settledProposal, tokenCount, tokenTitle } from "./runs";
+import { AGENT_NAME, agentWord, chatToSay, chatToShow, chipName, clock, harnessOf, hideTodoSteps, menuRun, moreTitle, needsMore, nestSteps, pillLine, pillRuns, pillText, progressWord, ranUnchanged, resultLine, reviseAnswer, runAtWork, runPanelLabel, runWord, settledProposal, tokenCount, tokenTitle } from "./runs";
 
 describe("a run's words", () => {
   test("its harness, and a run from before harnesses was Claude's", () => {
@@ -118,6 +118,60 @@ describe("the top bar's runs pill", () => {
     // a cut that lands after a space leaves none before the ellipsis
     expect(pillLine(run({ note: `${"x".repeat(70)} and more` }), 0).split(" · ")[2]).toBe(`${"x".repeat(70)}…`);
     expect(pillLine(run({ note: "x".repeat(72) }), 0).split(" · ")[2]).toBe("x".repeat(72));
+  });
+
+  test("a run with a name goes by it, over what was asked (FR-073)", () => {
+    expect(pillLine(run({ status: "idle", name: "pill menu", note: "fix the pill\nand the menu" }), 12 * 60_000)).toBe("chat open, your turn · 12m · pill menu");
+  });
+});
+
+describe("several runs on one repo (FR-073)", () => {
+  const branch = { name: "run/x", target: "main", base: "b", dir: "/w", origin: "o", state: "working" as const };
+  const live = (id: string, status: Run["status"], startedAt: number, extra: Partial<Run> = {}) => ({ id, status, startedAt, chat: false, ...extra });
+
+  test("the one chip shows the run that needs a person most, the newer of two alike", () => {
+    const waiting = live("w", "waiting", 1);
+    const working = live("k", "working", 5);
+    const idle = live("i", "idle", 9);
+    expect(needsMore(waiting, working)).toBe(true);
+    expect(needsMore(working, idle)).toBe(true);
+    expect(needsMore(idle, waiting)).toBe(false);
+    expect(needsMore(live("n", "working", 6), working)).toBe(true);
+    expect(needsMore(working, live("n", "working", 6))).toBe(false);
+  });
+
+  test("a message goes into the newest chat between turns, and a plain chat shows the newest going", () => {
+    const runs = [
+      live("job", "working", 9),
+      live("old", "idle", 1, { chat: true }),
+      live("new", "idle", 5, { chat: true }),
+      live("busy", "working", 7, { chat: true }),
+    ];
+    expect(chatToSay(runs)?.id).toBe("new");
+    expect(chatToShow(runs)?.id).toBe("busy");
+    expect(chatToSay([live("job", "working", 9), live("busy", "working", 7, { chat: true })])).toBeUndefined();
+    expect(chatToShow([live("job", "working", 9)])).toBeUndefined();
+  });
+
+  test("a workflow waits only for a run at work in the checkout", () => {
+    expect(runAtWork([live("c", "idle", 1, { chat: true }), live("b", "working", 2, { branch })])).toBeUndefined();
+    expect(runAtWork([live("c", "idle", 1, { chat: true }), live("j", "waiting", 2)])?.id).toBe("j");
+  });
+
+  test("a menu row says the name with the verb and state beside it, or the old words without one", () => {
+    expect(menuRun({ status: "idle", verb: "chat", note: "", name: "peer sync" })).toEqual({ text: "peer sync", fact: "chat, your turn" });
+    expect(menuRun({ status: "working", verb: "ask", note: "look at the build\nmore" })).toEqual({ text: "look at the build", fact: "ask, working" });
+    expect(menuRun({ status: "waiting", verb: "plan", note: "x", name: "top bar" })).toEqual({ text: "top bar", fact: "plan, needs you" });
+    expect(moreTitle([{ status: "idle", verb: "chat", note: "", name: "peer sync" }, { status: "idle", verb: "chat", note: "" }])).toBe("also going here: peer sync (chat, your turn); chat open, your turn");
+    expect(chipName({ note: "look at the build\nmore" })).toBe("look at the build");
+    expect(chipName({ note: "", name: "n".repeat(40) })).toBe(`${"n".repeat(31)}…`);
+    expect(chipName({ note: "" })).toBe("");
+    expect(runPanelLabel({ verb: "chat", name: "peer sync" }, "canopy")).toBe("peer sync · canopy");
+    expect(runPanelLabel({ verb: "chat" }, "canopy")).toBe("chat · canopy");
+    expect(menuRun({ status: "idle", verb: "chat", note: "" })).toEqual({ text: "chat open, your turn", fact: "show" });
+    expect(menuRun({ status: "working", verb: "commit", note: "" })).toEqual({ text: "commit in progress", fact: "show" });
+    expect(menuRun({ status: "waiting", verb: "commit", note: "" })).toEqual({ text: "commit needs you", fact: "show" });
+    expect(menuRun({ status: "working", verb: "ask", note: "y".repeat(100) }).text).toBe(`${"y".repeat(71)}…`);
   });
 });
 

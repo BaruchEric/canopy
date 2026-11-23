@@ -69,6 +69,24 @@ describe("real Runner graph ownership", () => {
     expect(flow.status).toBe("done");
   });
 
+  test("a workflow starts beside a chat between turns, and waits for a run at work (FR-073)", async () => {
+    const { flows, runner, drivers } = setup();
+    const job = runner.start(repo, "ask", ACTIONS.ask, "look around", DEFAULT_AGENT);
+    expect(() => flows.start(repo, FAN, "", DEFAULT_AGENT)).toThrow(`graph already has a run going (${job.verb})`);
+    drivers[0]?.end(); await flush();
+    const chat = runner.start(repo, "chat", ACTIONS.chat, "", DEFAULT_AGENT);
+    const flow = flows.start(repo, FAN, "", DEFAULT_AGENT);
+    expect(flow.steps[0]?.status).toBe("running");
+    expect(runner.activeRunsFor(repo.id).map((run) => run.id)).toContain(chat.id);
+    // a message into the chat mid-flow does not stop the flow's next steps
+    runner.say(chat.id, "what is this workflow doing?");
+    drivers.find((driver) => driver.ctx?.env["CANOPY_RUN"] === flow.steps[0]?.runId)?.end(); await flush();
+    expect(flow.steps.map((step) => step.status)).toEqual(["passed", "running", "running", "pending"]);
+    flows.stop(flow.id);
+    await flush();
+    runner.stopAll();
+  });
+
   test("the real runner preserves the engine's three-step cap and one-writer queue", async () => {
     const { flows, drivers } = setup();
     const graph = workflow(`## A\n\na\n\n## B\nafter: A\ntools: git-commit\n\nb\n\n## C\nafter: A\ntools: read\n\nc\n\n## D\nafter: A\ntools: read\n\nd\n\n## E\nafter: A\ntools: git-commit\n\ne\n`);

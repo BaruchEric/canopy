@@ -90,7 +90,7 @@ describe("group preflight", () => {
     const before = useStore.getState();
     const calls: unknown[][] = [];
     api.startGroup = async (...args) => { calls.push(args); return { id: "g", repoId: "repo", repoPath: "/r", action: "ask", note: "n", expectedMembers: 2, members: [], state: "working", autoLand: false, startedAt: 1 }; };
-    useStore.setState({ startRun: async (...args) => { calls.push(args); } });
+    useStore.setState({ startRun: async (...args) => { calls.push(args); return "r"; } });
     try {
       await useStore.getState().startGroup("repo", "ask", "n", 2, ["fast", null], false, false, 2);
       expect(calls[0]).toEqual(["repo", "ask", "n", 2, ["fast", null], false, false, 2]);

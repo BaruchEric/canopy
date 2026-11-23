@@ -78,7 +78,7 @@ class FakeRunner implements FlowRunner {
   }
   whenReleased() { return null; }
   get(id: string) { return this.runs.get(id); }
-  activeFor(repoId: string) {
+  busyFor(repoId: string) {
     return [...this.runs.values()].find((r) => r.repoId === repoId && r.status === "working");
   }
   stop(id: string): Run {

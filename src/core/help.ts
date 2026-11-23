@@ -98,6 +98,9 @@ usage:
   canopy run show <id> --wire        a finished run's steps as its kept wire replays them, with the prompts it asked
   canopy run export <id> [--out f]   its transcript as markdown, to stdout or a file, secrets redacted
   canopy run prune                   remove kept runs past the sweep's transcript span; a live branch's or an open PR's stays
+  canopy run ls                      the runs still going, oldest first: id, started, repo, state, what, and the name each goes by
+  canopy run name <id> <words…>      give a live run a name of your own; canopy names each from its first message otherwise
+  canopy run stop <id>               end a live run; a chat between turns closes
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy awake [off|always|working]  keep the backend's machine from idle sleep: never, always, or while an agent there works
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
@@ -144,6 +147,7 @@ usage:
   canopy mcp tools                   the tools that token holds, one per line
   canopy run <repo> <action> [-m note] [--times 1|2|3] [--profiles a,b,c] [--reviewers 2] [--auto-land] [--pr]   start one branch run or a group to compare
   canopy run <repo> <action> --tools|--no-tools   canopy's tools on or off for this run, over its settings
+  canopy run <repo> <action> --name "words"   the run's name, in place of one cut from its note
   canopy run <repo> <action> --loadout NAME   start one run with a loadout from kit.json: its model, effort, skills and servers;
                                      with none, a run takes no loadout; without the flag, the repo's, machine's or kit's default
     --priority interactive|normal|low  who goes first when the plan's window runs low; a group is low unless raised

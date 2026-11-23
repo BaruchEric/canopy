@@ -1399,6 +1399,13 @@ export interface Run {
   session?: string;
   /** what the user typed into the note box, if anything */
   note: string;
+  /** A few words that tell this run from the others on its repo (FR-073):
+   *  cut from its first message at the start, replaced by the model's once
+   *  that answers, or typed by hand. Absent on a run with nothing said yet,
+   *  a coordinator, an incubator stage and a flow's step. */
+  name?: string;
+  /** where `name` came from; a name set by hand is never replaced */
+  nameBy?: RunNameBy;
   /** the device it was started from, when the request said */
   by?: string;
   /** a flow's step run: its workflow and step, a remembered rule's scope */
@@ -1463,6 +1470,10 @@ export interface Run {
   forkOf?: RunFork;
 }
 
+/** Where a run's name came from: `words`, cut from its first message;
+ *  `model`, a small model's answer; `hand`, a person's or the caller's. */
+export type RunNameBy = "words" | "model" | "hand";
+
 /** When the stall watchdog spoke to a run and when it stopped it, unix ms. */
 export interface RunStall {
   warned: number;
@@ -1504,6 +1515,8 @@ export interface KeptRunHead {
   session?: string;
   /** Branch identity retained while its landing record or PR is live. */
   origin?: string;
+  /** the run's name, when it had one (FR-073) */
+  name?: string;
 }
 
 /** A finished run's story for the replay bar (FR-043 plan 2), from
@@ -2034,8 +2047,9 @@ export function statusFingerprint(st: RepoStatus | null): string {
   });
 }
 
-/** A run with a live Claude process: working, waiting on a prompt, or a chat
- *  between turns. One at a time per repo. */
+/** A run with a live agent process: working, waiting on a prompt, or a chat
+ *  between turns. A repo's checkout takes several at once (FR-073), and each
+ *  branch run has a worktree of its own. */
 export const isRunActive = (r: Run): boolean =>
   r.status === "working" || r.status === "waiting" || r.status === "idle";
 
@@ -3863,6 +3877,8 @@ export interface SweptChat {
   sweptAt: number;
   /** the loadout the chat started with, so its restart has the same one */
   equip?: RunEquip;
+  /** the name the chat went by, which its restart keeps (FR-073) */
+  name?: string;
 }
 
 export interface SweepLogEntry {

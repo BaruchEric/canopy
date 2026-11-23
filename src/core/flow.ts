@@ -216,7 +216,9 @@ export type StepExtras = Pick<StartExtras, "settings" | "mcpConfig" | "servers" 
 export interface FlowRunner {
   start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings, by?: string, scope?: undefined, branch?: BranchStart, extras?: Pick<StartExtras, "flowOwner" | "priority"> & StepExtras): Run;
   get(id: string): Run | undefined;
-  activeFor(repoId: string): Run | undefined;
+  /** the run at work in the repo's checkout: mid-turn or waiting on a
+   *  prompt, never a chat between turns */
+  busyFor(repoId: string): Run | undefined;
   stop(id: string): Run;
   dismiss(id: string): void;
   /** Setup, actual driver exit and owned drains; never stops the run. */
@@ -457,7 +459,8 @@ export class Flows {
    *  minted makes a start sent twice (a retry after the answer was lost)
    *  find the flow the first one made. A `branch` (cut by the caller, its
    *  worktree made) runs every step there instead of the repo's checkout,
-   *  so the checkout's own run or flow does not stand in the way. An `id`
+   *  so the checkout's own run or flow does not stand in the way. In the
+   *  checkout it waits for a run at work there to end or go idle. An `id`
    *  chosen by the caller (8 hex digits, as a minted one) lets it write what
    *  the flow's steps need under that id first; `equip` is kept on the flow. */
   start(
@@ -478,7 +481,9 @@ export class Flows {
     if (branch && fleetId) throw new Error("a fleet's flows run in each repo's checkout, not on a branch");
     const busyFlow = branch ? undefined : this.activeFor(repo.id);
     if (busyFlow) throw new Error(`${repo.name} already has ${busyFlow.verb} going`);
-    const busyRun = branch ? undefined : this.runner.activeFor(repo.id);
+    // a chat between turns edits nothing, so a workflow starts beside it
+    // (FR-073); a run mid-turn would move the checkout under the gates
+    const busyRun = branch ? undefined : this.runner.busyFor(repo.id);
     if (busyRun) throw new Error(busyWith(repo.name, busyRun.verb));
     if (workflow.noteRequired && !note.trim()) throw new Error("write what the agent should do first");
     if (id !== undefined && !FLOW_ID.test(id)) throw new Error(`${id} is not a flow id`);

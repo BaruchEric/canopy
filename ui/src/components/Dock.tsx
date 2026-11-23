@@ -27,6 +27,7 @@ import {
   idText,
   multi,
   runFor,
+  runsFor,
   sectionsFor,
   takeWords,
   tasksOf,
@@ -132,6 +133,7 @@ import {
 import { SPEC_TONE, SPEC_WORDS } from "../../../src/core/treelines";
 import { isTreeCard } from "../../../src/core/treewords";
 import { runRepoName } from "../goals";
+import { runPanelLabel } from "../runs";
 
 /** the tool each opener shows as along a panel's action row */
 const OPENER_ICON: Record<OpenerId, IconName> = {
@@ -839,7 +841,7 @@ function PeersSection({ repo }: { repo: Repo }) {
   const count = wip.length + diverged.length + peerOnly.length;
 
   // a move the agent can finish offers it beside the error
-  const run = (label: string, fn: () => Promise<void>, move?: FixMove) => {
+  const run = (label: string, fn: () => Promise<unknown>, move?: FixMove) => {
     setBusy(label);
     setError(null);
     fn()
@@ -2153,11 +2155,12 @@ const panelText = (id: string): string =>
               ? popupPanelName(id)
               : idText(id);
 
-/** what a run's panel is called: its verb and its repo (FR-047) */
+/** what a run's panel is called: its name, or its verb without one, and
+ *  its repo (FR-047, FR-073) */
 function runPanelName(id: string): string {
   const s = useStore.getState();
   const run = s.runs[runOfPanel(id) ?? ""];
-  return run ? `${run.verb} · ${runRepoName(s.repos, run.repoId)}` : "chat";
+  return run ? runPanelLabel(run, runRepoName(s.repos, run.repoId)) : "chat";
 }
 
 /** what a popup's panel is called: the popup's word (FR-047) */
@@ -2594,7 +2597,7 @@ function RunPanel({
     const frame = requestAnimationFrame(() => revealHead(box.current?.querySelector(".panel-head") ?? null));
     return () => cancelAnimationFrame(frame);
   }, [forward, sideBySide, area]);
-  const name = run ? `${run.verb} · ${repoName}` : "chat";
+  const name = run ? runPanelLabel(run, repoName) : "chat";
   const tab: TabRef | undefined = run ? { kind: "run", ref: runId, label: name, repoId: run.repoId } : undefined;
   const close = () => closePanel(id);
   return (
@@ -2885,6 +2888,8 @@ export function RepoPanel({
 }) {
   const repo = useStore((s) => s.repos.find((r) => r.id === id));
   const repoRun = useStore((s) => runFor(s, id));
+  // every run going here: several get a chip each, by name (FR-073)
+  const repoLive = useStore(useShallow((s) => runsFor(s, id)));
   const repoFlow = useStore((s) => flowFor(s, id));
   const repoActiveFlow = useStore((s) => activeFlowFor(s, id));
   const unpin = useStore((s) => s.closePanel);
@@ -3275,6 +3280,8 @@ export function RepoPanel({
               <div className="panel-run">
                 {repoActiveFlow ? (
                   <FlowChip flow={repoActiveFlow} long />
+                ) : repoLive.length > 1 ? (
+                  repoLive.map((r) => <RunChip key={r.id} run={r} named />)
                 ) : repoRun ? (
                   <RunChip run={repoRun} long />
                 ) : (

@@ -14,7 +14,7 @@ import {
   type RepairStatus,
 } from "../fixit";
 import { backendOf } from "../registry";
-import { activeRunFor, useStore } from "../store";
+import { runsFor, useStore } from "../store";
 
 /** what failed: a move, git's answer and when it came (the mount, unless
  *  the caller kept it), or a prompt read when pressed (a failed task's,
@@ -32,9 +32,10 @@ const handed = new Set<string>();
  *  (`fixPrompt`). A failed task waits for "fix with the agent" (`short`
  *  words it "fix", for a task row with little room), since a task fails
  *  without anyone pressing anything (`taskFixPrompt`), and so does a repo's
- *  health check that is down or gave up (`healthFixPrompt`). An idle chat there
- *  takes it as its next turn; a run still busy refuses, and the refusal
- *  shows beside the button. Once handed over, the note follows the run
+ *  health check that is down or gave up (`healthFixPrompt`). A chat between
+ *  turns there takes it as its next turn; with none, a new chat starts with
+ *  it beside whatever else is going on the repo (FR-073). A start the
+ *  backend refuses shows beside the button. Once handed over, the note follows the run
  *  (`FIX_WATCH`) with a way back to the chat, and offers the button again
  *  when the run failed, stopped or was dismissed. A fresh rescan after a
  *  new successful turn must show the failed status move changing to done
@@ -60,8 +61,9 @@ export function AgentFix({ repoId, short, wait, onDone, ...what }: { repoId: str
 
   const go = () => {
     const beforeState = useStore.getState();
-    const previousRun = activeRunFor(beforeState, repoId);
-    const previousTurn = previousRun ? repairTurnIdentity(previousRun) : null;
+    // the turn each run going here stood at: the failure goes into one of
+    // them, or into a chat that does not exist yet
+    const turns = new Map(runsFor(beforeState, repoId).map((r) => [r.id, repairTurnIdentity(r)]));
     const before = "move" in what ? repairStatusSnapshot(beforeState.repos.find((repo) => repo.id === repoId)?.status) : null;
     // A retry supersedes any rescan still completing for the prior attempt.
     attemptRef.current = null;
@@ -71,12 +73,11 @@ export function AgentFix({ repoId, short, wait, onDone, ...what }: { repoId: str
     const prompt = "ask" in what ? what.ask() : Promise.resolve(fixPrompt(what.move, what.text));
     prompt
       .then((p) => openChat(repoId, p))
-      .then(() => {
-        const current = activeRunFor(useStore.getState(), repoId);
-        const next = current ? { runId: current.id, before, previousTurn } : null;
+      .then((id) => {
+        const next = { runId: id, before, previousTurn: turns.get(id) ?? null };
         attemptRef.current = next;
         setAttempt(next);
-        setRunId(current?.id ?? null);
+        setRunId(id);
       })
       .catch((e: unknown) => setErr(String(e instanceof Error ? e.message : e)))
       .finally(() => setBusy(false));

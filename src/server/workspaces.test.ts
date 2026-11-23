@@ -2,8 +2,8 @@
  * A workspace's look and its runs over the API: PATCH sets or clears the
  * primary (by repo id) and the color without touching the members, and
  * POST /api/workspaces/run starts one run on the primary with the other
- * local members added as folders. Any local member with a run or a flow
- * going refuses the run, a member the run cannot open (an incubator seed
+ * local members added as folders. A member's checkout takes the run beside
+ * the runs already there (FR-073), a member the run cannot open (an incubator seed
  * among them) is left out in words, and a Codex route, a seed primary and a
  * forge primary are refused. A member on another host cannot be made the
  * primary.
@@ -121,23 +121,27 @@ test("a workspace run starts on the primary with the others added", async () => 
   expect(run.repoId).toBe("analysis");
   expect(run.workspace).toBe("bike");
   expect(lastSpec()?.addDirs).toEqual([api]);
-  // the primary is busy now, so a second run is refused
+  // the primary's checkout takes a second run beside the first (FR-073),
+  // which is told it shares the checkout
   const again = await call("POST", "/api/workspaces/run", { name: "bike", action: "ask", note: "again" });
-  expect(again.status).toBe(409);
-  expect(await errorOf(again)).toContain("analysis");
-  // only the primary is held while it runs: the other member takes a run of its own
+  expect(again.status).toBe(201);
+  const second = (await again.json()) as Run;
+  expect(second.repoId).toBe("analysis");
+  expect(second.steps[0]).toMatchObject({ kind: "note", text: "sharing the checkout with another run: look around" });
+  // it counts as a run on the primary alone: the other member takes its own
   const onApi = await call("POST", "/api/repos/run?id=api", { action: "ask", note: "meanwhile" });
   expect(onApi.status).toBe(201);
   await stopRun(((await onApi.json()) as Run).id);
+  await stopRun(second.id);
   await stopRun(run.id);
 });
 
-test("a busy member that is not the primary refuses the workspace run", async () => {
+test("a member with a run going still joins a workspace run", async () => {
   const onApi = await call("POST", "/api/repos/run?id=api", { action: "ask", note: "busy" });
   expect(onApi.status).toBe(201);
   const r = await call("POST", "/api/workspaces/run", { name: "bike", action: "ask", note: "again" });
-  expect(r.status).toBe(409);
-  expect(await errorOf(r)).toMatch(/^api already has a run going \(.+\)$/);
+  expect(r.status).toBe(201);
+  expect(lastSpec()?.addDirs).toEqual([api]);
   const runs = (await (await fetch(url("/api/runs"))).json()) as Run[];
   for (const run of runs.filter(isRunActive)) await stopRun(run.id);
 });

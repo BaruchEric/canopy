@@ -83,7 +83,8 @@ function isPrompt(v: unknown): boolean {
 function isRun(v: unknown): v is Run {
   if (!record(v) || !strFields(v, ["id", "repoId", "action", "verb", "progress", "note"]) || !harness(v["harness"]) || !terminal(v["status"]) ||
     !boolean(v["expectsChange"]) || !boolean(v["chat"]) || !number(v["startedAt"]) || !optional(v, "endedAt", number) || !Array.isArray(v["steps"]) || !v["steps"].every(isStep) || !isPrompt(v["prompt"])) return false;
-  return optStrFields(v, ["session", "by", "workspace", "proposal", "error", "awayWhy", "parent", "group"]) && optional(v, "kept", (x) => x === true) && optional(v, "away", boolean) &&
+  return optStrFields(v, ["session", "by", "workspace", "proposal", "error", "awayWhy", "parent", "group", "name"]) && optional(v, "nameBy", (x) => oneOf(x, ["words", "model", "hand"])) &&
+    optional(v, "kept", (x) => x === true) && optional(v, "away", boolean) &&
     optional(v, "depth", number) && optional(v, "canopyTools", (x) => x === true) && optional(v, "unattended", (x) => x === true) &&
     optional(v, "priority", (x) => oneOf(x, PRIORITIES)) &&
     optional(v, "outcome", (x) => x === "changed" || x === "unchanged") && optional(v, "proposalState", (x) => oneOf(x, ["waiting", "approved", "approved-auto", "sent back", "turned down"])) &&
@@ -142,8 +143,9 @@ function snapshot(run: Run, privacy: RunLogPrivacy): Run {
       } } : {}),
     })), prompt: null,
   };
-  const strings: (keyof Pick<Run, "session" | "by" | "workspace" | "proposal" | "error" | "awayWhy">)[] = ["session", "by", "workspace", "proposal", "error", "awayWhy"];
+  const strings: (keyof Pick<Run, "session" | "by" | "workspace" | "proposal" | "error" | "awayWhy" | "name">)[] = ["session", "by", "workspace", "proposal", "error", "awayWhy", "name"];
   for (const key of strings) { const value = run[key]; if (value !== undefined) safe[key] = r(value); }
+  if (run.nameBy) safe.nameBy = t(run.nameBy);
   if (run.endedAt !== undefined) safe.endedAt = run.endedAt;
   if (run.kept) safe.kept = true;
   if (run.away !== undefined) safe.away = run.away;
@@ -269,7 +271,7 @@ function serialized<T>(fn: () => Promise<T> | T): Promise<T> { const task = queu
 
 export function headOf(run: Run): KeptRunHead {
   if (!terminal(run.status)) throw new Error("a kept run must be terminal");
-  return { id: run.id, repo: run.repoId, action: run.action, verb: run.verb, harness: run.harness, status: run.status, started: run.startedAt, ended: run.endedAt ?? run.startedAt, cost: run.result?.costUsd ?? null, ...(run.session ? { session: run.session } : {}), ...(run.branch ? { origin: run.branch.origin } : {}) };
+  return { id: run.id, repo: run.repoId, action: run.action, verb: run.verb, harness: run.harness, status: run.status, started: run.startedAt, ended: run.endedAt ?? run.startedAt, cost: run.result?.costUsd ?? null, ...(run.session ? { session: run.session } : {}), ...(run.branch ? { origin: run.branch.origin } : {}), ...(run.name ? { name: run.name } : {}) };
 }
 export async function readKeptRun(dir: string, id: string): Promise<Run | null> {
   const folder = safeFolder(dir, id); if (!folder || rejected(folder)) return null;

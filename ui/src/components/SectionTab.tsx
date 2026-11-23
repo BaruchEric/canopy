@@ -50,7 +50,7 @@ function RunTabView({ tab }: { tab: ItemTab }) {
   if (!run) return <p className="panel-clean sec-tab-gone">That run is not on the server now.</p>;
   return (
     <div className="sheet run-tab">
-      <Console run={run} repo={repo} onClose={() => untab(tab.id)} />
+      <Console run={run} repo={repo} onClose={() => untab(tab.id)} solo />
     </div>
   );
 }

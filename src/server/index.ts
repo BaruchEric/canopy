@@ -168,6 +168,8 @@ import {
 import { RememberedRules, scopeOf } from "../core/remember";
 import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
 import { BRANCH_RUNS_PER_REPO, BranchCapError, QUIET_WAIT, Runner, SteerError, UnknownRunError, type BranchStart, type StartExtras } from "../core/runner";
+import { cleanName } from "../core/runname";
+import { makeNamer } from "../core/runnamer";
 import { areKin, RUN_CHILD_ACTIONS } from "../core/runtools";
 import { canopyMcpCommand, flowToolsId, mcpConfigPath, removeMcpConfig, removeRunSettings, runConfigLaunch, settingsPath, sweepMcpConfigs, toolsBrief, writeMcpConfig, writeRunSettings } from "./runtools";
 import { NotWaitingError, type RunDriver } from "../core/driver";
@@ -1043,15 +1045,17 @@ async function startSweptChat(state: ServerState, c: SweptChat): Promise<Run> {
   const repo = state.result.repos.find((r) => r.id === c.repoId);
   if (!repo) throw new HttpError(404, `${c.repoId} is not here any more`);
   if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
-  const busy = state.runner.activeFor(repo.id);
-  if (busy) throw new HttpError(409, busyWith(repo.name, busy.verb));
+  const full = state.runner.checkoutRefusal(repo);
+  if (full) throw new HttpError(409, full);
   const routed = agentFor(await loadConfig(), repo.path, "chat", { harness: c.harness });
+  // it comes back under the name it went by (FR-073)
+  const base: StartExtras = { resume: c.session, ...(c.name ? { name: c.name } : {}) };
   // a chat that started with a loadout restarts with it, rebuilt from its equip
-  const equipped = c.equip ? await withLoadout(state, repo, loadoutOfEquip(c.equip, c.harness), routed, { resume: c.session }, false) : null;
+  const equipped = c.equip ? await withLoadout(state, repo, loadoutOfEquip(c.equip, c.harness), routed, base, false) : null;
   const agent = equipped?.agent ?? routed;
   try {
     await needHarness(state, agent.harness, repo.path);
-    return state.runner.start(repo, "chat", ACTIONS.chat, "", agent, undefined, undefined, undefined, equipped?.extras ?? { resume: c.session });
+    return state.runner.start(repo, "chat", ACTIONS.chat, "", agent, undefined, undefined, undefined, equipped?.extras ?? base);
   } catch (err) {
     await equipped?.release();
     throw err;
@@ -1239,8 +1243,8 @@ async function releaseHeld(state: ServerState, id: string): Promise<void> {
 
 /** Starts a built-in action's run on a repo, after the checks every run
  *  route makes: the repo is a folder on this machine (not on another host,
- *  not a forge listing), no workflow or other run has it, and its route's
- *  harness is installed here. A workspace run (`scope`) is Claude Code's
+ *  not a forge listing), no workflow has it and its checkout has room for
+ *  one more run (FR-073), and its route's harness is installed here. A workspace run (`scope`) is Claude Code's
  *  alone for now, since its other folders go in as --add-dir. */
 async function startRepoRun(
   state: ServerState,
@@ -1284,17 +1288,19 @@ async function startRepoRun(
     const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
     if (going >= BRANCH_RUNS_PER_REPO) throw new HttpError(409, `${repo.name} has ${going} branch runs going; wait for one to end`);
   } else {
-    // A workflow owns the repo while it runs, gate included: a second
-    // agent here would make the flow's next step throw and die. A branch
+    // A workflow keeps new runs out while it runs, gate included: one
+    // starting here could move the checkout under its next gate. Other
+    // runs share the checkout up to the runner's cap (FR-073). A branch
     // run shares nothing with the checkout, so neither stops one.
     if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
-    const busy = state.runner.activeFor(repo.id);
-    if (busy) throw new HttpError(409, busyWith(repo.name, busy.verb));
+    const full = state.runner.checkoutRefusal(repo);
+    if (full) throw new HttpError(409, full);
   }
   const routed = agentFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job", undefined, { kind: "task", name: action });
   const base: StartExtras = {
     ...(priority === "interactive" ? {} : { priority }),
     ...(how.parent ? { parent: how.parent, child: true as const } : {}),
+    ...(how.name ? { name: how.name } : {}),
   };
   // a start that names no loadout takes the repo's, the machine's or
   // kit.json's default (FR-069); `none` takes none, and a workspace run
@@ -1348,10 +1354,7 @@ async function startRepoRun(
 async function floorplanRoute(state: ServerState, repo: Repo, method: string, req: Request): Promise<Response> {
   if (repo.host) throw new HttpError(400, `the map is drawn on the checkout's own machine; ${repo.name} is on ${repo.host}`);
   if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
-  const liveRun = (): string | null => {
-    const r = state.runner.activeFor(repo.id);
-    return r?.action === FLOORPLAN_ACTION ? r.id : null;
-  };
+  const liveRun = (): string | null => state.runner.activeRunsFor(repo.id).find((r) => r.action === FLOORPLAN_ACTION)?.id ?? null;
   if (method === "GET") return json(await floorplanInfo(repo.path, liveRun()));
   if (method !== "POST") throw new HttpError(405, "GET or POST");
   const b = await objectBody(req);
@@ -1360,6 +1363,8 @@ async function floorplanRoute(state: ServerState, repo: Repo, method: string, re
     if (b.act === "stop") return json({ stopped: await stopFloorplan(repo.path) });
     if (b.act !== "make") throw new HttpError(400, "act is make, open or stop");
     if (b.note !== undefined && typeof b.note !== "string") throw new HttpError(400, "note must be text");
+    // other runs may share the checkout (FR-073); two at one map may not
+    if (liveRun()) throw new HttpError(409, "a map run is going on this repo already");
     const root = realRoot(repo.path);
     const status = await readFloorplanStatus(root);
     const spec = floorplanSpec({ skillDir: FLOORPLAN_SKILL, root, update: isUpdate(status.state), developers: b.developers === true });
@@ -1386,10 +1391,7 @@ async function floorplanRoute(state: ServerState, repo: Repo, method: string, re
 async function archifyRoute(state: ServerState, repo: Repo, method: string, req: Request): Promise<Response> {
   if (repo.host) throw new HttpError(400, `diagrams are drawn on the checkout's own machine; ${repo.name} is on ${repo.host}`);
   if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
-  const liveRun = (): string | null => {
-    const r = state.runner.activeFor(repo.id);
-    return r?.action === ARCHIFY_ACTION ? r.id : null;
-  };
+  const liveRun = (): string | null => state.runner.activeRunsFor(repo.id).find((r) => r.action === ARCHIFY_ACTION)?.id ?? null;
   try {
     if (method === "GET") {
       const diagram = new URL(req.url).searchParams.get("diagram");
@@ -1419,6 +1421,8 @@ async function archifyRoute(state: ServerState, repo: Repo, method: string, req:
       return json({ removed: b.diagram });
     }
     if (b.act !== "make" && b.act !== "revise") throw new HttpError(400, "act is make, revise or remove");
+    // other runs may share the checkout (FR-073); diagrams are drawn one at a time
+    if (liveRun()) throw new HttpError(409, "a diagram run is going on this repo already");
     const root = realRoot(repo.path);
     const where = { skillDir: ARCHIFY_SKILL, root, origin: await hasOrigin(root) };
     let start: ArchifyStart;
@@ -1502,10 +1506,7 @@ async function diagnosisRoute(state: ServerState, repo: Repo, method: string, re
 async function understandRoute(state: ServerState, repo: Repo, method: string, req: Request): Promise<Response> {
   if (repo.host) throw new HttpError(400, `the graph is made on the checkout's own machine; ${repo.name} is on ${repo.host}`);
   if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
-  const liveRun = (): string | null => {
-    const r = state.runner.activeFor(repo.id);
-    return r?.action === UNDERSTAND_ACTION ? r.id : null;
-  };
+  const liveRun = (): string | null => state.runner.activeRunsFor(repo.id).find((r) => r.action === UNDERSTAND_ACTION)?.id ?? null;
   if (method === "GET") return json(await understand.understandInfo(repo.path, liveRun()));
   if (method !== "POST") throw new HttpError(405, "GET or POST");
   const b = await objectBody(req);
@@ -1542,6 +1543,10 @@ async function understandRoute(state: ServerState, repo: Repo, method: string, r
   }
 }
 
+/** A start's `name` as the runner takes it: cleaned text, or undefined for
+ *  none, so the run is named from its first message (FR-073). */
+const runNameOf = (v: unknown): string | undefined => (typeof v === "string" && cleanName(v)) || undefined;
+
 /** What a start says beyond the plain arguments (FR-038). */
 interface RunStartHow {
   /** canopy's tools on or off for this start, over the settings' */
@@ -1554,6 +1559,8 @@ interface RunStartHow {
   devTask?: boolean;
   /** a loadout from kit.json to start with (FR-065) */
   loadout?: string;
+  /** the run's name, in place of one cut from its first message (FR-073) */
+  name?: string;
   /** a run that is none of the built-in actions, in the checkout: its own
    *  action name and spec, extras laid over the start's, and the refusal a
    *  harness other than Claude Code gets (a map run, FR-070) */
@@ -3237,7 +3244,9 @@ async function acceptAdvice(state: ServerState, entry: AdviceEntry): Promise<Adv
   }
   const repo = await canopyRepoOf(state.result.repos, CANOPY_DIR, readPkg().homepage, realpath);
   if (!repo) throw new IncubatorError(409, "canopy's own checkout is not in this backend's scan, so there is no repo to open the chat on");
-  if (state.flows.activeFor(repo.id) || state.runner.activeFor(repo.id)) throw new IncubatorError(409, `${repo.name} has a run or a workflow going; accept this once it ends`);
+  if (state.flows.activeFor(repo.id)) throw new IncubatorError(409, `${repo.name} has a workflow going; accept this once it ends`);
+  const full = state.runner.checkoutRefusal(repo);
+  if (full) throw new IncubatorError(409, full);
   const agent = { ...agentFor(await loadConfig(), repo.path, "chat"), yolo: false, extra: "" };
   await needHarness(state, agent.harness, repo.path);
   // the bundled file as the checkout holds it, not where this process runs from
@@ -5811,6 +5820,13 @@ async function handleApi(
     return json(steering(() => state.runner.interrupt(id, text)));
   }
   if (path === "/api/runs/child" && method === "POST") return json(await startChildRun(state, caller, await objectBody(req)), 201);
+  // a person's name for a run that is still going (FR-073)
+  if (path === "/api/runs/name" && method === "POST") {
+    const b: { id?: unknown; name?: unknown } = await objectBody(req);
+    if (typeof b.id !== "string" || typeof b.name !== "string") return json({ error: "missing run id or name" }, 400);
+    const { id, name } = b;
+    return json(steering(() => state.runner.rename(id, name)));
+  }
 
   if (path === "/api/verdict" && method === "GET") return json({ ready: state.flows.hasEvaluator });
 
@@ -6067,10 +6083,10 @@ async function handleApi(
     broadcast(state, { type: "workspaces", workspaces });
     return json(workspaces);
   }
-  // One run on the primary, the other local members added as folders. Every
-  // local member must be free: a run or a workflow going on any of them
-  // refuses it. While it runs only the primary is held, the way every run
-  // holds its repo. A seed's agents run only through the incubator, behind
+  // One run on the primary, the other local members added as folders. A
+  // workflow going on any local member refuses it, and so does a member
+  // whose checkout has no room for another run (FR-073). While it runs it
+  // counts as a run on the primary alone. A seed's agents run only through the incubator, behind
   // its git guards and in its stage, so a seed primary refuses the run and a
   // seed member is left out like one on another host.
   if (path === "/api/workspaces/run" && method === "POST") {
@@ -6087,8 +6103,8 @@ async function handleApi(
     if (isSeedPath(state.root, primary.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
     const { others, skipped } = splitMembers(ws, primaryPath, state.result.repos, (r) => isSeedPath(state.root, r.path));
     for (const r of others) {
-      const busy = state.runner.activeFor(r.id);
-      if (busy) throw new HttpError(409, busyWith(r.name, busy.verb));
+      const full = state.runner.checkoutRefusal(r);
+      if (full) throw new HttpError(409, full);
       if (state.flows.activeFor(r.id)) throw new HttpError(409, `a workflow is running in ${r.name}`);
     }
     const note = typeof b.note === "string" ? b.note : "";
@@ -6653,12 +6669,15 @@ async function handleApi(
       const loadout = typeof b.loadout === "string" ? b.loadout : undefined;
       if (loadout !== undefined && loadout !== NO_LOADOUT && times > 1) return json({ error: "a loadout starts one run; a group picks a profile per member" }, 400);
       if (loadout !== undefined && loadout !== NO_LOADOUT && b.action === "coordinate") return json({ error: "a coordinator starts without a loadout" }, 400);
+      if (b.name !== undefined && typeof b.name !== "string") return json({ error: "name must be text" }, 400);
+      const name = runNameOf(b.name);
+      if (name && (times > 1 || b.action === "coordinate")) return json({ error: "a group or a coordinator takes no name" }, 400);
       if (times > 1) return json(await startGroup(state, repo, b.action, note, b.client, times, profiles, b.autoLand === true, b.pr === true, priority, b.reviewers === 2 ? { reviewers: 2 } : {}), 201);
       if (b.action === "coordinate") {
         if (b.branch === true || b.pr === true) return json({ error: "a coordinator works on no branch; each of its tasks gets one" }, 400);
         return json(await startCoordinator(state, repo, note, b.client), 201);
       }
-      return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch, b.pr === true, priority, { ...(b.canopyTools === undefined ? {} : { tools: b.canopyTools }), ...(b.devTask === true ? { devTask: true } : {}), ...(loadout !== undefined ? { loadout } : {}) }), 201);
+      return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch, b.pr === true, priority, { ...(b.canopyTools === undefined ? {} : { tools: b.canopyTools }), ...(b.devTask === true ? { devTask: true } : {}), ...(loadout !== undefined ? { loadout } : {}), ...(name ? { name } : {}) }), 201);
     }
     if (method === "POST" && action === "peer") return postRepoPeer(peerDeps(state), repo, req);
     if (method === "POST" && action === "movecheck") {
@@ -6900,7 +6919,9 @@ export async function startServer(opts: {
   /** the runner's driver per harness; tests swap in a stand-in agent */
   /** `quietWait` shortens how long a stage run's or check's end waits for
    *  the stage runner to call its seed quiet, for tests */
-  runner?: { driver?: (harness: Harness) => RunDriver; quietWait?: number };
+  /** `namer` gives a run its name in place of the user's `claude` (FR-073);
+   *  under `bun test` no namer runs unless a test passes one */
+  runner?: { driver?: (harness: Harness) => RunDriver; quietWait?: number; namer?: (text: string) => Promise<string | null> };
   /** the coordinator's runner: `client` in place of CANOPY_COORD_SOCKET's
    *  (null for none), how often it is asked whether it answers, and `port`
    *  in place of CANOPY_COORD_PORT's (0 for any free one) */
@@ -7116,6 +7137,7 @@ export async function startServer(opts: {
     if (!recoveredRunlog) { args[3]("current transcript secrets are unavailable"); return null; }
     return runlog.open(...args);
   } };
+  const runNamer = opts.runner?.namer ?? (process.env["NODE_ENV"] === "test" || process.env["CANOPY_RUN_NAMES"] === "0" ? null : makeNamer());
   const runnerOpts = {
     ...(!ledgerOff ? { log: ownedLog } : {}),
     remembered: () => remembered.list(),
@@ -7137,6 +7159,8 @@ export async function startServer(opts: {
           (coord.harnessesNow() ? (coordUnfenced() ?? STAGE_AWAY) : "the isolated coordinator runner is not answering")),
     ...(opts.runner?.driver ? { driver: opts.runner.driver } : {}),
     ...(opts.runner?.quietWait !== undefined ? { quietWait: opts.runner.quietWait } : {}),
+    // run names (FR-073): the user's own `claude`, off with CANOPY_RUN_NAMES=0
+    ...(runNamer ? { namer: runNamer } : {}),
     // the capacity governor (FR-036); the hub exists by the first start
     may: (harness: Harness, priority: Priority) => state.capacity.may(harness, priority),
   };
@@ -7685,7 +7709,12 @@ export async function startServer(opts: {
       },
       repo: id => state.result.repos.find(repo => repo.id === id),
       run: id => state.runner.get(id),
-      activeFor: id => state.runner.activeFor(id),
+      // the reviewer is one more run in the checkout (FR-073), so only a
+      // checkout with no room for it makes the review wait
+      activeFor: id => {
+        const repo = state.result.repos.find(r => r.id === id);
+        return repo && state.runner.checkoutRefusal(repo) ? state.runner.activeFor(id) : undefined;
+      },
       checkoutBusy: id => state.flows.activeFor(id) !== undefined,
       dryGates: id => state.landing.dryGates(id),
       landingInfo: () => state.landing.info(),

@@ -8,11 +8,11 @@ import { ACTIONS, checkWhen } from "../../../src/core/actions";
 import { describeAgent } from "../../../src/core/agent";
 import { HARNESS } from "../../../src/core/harness";
 import { harnessesOf, profileNames, startHarnesses } from "../agents";
-import { AGENT_NAME } from "../runs";
+import { AGENT_NAME, RUN_DOT, menuRun, runAtWork } from "../runs";
 import { describeLaunch } from "../../../src/core/launch";
 import { flowWord } from "../flows";
 import { useShallow } from "zustand/react/shallow";
-import { activeFlowFor, activeRunFor, agentFor, capsFor, cardOf, connOf, coordinatorFor, isFavorite, isHarness, isOnline, launchFor, multi, routesOf, useStore } from "../store";
+import { activeFlowFor, agentFor, capsFor, cardOf, connOf, coordinatorFor, isFavorite, isHarness, isOnline, launchFor, multi, routesOf, runsFor, useStore } from "../store";
 import { coordCheckout } from "../coord";
 import { oneMenu } from "../menus";
 import { backendOf } from "../registry";
@@ -243,7 +243,8 @@ export function RepoMenuItems({
   const client = useStore(useShallow((s) => capsFor(s, backendOf(repo.id))));
   const can = (app: OpenerId) => client.openers.includes(app);
   const apps = OPENERS.filter(can);
-  const active = useStore((s) => activeRunFor(s, repo.id));
+  // every run going here, oldest first: a repo takes several at once (FR-073)
+  const live = useStore(useShallow((s) => runsFor(s, repo.id)));
   const workflows = useStore((s) => s.workflows[repo.id]);
   const loadWorkflows = useStore((s) => s.loadWorkflows);
   const planFlow = useStore((s) => s.planFlow);
@@ -274,6 +275,8 @@ export function RepoMenuItems({
 
   // a seed's agents run through the incubator alone: no shell here starts one
   const seed = isSeedId(repo.id);
+  // and a seed takes one run at a time, where any other repo takes several
+  const seedBusy = seed && live.length > 0;
 
   const agentShell = (pick: { harness: (typeof HARNESSES)[number] } | { profile: string }) => {
     onDone();
@@ -285,10 +288,10 @@ export function RepoMenuItems({
     plan(repo.id, action);
   };
 
-  const chat = async () => {
+  const chat = async (fresh: boolean) => {
     onDone();
     try {
-      await openChat(repo.id);
+      await openChat(repo.id, "", fresh);
     } catch (err) {
       const msg = String(err instanceof Error ? err.message : err);
       if (onError) onError(msg);
@@ -389,27 +392,27 @@ export function RepoMenuItems({
       ) : (
         <>
         <div className="menu-label">with an agent</div>
-        {active && (
-          <button
-            type="button"
-            role="menuitem"
-            className="menu-item live"
-            onClick={() => {
-              onDone();
-              showRun(active.id);
-            }}
-          >
-            <span className="dot sky" />
-            <span className="menu-text">
-              {active.status === "waiting"
-                ? `${active.verb} needs you`
-                : active.status === "idle"
-                  ? "chat open, your turn"
-                  : `${active.verb} in progress`}
-            </span>
-            <span className="menu-fact">show</span>
-          </button>
-        )}
+        {live.map((r) => {
+          // one row a run, by the name it goes by: what tells two chats apart
+          const row = menuRun(r);
+          return (
+            <button
+              key={r.id}
+              type="button"
+              role="menuitem"
+              className="menu-item live"
+              title={`Show this run${r.note ? `\n${r.note}` : ""}`}
+              onClick={() => {
+                onDone();
+                showRun(r.id);
+              }}
+            >
+              <span className={RUN_DOT[r.status] ?? "dot sky"} />
+              <span className="menu-text">{row.text}</span>
+              <span className="menu-fact">{row.fact}</span>
+            </button>
+          );
+        })}
         {activeFlow && (
           <button
             type="button"
@@ -426,10 +429,12 @@ export function RepoMenuItems({
           </button>
         )}
         {!repo.host && (() => {
-          // a live run is shown whatever it runs on; a new chat needs
-          // its harness on the repo's backend
-          const missing = !active && !has.includes(chatAgent.harness);
-          const off = !!activeFlow || missing;
+          // a chat starts beside the runs going, each listed above; a seed
+          // takes one run at a time, and a chat needs its harness on the
+          // repo's backend
+          const missing = !has.includes(chatAgent.harness);
+          const another = live.some((r) => r.chat);
+          const off = !!activeFlow || missing || seedBusy;
           return (
             <button
               type="button"
@@ -440,22 +445,26 @@ export function RepoMenuItems({
               title={
                 activeFlow
                   ? "workflow running"
-                  : missing
-                    ? `${HARNESS[chatAgent.harness].label} is not installed on ${backendOf(repo.id)}`
-                    : `Talk with ${AGENT_NAME[chatAgent.harness]} about this repo, here in canopy (the repo's chat route)`
+                  : seedBusy
+                    ? "a seed takes one run at a time"
+                    : missing
+                      ? `${HARNESS[chatAgent.harness].label} is not installed on ${backendOf(repo.id)}`
+                      : another
+                        ? `Start another chat with ${AGENT_NAME[chatAgent.harness]} beside the ones going here`
+                        : `Talk with ${AGENT_NAME[chatAgent.harness]} about this repo, here in canopy (the repo's chat route)`
               }
               onClick={() => {
-                if (!off) void chat();
+                if (!off) void chat(another);
               }}
             >
               <span className="menu-text">
                 <span className={`harness-glyph h-${chatAgent.harness}`} aria-hidden="true">
                   {HARNESS[chatAgent.harness].glyph}
                 </span>{" "}
-                {ACTIONS.chat.label}
+                {another ? `new ${ACTIONS.chat.label}` : ACTIONS.chat.label}
               </span>
               <span className="menu-fact">
-                {activeFlow ? "workflow running" : active ? "show" : missing ? "not installed" : "in canopy"}
+                {activeFlow ? "workflow running" : seedBusy ? "one run at a time" : missing ? "not installed" : "in canopy"}
               </span>
             </button>
           );
@@ -508,7 +517,7 @@ export function RepoMenuItems({
         {JOBS.map((action) => {
           const check = activeFlow
             ? { ok: false as const, why: "workflow running" }
-            : active
+            : seedBusy
               ? { ok: false as const, why: "wait for the current run" }
               : action === "propose" && jobAgent.harness !== "claude"
                 ? { ok: false as const, why: "plan, then build needs Claude Code" }
@@ -548,7 +557,9 @@ export function RepoMenuItems({
             );
           }
           const w = e.workflow;
-          const check = active || activeFlow ? { ok: false as const, why: "wait for the current run" } : checkWhen(repo, w.when);
+          // a workflow starts beside chats between turns; a run at work in
+          // the checkout is what it waits for
+          const check = seedBusy || runAtWork(live) || activeFlow ? { ok: false as const, why: "wait for the current run" } : checkWhen(repo, w.when);
           return (
             <button
               key={`wf-${w.name}`}

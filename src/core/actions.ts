@@ -286,6 +286,13 @@ export function branchPrompt(repo: Repo, spec: ActionSpec, note: string, b: { na
  *  article fits every kind ("a ask run"). */
 export const busyWith = (name: string, verb: string): string => `${name} already has a run going (${verb})`;
 
+/** What a start refused for a full checkout says (FR-073). */
+export const checkoutFull = (name: string, most: number): string => `${name} has ${most} runs going in its checkout; end one first`;
+
+/** The ground rule a run is given when others are at work in the checkout
+ *  it starts in (FR-073): what it did not change is not its to tidy. */
+export const SHARED_CHECKOUT = "- Other agents are working in this checkout at the same time as you. Files you did not touch may change or show as uncommitted: leave them as they are. Do not revert, stash, reset, reformat or delete them, and commit only what your own task covers, naming the files you commit rather than adding everything.";
+
 /** A workspace's members around its primary, for a run there: the local
  *  repos the run adds as folders, and in words the members it cannot open
  *  here (on another host, on the forge, missing from the last scan, or an
@@ -320,8 +327,9 @@ export const FIRST_MESSAGE = "First message from the user:";
  *  read, so the agent starts with the same picture the card shows. The
  *  ground rules name Claude's AskUserQuestion; a Codex run is told its own
  *  tool for the same thing (codexrun.ts). A job in an incubator seed
- *  (`stage`) takes the stage's rules instead of the job's. */
-export function buildPrompt(repo: Repo, spec: ActionSpec, note: string, scope?: WorkspaceScope, stage = false): string {
+ *  (`stage`) takes the stage's rules instead of the job's. `shared` adds
+ *  the rule for a checkout other runs are at work in (FR-073). */
+export function buildPrompt(repo: Repo, spec: ActionSpec, note: string, scope?: WorkspaceScope, stage = false, shared = false): string {
   if (spec.detached) {
     const first = note.trim();
     return first ? `${spec.task}\n\n${FIRST_MESSAGE}\n${first}` : spec.task;
@@ -351,11 +359,13 @@ export function buildPrompt(repo: Repo, spec: ActionSpec, note: string, scope?: 
         ? `${FIRST_MESSAGE}\n${trimmed}`
         : `Note from the user (follow it where it applies):\n${trimmed}`
     : "";
+  const own = spec.mode === "chat" ? rules.chat : spec.mode === "ask" ? rules.ask : stage ? rules.stage : rules.job;
+  const ground = shared ? `${own}\n${SHARED_CHECKOUT}` : own;
   // A chat's first message comes last, where a reply naturally follows it.
   const parts =
     spec.mode === "chat"
-      ? [head, spec.task, rules.chat, spec.brief, noteBlock]
-      : [head, spec.task, noteBlock, spec.mode === "ask" ? rules.ask : stage ? rules.stage : rules.job, spec.brief];
+      ? [head, spec.task, ground, spec.brief, noteBlock]
+      : [head, spec.task, noteBlock, ground, spec.brief];
   return parts.filter(Boolean).join("\n\n");
 }
 

@@ -58,11 +58,11 @@ export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
 import { beat } from "./live";
 import { ownRun, pickable, selectable } from "./flows";
+import { chatToSay, chatToShow, needsMore, runAtWork } from "./runs";
 import { unreadProposals, withSession } from "./secrets";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
 import { anchorWord } from "./goals";
 import { appendFeed, describeEvent, feedOnSide, feedPlaceOf, feedPlaceShown, sweepLine, DEFAULT_FEED_PLACE, type FeedEntry, type FeedPlace, type FeedSnapshot } from "./feed";
-import { mergeAction } from "./peers";
 import { pasteIntoAgentShell } from "./agentsend";
 import { convOf, isUnread, mergeMessages } from "./chan";
 import type { AdviceAccepted, AdviceOffer, AgentCard, AgentEffort, AgentKind, AgentPulse, Ask, AwakeInfo, AwakeMode, BranchTreesInfo, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, ScenarioNames, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo, WorktreesInfo } from "../../src/core/types";
@@ -73,6 +73,7 @@ import type { Delivery, TriggersInfo } from "../../src/core/trigger";
 import type { WorkInfo } from "../../src/core/work";
 import { mergeLanding } from "./landing";
 import { isCoordinator, type CoordEdit } from "./coord";
+import { isSeedId } from "../../src/core/sprout";
 import { mergePrs } from "./prs";
 import { HARNESS_SAID_KEY, harnessNotice, mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type HarnessNotice, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout, stagesRetryIn } from "./sprouts";
@@ -1527,19 +1528,25 @@ export interface CanopyState {
    *  first so every device's tab follows (FR-031); false when it could not */
   placeTerm: (id: string, place: ShellPlace) => Promise<boolean>;
 
-  /** opens the pre-flight dialog for an action on a repo */
+  /** opens the pre-flight dialog for an action on a repo. A repo takes
+   *  several runs at once (FR-073), so a run going there stops nothing; a
+   *  coordinator and a seed's run stay one at a time and show the one going */
   plan: (repoId: string, action: RunAction) => void;
   /** the pre-flight dialog for a run across a workspace, on its primary;
    *  throws when the workspace has no primary in the tree */
   openWsPlan: (name: string, action: RunAction) => void;
-  /** opens a chat with Claude in a repo: the repo's live run if it has one,
-   *  else a new idle chat whose first message starts Claude (the peers
-   *  panel's "merge with claude" passes one; the menu's plain chat does not) */
-  openChat: (repoId: string, note?: string) => Promise<void>;
-  /** hands text to the repo's agent: the next turn of its idle chat, else
-   *  pasted into a shell of the repo that runs Claude Code or Codex (Enter
-   *  left to the user), else a new chat that starts with it. Throws while a
-   *  run is busy. Says which of the three it did. */
+  /** opens a chat with the agent in a repo and resolves with its run's id.
+   *  With no note: the newest chat going there, else a new idle chat whose
+   *  first message starts the agent; `fresh` starts a new one beside the
+   *  chats already going. With a note (the peers panel's "merge with the
+   *  agent", a failed move's fix): the next turn of the newest chat between
+   *  turns, else a new chat that starts with it. Other runs going on the
+   *  repo never stop it (FR-073). */
+  openChat: (repoId: string, note?: string, fresh?: boolean) => Promise<string>;
+  /** hands text to the repo's agent: the next turn of its newest chat
+   *  between turns, else pasted into a shell of the repo that runs Claude
+   *  Code or Codex (Enter left to the user), else a new chat that starts
+   *  with it. Says which of the three it did. */
   sendToAgent: (repoId: string, text: string) => Promise<"said" | "pasted" | "started">;
   /** review notes left on diff lines, by repo id, kept in this browser
    *  (`ui/src/reviewnotes.ts`) until sent to the repo's agent or cleared */
@@ -1640,7 +1647,8 @@ export interface CanopyState {
    *  default for the action. `pr` opens a PR once it is ready (FR-011) */
   /** `priority` raises the group above its low default for this one start (FR-036) */
   startGroup: (repoId: string, action: RunAction, note: string, times: number, profiles?: (string | null)[], autoLand?: boolean, pr?: boolean, reviewers?: 2, priority?: Priority) => Promise<void>;
-  startRun: (repoId: string, action: RunAction, note: string, branch?: boolean, pr?: true, devTask?: true, canopyTools?: boolean, loadout?: string) => Promise<void>;
+  /** starts one run, shows it, and resolves with its id */
+  startRun: (repoId: string, action: RunAction, note: string, branch?: boolean, pr?: true, devTask?: true, canopyTools?: boolean, loadout?: string) => Promise<string>;
   /** a run on a workspace's primary that sees its other members too */
   startWsRun: (name: string, action: RunAction, note: string) => Promise<void>;
   answerRun: (runId: string, promptId: string, answer: RunAnswer) => Promise<void>;
@@ -1653,6 +1661,9 @@ export interface CanopyState {
   /** stops a run's turn and keeps the run; `text` runs as the next turn */
   interruptRun: (runId: string, text?: string) => Promise<void>;
   stopRun: (runId: string) => Promise<void>;
+  /** gives a live run a name of the user's own, over the one canopy cut
+   *  from its first message or a model wrote (FR-073) */
+  renameRun: (runId: string, name: string) => Promise<void>;
   dismissRun: (runId: string) => Promise<void>;
   /** edits a coordinator's proposed or queued card; the run's broadcast brings it back */
   coordPlanEdit: (runId: string, taskId: string, change: CoordEdit) => Promise<void>;
@@ -1665,7 +1676,8 @@ export interface CanopyState {
 
   /** loads (or reloads) the workflows a repo can run, for the menu */
   loadWorkflows: (repoId: string) => Promise<void>;
-  /** opens the pre-flight for a workflow on a repo, or its live flow/run */
+  /** opens the pre-flight for a workflow on a repo, or the live flow or the
+   *  run at work in its checkout that it has to wait for */
   planFlow: (repoId: string, workflow: string) => void;
   /** `request`: the plan sheet's id for this start (see api.startFlow) */
   startFlow: (repoId: string, workflow: string, note: string, request?: string) => Promise<void>;
@@ -5087,9 +5099,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     })),
 
   plan: (repoId, action) => {
-    // A repo with a run going shows that run instead of starting a second.
-    // A coordinator holds no repo, so only a coordinator going stops a new one.
-    const active = action === "coordinate" ? coordinatorFor(get(), repoId) : activeRunFor(get(), repoId);
+    // A coordinator holds no repo, so only a coordinator going stops a new
+    // one. A seed takes one run at a time and shows it. Any other repo
+    // takes this run beside the ones going (FR-073).
+    const active = action === "coordinate" ? coordinatorFor(get(), repoId) : isSeedId(repoId) ? activeRunFor(get(), repoId) : undefined;
     set({ sheet: active ? { kind: "run", runId: active.id } : { kind: "plan", repoId, action } });
   },
   openWsPlan: (name, action) => {
@@ -5101,43 +5114,34 @@ export const useStore = create<CanopyState>((set, get) => ({
     // a workspace holds home's checkouts, so its primary is a home card
     const primary = s.repos.find((r) => isHome(r.id) && r.path === path);
     if (!primary) throw new Error(`the primary ${path} is not in the tree`);
-    // the primary's own run going shows that run, as plan does
-    const active = activeRunFor(s, primary.id);
-    set({
-      sheet: active ? { kind: "run", runId: active.id } : { kind: "plan", repoId: primary.id, action, workspace: name },
-    });
+    // the primary takes this run beside the ones going there, as plan does
+    set({ sheet: { kind: "plan", repoId: primary.id, action, workspace: name } });
   },
-  openChat: async (repoId, note = "") => {
-    const active = activeRunFor(get(), repoId);
+  openChat: async (repoId, note = "", fresh = false) => {
+    const live = runsFor(get(), repoId);
     const trimmed = note.trim();
-    // The plain "chat" menu item passes no note: show whatever is already
-    // going, or start a fresh idle chat with nothing to say yet. Unaffected
-    // by mergeAction, which is about a caller with something to send.
+    // The plain "chat" menu item passes no note: show the newest chat
+    // going, or start an idle one with nothing said yet. `fresh` is the
+    // menu's "new chat", which starts one beside the chats going.
     if (!trimmed) {
-      if (active) {
-        set({ sheet: { kind: "run", runId: active.id } });
-        return;
-      }
-      await get().startRun(repoId, "chat", "");
-      return;
+      const going = fresh ? undefined : chatToShow(live);
+      if (!going) return get().startRun(repoId, "chat", "");
+      get().showRun(going.id);
+      return going.id;
     }
-    if (!active) {
-      await get().startRun(repoId, "chat", note);
-      return;
-    }
-    if (mergeAction(active) === "busy") {
-      throw new Error("a run is already going on this repo");
-    }
-    // An idle chat: the note is the next turn, not a fresh start.
-    await get().sayRun(active.id, trimmed);
-    set({ sheet: { kind: "run", runId: active.id } });
+    // A chat between turns takes the note as its next turn. With none, a
+    // new chat starts with it, whatever else is going on the repo.
+    const idle = fresh ? undefined : chatToSay(live);
+    if (!idle) return get().startRun(repoId, "chat", note);
+    await get().sayRun(idle.id, trimmed);
+    set({ sheet: { kind: "run", runId: idle.id } });
+    return idle.id;
   },
   sendToAgent: async (repoId, text) => {
-    const active = activeRunFor(get(), repoId);
-    if (active) {
-      if (mergeAction(active) === "busy") throw new Error("a run is already going on this repo");
-      await get().sayRun(active.id, text);
-      set({ sheet: { kind: "run", runId: active.id } });
+    const idle = chatToSay(runsFor(get(), repoId));
+    if (idle) {
+      await get().sayRun(idle.id, text);
+      set({ sheet: { kind: "run", runId: idle.id } });
       return "said";
     }
     const shell = await pasteIntoAgentShell(repoId, text, null, get().terms);
@@ -5382,7 +5386,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     set(s => ({ landing: withGroup(s.landing, backendOf(id), group) }));
   },
   startGroup: async (repoId, action, note, times, profiles, autoLand = false, pr = false, reviewers, priority) => {
-    if (times === 1) return get().startRun(repoId, action, note, true, pr ? true : undefined);
+    if (times === 1) {
+      await get().startRun(repoId, action, note, true, pr ? true : undefined);
+      return;
+    }
     const group = await api.startGroup(repoId, action, note, times, profiles, autoLand, pr, reviewers, priority);
     const b = backendOf(repoId);
     set(s => {
@@ -5393,9 +5400,11 @@ export const useStore = create<CanopyState>((set, get) => ({
   startRun: async (repoId, action, note, branch, pr, devTask, canopyTools, loadout) => {
     const run = await api.run(repoId, action, note, clientId(), branch, pr, devTask, canopyTools, loadout);
     set((s) => ({
-      runs: { ...s.runs, [run.id]: run },
+      // the stream may have brought a newer copy already, its name with it
+      runs: { ...s.runs, [run.id]: s.runs[run.id] ?? run },
       sheet: { kind: "run", runId: run.id },
     }));
+    return run.id;
   },
   startWsRun: async (name, action, note) => {
     const run = await api.wsRun(name, action, note);
@@ -5447,6 +5456,11 @@ export const useStore = create<CanopyState>((set, get) => ({
     const run = await answered(runId, api.stopRun(runId));
     if (run) set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
   },
+  renameRun: async (runId, name) => {
+    if (get().runs[runId]?.kept) return;
+    const run = await answered(runId, api.renameRun(runId, name));
+    if (run) set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+  },
   coordPlanEdit: (runId, taskId, change) => api.coordTask(runId, taskId, change),
   coordRemove: (runId, taskId) => api.coordTask(runId, taskId, { remove: true }),
   coordStart: (runId, ids) => api.coordStart(runId, ids),
@@ -5475,7 +5489,9 @@ export const useStore = create<CanopyState>((set, get) => ({
       set({ sheet: { kind: "flow", flowId: active.id } });
       return;
     }
-    const run = activeRunFor(get(), repoId);
+    // a workflow starts beside chats between turns and branch runs; a run
+    // at work in the checkout is what it waits for (a seed: any run)
+    const run = isSeedId(repoId) ? activeRunFor(get(), repoId) : runAtWork(runsFor(get(), repoId));
     set({ sheet: run ? { kind: "run", runId: run.id } : { kind: "flow-plan", repoId, workflow } });
   },
   startFlow: async (repoId, workflow, note, request) => {
@@ -5761,7 +5777,8 @@ useStore.subscribe((s, prev) => {
 });
 
 /** The run a repo's card should talk about: a live one first, else the most
- *  recent finished one still on the server. */
+ *  recent finished one still on the server. Of several live ones (FR-073),
+ *  the one that needs a person most (`needsMore`). */
 export function runFor(s: CanopyState, repoId: string): Run | undefined {
   let best: Run | undefined;
   for (const r of Object.values(s.runs)) {
@@ -5773,9 +5790,19 @@ export function runFor(s: CanopyState, repoId: string): Run | undefined {
     }
     const a = isRunActive(r);
     const b = isRunActive(best);
-    if (a !== b ? a : r.startedAt > best.startedAt) best = r;
+    if (a !== b ? a : a ? needsMore(r, best) : r.startedAt > best.startedAt) best = r;
   }
   return best;
+}
+
+/** Every run going on a repo, oldest first, so a list of them keeps its
+ *  order as runs start and end: a checkout takes several at once (FR-073).
+ *  A flow's step belongs to its flow and a coordinator holds no repo, so
+ *  neither is listed. A new array each call: select it with useShallow. */
+export function runsFor(s: CanopyState, repoId: string): Run[] {
+  return Object.values(s.runs)
+    .filter((r) => r.repoId === repoId && isRunActive(r) && !isCoordinator(r) && ownRun(s.flowRuns, r))
+    .sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
 }
 
 export function activeRunFor(s: CanopyState, repoId: string): Run | undefined {

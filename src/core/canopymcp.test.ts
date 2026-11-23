@@ -60,6 +60,9 @@ test("foldStatus: branch, ahead and behind, changed files, the live run; archive
   const runs = [run("r1", "dev-tools/canopy", { status: "working" }), run("r2", "web-apps/ripe", { status: "done" })];
   expect(foldStatus(repos, runs)).toBe("dev-tools/canopy  main 2 ahead 3 changed  run: Ask working\nweb-apps/ripe  feat 1 behind\nbroken  not a git repo");
   expect(foldStatus([], [])).toBe("no repos");
+  // a checkout takes several runs at once (FR-073): each is said
+  const shared = [...runs, run("r3", "dev-tools/canopy", { status: "idle", verb: "chat", chat: true })];
+  expect(foldStatus(repos, shared).split("\n")[0]).toBe("dev-tools/canopy  main 2 ahead 3 changed  runs: Ask working, chat idle");
 });
 
 test("foldRuns: the list, one run with its last steps, an id that is gone", () => {
@@ -73,6 +76,7 @@ test("foldRuns: the list, one run with its last steps, an id that is gone", () =
   expect(one[2]).toBe("  text: t3");
   expect(one[11]).toBe("  tool: bun test (error)");
   expect(foldRuns(runs, "nope")).toBe("no run nope");
+  expect(foldRuns([run("r3", "a", { status: "idle", name: "peer sync" }), run("r4", "a", { status: "working", name: "slow build", note: "look at the build" })])).toBe('r3  a  idle  Ask "peer sync"\nr4  a  working  Ask "slow build"  look at the build');
   expect(foldRuns([])).toBe("no runs");
 });
 

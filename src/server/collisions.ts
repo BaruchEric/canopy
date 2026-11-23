@@ -5,7 +5,7 @@
 import { inQueue, sentBack, stoppedWhole } from "../core/landing";
 import { ago } from "../core/treelines";
 import { isRunActive, type LandEntry, type LandingInfo, type LandNotice, type LandingRun, type Repo, type Run } from "../core/types";
-import { addStep, childrenSay, collide, collisionLine, collisionNotice, collisionSay, flipped, fromFiles, fromStatus, touchedOf, type Collision, type Side, type Touched } from "../core/touch";
+import { addStep, childrenSay, collide, collisionLine, collisionNotice, collisionSay, flipped, fromFiles, fromStatus, touchedOf, touchName, type Collision, type Side, type Touched } from "../core/touch";
 
 export interface CollisionDeps {
   /** this backend's live runs */
@@ -152,6 +152,8 @@ export class CollisionHub {
 
     if (group === undefined) delete touched.group;
     else touched.group = group;
+    // a run's name can arrive, or change, after its first step
+    touched.name = touchName(run);
     const ids = this.stepIds.get(run.id) ?? new Set<string>();
     for (const step of run.steps) {
       if (ids.has(step.id)) continue;
@@ -167,7 +169,8 @@ export class CollisionHub {
     for (const other of active) {
       if (other.id === run.id || other.repoId !== run.repoId) continue;
       const touched = this.touchRun(other);
-      sides.push({ touched, with: { kind: "run", run: other.id, verb: other.verb, name: touched.name } });
+      // two runs with no branch share the checkout's files on disk (FR-073)
+      sides.push({ touched, with: { kind: "run", run: other.id, verb: other.verb, name: touched.name, ...(!run.branch && !other.branch ? { shared: true as const } : {}) } });
     }
 
     const liveIds = new Set(active.map((live) => live.id));

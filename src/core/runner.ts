@@ -1,7 +1,8 @@
 /** Runs: one headless agent session per job, driven over stdio.
  *
  *  The Runner keeps what every run shares whichever agent does the work: the
- *  map of live runs, one checkout job or flow per repo, the chat's turn-taking, stops,
+ *  map of live runs, how many a repo's checkout takes at once (FR-073), their
+ *  names, the chat's turn-taking, stops,
  *  pruning, and the git status read that says whether a run changed
  *  anything. The wire is a `RunDriver` picked by the run's harness: Claude
  *  Code's stream-json (`claudedrive.ts`) or Codex's app-server
@@ -10,7 +11,7 @@
  *  (`driver.ts`), and the server broadcasts the `Run` whole on every change.
  *  With a logger, each run keeps its wire on disk (`runlog.ts`). */
 
-import { branchPrompt, buildPrompt, busyWith, type ActionSpec } from "./actions";
+import { branchPrompt, buildPrompt, busyWith, checkoutFull, type ActionSpec } from "./actions";
 import { normalizeAgent } from "./agent";
 import { CapacityHeldError, type Decision } from "./capacity";
 import { ClaudeDriver, cliArgs } from "./claudedrive";
@@ -21,6 +22,7 @@ import { answerMisfit, RunCtx, type DriveSpec, type RememberHook, type RunDriver
 import { rememberOffer } from "./offer";
 import { pathsInside, rememberedFor, ruleCovers, type RunScope } from "./remember";
 import type { RunLog, RunLogger } from "./runlog";
+import { cleanName, nameFromWords, runTitle, uniqueName } from "./runname";
 import { childRefusal, type McpLaunch } from "./runtools";
 import { EDIT_TOOLS } from "./shellwords";
 import { holdQuiet, type QuietHold, type StageClient } from "./stageclient";
@@ -47,6 +49,10 @@ import {
 
 /** At most this many distinct branch worktrees active in one repo. */
 export const BRANCH_RUNS_PER_REPO = 3;
+
+/** At most this many runs share one repo's checkout (FR-073). A chat
+ *  between turns holds a place: it keeps its process and its context. */
+export const CHECKOUT_RUNS_PER_REPO = 8;
 
 /** A branch run refused because its repo has `BRANCH_RUNS_PER_REPO` going.
  *  The runner counts distinct active worktrees, held ones too, which a
@@ -104,6 +110,9 @@ export interface StartExtras {
   flowOwner?: symbol;
   /** best-of-N attribution, including the first event and costs */
   group?: string;
+  /** the run's name as the caller gives it (a person's, a card's title),
+   *  in place of one cut from its first message; never replaced (FR-073) */
+  name?: string;
   /** who may go first when the plan's window runs low (FR-036); absent is
    *  interactive, which the governor never holds */
   priority?: Priority;
@@ -211,6 +220,11 @@ export interface RunnerOptions {
    *  go on this harness now. A hold refuses the start with
    *  `CapacityHeldError`; interactive work is never asked about. */
   may?: (harness: Harness, priority: Priority) => Decision;
+  /** A better name for a run than the one cut from its first message
+   *  (FR-073): asked once per run a person started, and taken when it comes
+   *  back while the run is still going and nobody has renamed it. Null
+   *  keeps the words' name. Absent, runs keep their words' names. */
+  namer?: (text: string) => Promise<string | null>;
 }
 
 /** Why a stage run cannot start through the stage runner, in the words the
@@ -332,6 +346,43 @@ export class Runner {
     return undefined;
   }
 
+  /** Every run going in the repo's checkout, oldest first: `activeFor`'s
+   *  rule, all of them (FR-073). */
+  activeRunsFor(repoId: string): Run[] {
+    return this.checkoutLives(repoId).map((l) => l.ctx.run);
+  }
+
+  /** The run at work in the repo's checkout: one mid-turn or waiting on a
+   *  prompt. A chat between turns edits nothing, so a workflow may start
+   *  beside it where it may not beside this. */
+  busyFor(repoId: string): Run | undefined {
+    return this.activeRunsFor(repoId).find((r) => r.status !== "idle");
+  }
+
+  private checkoutLives(repoId: string): Live[] {
+    return [...this.live.values()].filter((l) => {
+      const r = l.ctx.run;
+      return r.repoId === repoId && !r.branch && !isCoordinate(r) && !l.ctx.ending && isRunActive(r);
+    });
+  }
+
+  /** Why another run cannot start in the repo's checkout now, or null.
+   *  Plain runs share a checkout up to `CHECKOUT_RUNS_PER_REPO`. An
+   *  incubator seed keeps one run at a time, since a stage's gates read the
+   *  seed as its step left it. A workflow's step at work keeps other starts
+   *  out; its own steps (`flowOwner`) pass, and so does a step beside runs
+   *  that were there before it, which the flow weighed at its start. */
+  checkoutRefusal(repo: Repo, flowOwner?: symbol): string | null {
+    const others = this.checkoutLives(repo.id).filter((l) => flowOwner === undefined || l.flowOwner !== flowOwner);
+    const first = others[0];
+    if (!first) return null;
+    if (this.opts.stage?.(repo)) return busyWith(repo.name, first.ctx.run.verb);
+    if (flowOwner !== undefined) return null;
+    const step = others.find((l) => l.flowOwner !== undefined);
+    if (step) return busyWith(repo.name, step.ctx.run.verb);
+    return others.length >= CHECKOUT_RUNS_PER_REPO ? checkoutFull(repo.name, CHECKOUT_RUNS_PER_REPO) : null;
+  }
+
   /** The coordinator going at the repo, one at a time. */
   coordinatorFor(repoId: string): Run | undefined {
     for (const l of this.live.values()) {
@@ -425,12 +476,8 @@ export class Runner {
         throw new BranchCapError(`${repo.name} has ${BRANCH_RUNS_PER_REPO} branch runs going; wait for one to end`);
       }
     } else {
-      const busy = [...this.live.values()].find((live) => {
-        const run = live.ctx.run;
-        return run.repoId === repo.id && !run.branch && !isCoordinate(run) && !live.ctx.ending && isRunActive(run) &&
-          (extras.flowOwner === undefined || live.flowOwner !== extras.flowOwner);
-      })?.ctx.run;
-      if (busy) throw new Error(busyWith(repo.name, busy.verb));
+      const refused = this.checkoutRefusal(repo, extras.flowOwner);
+      if (refused) throw new Error(refused);
     }
     if (spec.noteRequired && !note.trim() && !branch?.message && !spec.message) {
       throw new Error("write what the agent should do first");
@@ -488,6 +535,15 @@ export class Runner {
     if (group) run.group = group;
     if (extras.priority) run.priority = extras.priority;
     if (extras.forkOf) run.forkOf = { ...extras.forkOf };
+    // a coordinator's goal, a stage and a flow's step go by what they are
+    const named = !coordinate && !stage && !spec.flowStep;
+    const given = named && extras.name ? cleanName(extras.name) : "";
+    if (given) {
+      run.name = given;
+      run.nameBy = "hand";
+    } else if (named) {
+      this.nameFrom(run, note, !spec.unattended && !extras.group && !extras.parent && extras.priority !== "low");
+    }
     if (scope) run.workspace = scope.workspace;
     if (spec.flowStep) run.flowStep = { ...spec.flowStep };
     if (branch) run.branch = { ...branch.branch, state: "working", ...(group ? { group } : {}) };
@@ -577,6 +633,10 @@ export class Runner {
     this.prune();
     if (scope?.skipped.length) live.ctx.step({ kind: "note", text: `left out of this run: ${scope.skipped.join("; ")}` });
     if (branch) live.ctx.step({ kind: "note", text: `on branch ${branch.branch.name} in ${branch.branch.dir}` });
+    // said once the run has something to do: a chat opened with nothing to
+    // say shares nothing yet
+    const beside = branch || coordinate || run.status === "idle" ? [] : this.activeRunsFor(repo.id).filter((r) => r.id !== run.id);
+    if (beside.length) live.ctx.step({ kind: "note", text: `sharing the checkout with ${beside.length === 1 ? "another run" : `${beside.length} other runs`}: ${beside.map(runTitle).join(", ")}` });
     if (chat) {
       if (note.trim()) live.ctx.step({ kind: "user", text: note.trim() });
       this.hooks.onChange(run);
@@ -598,7 +658,57 @@ export class Runner {
    *  a branch run's, which names its worktree and how its work lands. */
   private firstMessage(live: Live, note: string): string {
     const b = live.ctx.run.branch;
-    return b ? branchPrompt(live.repo, live.spec, note, b) : buildPrompt(live.repo, live.spec, note, live.scope, this.opts.stage?.(live.repo) ?? false);
+    if (b) return branchPrompt(live.repo, live.spec, note, b);
+    // told only when others are in the checkout as it begins: the rule
+    // would be noise to a run that has the checkout to itself
+    const shared = this.activeRunsFor(live.repo.id).some((r) => r.id !== live.ctx.run.id);
+    return buildPrompt(live.repo, live.spec, note, live.scope, this.opts.stage?.(live.repo) ?? false, shared);
+  }
+
+  /** The names of the runs going on a repo, checkout and branch runs
+   *  alike, less `except`'s. */
+  private namesOn(repoId: string, except: string): string[] {
+    return [...this.live.values()].flatMap((l) => {
+      const r = l.ctx.run;
+      return r.repoId === repoId && r.id !== except && r.name && isRunActive(r) ? [r.name] : [];
+    });
+  }
+
+  /** Names a run from what it was first told: the words' name at once, and
+   *  with `model` the namer's once it answers. The namer is skipped while
+   *  the governor holds low work on Claude, whose login it would spend. */
+  private nameFrom(run: Run, text: string, model: boolean): void {
+    const words = nameFromWords(text);
+    if (!words) return;
+    run.name = uniqueName(words, this.namesOn(run.repoId, run.id));
+    run.nameBy = "words";
+    const namer = model ? this.opts.namer : undefined;
+    if (!namer || (this.opts.may && this.opts.may("claude", "low") !== "go")) return;
+    void namer(text).then(
+      (name) => {
+        // a rename by hand, the run's end or its dismissal got there first
+        if (!name || run.nameBy !== "words" || !isRunActive(run) || this.live.get(run.id)?.ctx.run !== run) return;
+        run.name = uniqueName(name, this.namesOn(run.repoId, run.id));
+        run.nameBy = "model";
+        this.hooks.onChange(run);
+      },
+      () => {},
+    );
+  }
+
+  /** A person's name for a run that is still going (FR-073): it replaces
+   *  the one canopy gave, and the namer never replaces it. */
+  rename(id: string, name: string): Run {
+    const live = this.live.get(id);
+    if (!live) throw new UnknownRunError(id);
+    const run = live.ctx.run;
+    if (!isRunActive(run)) throw new SteerError("the run has ended");
+    const clean = cleanName(name);
+    if (!clean) throw new SteerError("write a name first");
+    run.name = clean;
+    run.nameBy = "hand";
+    this.hooks.onChange(run);
+    return run;
   }
 
   /** a one-line remark from canopy on a live run's timeline; nothing for an unknown or ended run */
@@ -627,6 +737,10 @@ export class Runner {
       if (!message) throw new SteerError("say something first");
       live.ctx.step({ kind: "user", text: message });
       run.status = "working";
+      // a chat opened with nothing to say is named by its first message
+      if (!run.name && !isCoordinate(run) && !run.flowStep && !(this.opts.stage?.(live.repo) ?? false)) {
+        this.nameFrom(run, message, !run.unattended && !run.group && !run.parent && run.priority !== "low");
+      }
       this.hooks.onChange(run);
       if (live.started) live.driver.say(message);
       else this.begin(live, this.firstMessage(live, message));

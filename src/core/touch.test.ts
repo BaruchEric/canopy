@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addStep, childrenSay, collide, collisionLine, collisionNotice, collisionSay, COLLISION_RESAY, flipped, fromFiles, fromStatus, noteLine, overlap, pairId, pathList, relPath, toolTouch, touchedOf, touchedWords, TOUCH_MAX, withName, type Collision, type Side } from "./touch";
+import { addStep, childrenSay, collide, collisionLine, collisionNotice, collisionSay, COLLISION_RESAY, flipped, fromFiles, fromStatus, noteLine, overlap, pairId, pathList, relPath, toolTouch, touchedOf, touchedWords, touchName, TOUCH_MAX, withName, type Collision, type Side } from "./touch";
 import type { Run, RunStep } from "./types";
 
 const tool = (id: string, paths?: string[], unknown?: true): RunStep => ({ id, at: 1, kind: "tool", tool: { name: "Edit", title: "edit", status: "ok", ...(paths ? { paths } : {}), ...(unknown ? { touchesUnknown: true } : {}) } });
@@ -15,6 +15,8 @@ describe("the touched set", () => {
     expect(touchedWords(t)).toBe("4 files and ran commands canopy could not read");
     expect(overlap(t, edits("b", "/etc/hosts"))).toEqual([]);
     expect(touchedOf(run("k", [], { branch: undefined })).name).toBe("Plan, then build run k");
+    expect(touchName({ id: "k", verb: "chat", name: "peer sync" })).toBe('chat "peer sync"');
+    expect(touchName({ id: "k", verb: "propose", name: "peer sync", branch: { name: "run/x-k", target: "main", base: "b0", dir: "/w/k", state: "working", origin: "k" } })).toBe("run/x-k");
     expect(touchedOf(run("g", []), "g-1").group).toBe("g-1");
     expect([...addStep(edits("c", "x.ts"), tool("2", ["y.ts"])).paths]).toEqual(["x.ts", "y.ts"]);
   });
@@ -94,6 +96,12 @@ test("the words", () => {
   expect(collisionSay(c, "3m ago")).toBe("canopy: another run (Plan, then build, started 3m ago) has edited these files since you started: <<< a.ts, b.ts, c.ts, d.ts, e.ts, f.ts, g.ts >>>. Carry on; the queue rebases when you land.");
   const f = flipped(c, "Ask");
   expect([f.id, f.run, f.name, f.with, f.paths]).toEqual(["a+b", "b", "run/x-b", { kind: "run", run: "a", verb: "Ask", name: "run/x-a" }, c.paths]);
+  // two runs in one checkout (FR-073): the other run by its name, and no queue to rebase onto
+  const s: Collision = { ...c, name: 'chat "peer sync"', with: { kind: "run", run: "b", verb: "ask", name: 'ask "slow build"', shared: true }, paths: ["a.ts"] };
+  expect(collisionLine(s)).toBe('also being edited in this checkout by ask "slow build": a.ts');
+  expect(collisionSay(s, "3m")).toBe('canopy: another run in this checkout (ask "slow build", started 3m) has edited these files: <<< a.ts >>>. Read a file again before you change it, and leave the other run\'s changes in place.');
+  expect(collisionNotice(s)).toBe('chat "peer sync" and ask "slow build" both edit a.ts');
+  expect(flipped(s, "chat").with).toEqual({ kind: "run", run: "a", verb: "chat", name: 'chat "peer sync"', shared: true });
   const q: Collision = { ...c, with: { kind: "branch", origin: "q", branch: "run/x-q" }, paths: ["a.ts"] };
   expect(collisionLine(q)).toBe("also in queued branch run/x-q: a.ts");
   expect(collisionNotice(q)).toBe("run/x-a and run/x-q both edit a.ts");

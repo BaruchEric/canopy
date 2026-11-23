@@ -5,12 +5,12 @@ import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { ownRun } from "../flows";
-import { pillLine, pillRuns, pillText } from "../runs";
+import { RUN_DOT, pillLine, pillRuns, pillText } from "../runs";
 import { allRuns, attentionCount, capsFor, homeConn, pickedIds, useStore, waitingCount, wantsSignIn } from "../store";
 import { WAITING_GLYPH, WAITING_PANEL } from "../waiting";
 import { CLI_GLYPH } from "../cli";
 import { NARROW, PHONE, useMedia } from "../media";
-import { effectivePrimary, isRunActive, WS_COLORS, type Run, type RunAction, type Workspace } from "../../../src/core/types";
+import { effectivePrimary, isRunActive, WS_COLORS, type RunAction, type Workspace } from "../../../src/core/types";
 import { isHome } from "../registry";
 import { openManager } from "../routes";
 import { anchorWord } from "../goals";
@@ -87,9 +87,6 @@ const SORT = [
   { value: "user", label: "user", title: "By the git identity each repo commits as" },
   { value: "favorites", label: "★ favorites", title: "Favorites first, then everything else, each newest change first" },
 ] as const;
-
-/** a run's dot in the pill's menu, in the tones its chip has on a card */
-const RUN_DOT: Partial<Record<Run["status"], string>> = { waiting: "dot lichen", idle: "dot moss" };
 
 /** Live runs across the grove. Absent when nothing is going. One run opens
  *  at a click. Several open a menu with a row each, the ones that need an

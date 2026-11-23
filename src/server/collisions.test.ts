@@ -110,6 +110,25 @@ describe("two live runs", () => {
 
 describe("chats", () => {
   const chat = (id: string, steps: RunStep[], status: Run["status"], over: Partial<Run> = {}) => run(id, steps, { chat: true, verb: "chat", branch: undefined, status, ...over });
+  test("two runs in one checkout are told by name, and a name that arrives late is used (FR-073)", async () => {
+    const { w, hub, see } = world();
+    see(chat("c", [], "idle", { name: "peer sync" }));
+    see(run("j", [], { verb: "ask", branch: undefined }));
+    // the job's name arrives after its start, before its first edit
+    see(run("j", [edit("1", "x.ts")], { verb: "ask", branch: undefined, name: "slow build" }));
+    expect(hub.list()).toEqual([]);
+    see(chat("c", [edit("1", "x.ts")], "idle", { name: "peer sync" }));
+    await Bun.sleep(0);
+    expect(hub.list()[0]?.with).toEqual({ kind: "run", run: "j", verb: "ask", name: 'ask "slow build"', shared: true });
+    expect(w.notes).toEqual([
+      ["c", 'also being edited in this checkout by ask "slow build": x.ts'],
+      ["j", 'also being edited in this checkout by chat "peer sync": x.ts'],
+    ]);
+    expect(w.says).toEqual([["c", 'canopy: another run in this checkout (ask "slow build", started 1m) has edited these files: <<< x.ts >>>. Read a file again before you change it, and leave the other run\'s changes in place.']]);
+    // a branch run beside a checkout chat keeps the queue's words
+    see(run("b", [edit("1", "x.ts")]));
+    expect(w.notes.at(-1)?.[1].startsWith("also being edited by ")).toBe(true);
+  });
   test("an idle chat hears it once, a working one at its next idle while the pair stands, and a refused say stays pending", async () => {
     const { w, see } = world();
     see(chat("c", [edit("1", "x.ts")], "idle"));

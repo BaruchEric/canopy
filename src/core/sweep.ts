@@ -223,15 +223,15 @@ export function planSweep(inputs: PlanInputs, s: SweepSettings, now: number): Sw
   for (const r of inputs.runs) {
     if (r.chat && r.status === "idle") {
       const since = r.steps.at(-1)?.at ?? r.startedAt;
-      add("chat", r.id, r.repoId, r.repoId, r.verb, since, (i) => `chat quiet for ${ago(i)}`, r.harness === "claude" && !!r.session);
+      add("chat", r.id, r.repoId, r.repoId, r.name ?? r.verb, since, (i) => `chat quiet for ${ago(i)}`, r.harness === "claude" && !!r.session);
     } else if (ENDED.has(r.status) && r.endedAt !== undefined && !inputs.heldRuns.has(r.id)) {
-      add("run", r.id, r.repoId, r.repoId, r.verb, r.endedAt, (i) => `finished ${ago(i)} ago`, true);
+      add("run", r.id, r.repoId, r.repoId, r.name ? `${r.verb}: ${r.name}` : r.verb, r.endedAt, (i) => `finished ${ago(i)} ago`, true);
     }
   }
 
   for (const k of inputs.kept ?? []) {
     if (inputs.heldRuns.has(k.id) || (k.origin && (inputs.heldRuns.has(k.origin) || inputs.livePrs?.has(k.origin)))) continue;
-    add("transcript", k.id, k.repo, k.repo, k.verb, k.ended, (i) => `kept ${ago(i)}`, true);
+    add("transcript", k.id, k.repo, k.repo, k.name ? `${k.verb}: ${k.name}` : k.verb, k.ended, (i) => `kept ${ago(i)}`, true);
   }
 
   for (const c of inputs.outside) {

@@ -63,7 +63,8 @@ function parseChat(v: unknown): SweptChat | null {
   const { runId, repoId, harness, session, title, sweptAt } = v;
   if (!isStr(runId) || !isStr(repoId) || !isHarness(harness) || !isStr(session) || !isStr(title) || !isTime(sweptAt)) return null;
   const equip = parseEquip(v["equip"]);
-  return { runId, repoId, harness, session, title, sweptAt, ...(equip ? { equip } : {}) };
+  const name = v["name"];
+  return { runId, repoId, harness, session, title, sweptAt, ...(equip ? { equip } : {}), ...(isStr(name) && name ? { name } : {}) };
 }
 
 function parseOutcome(v: unknown): SweepOutcome | null {

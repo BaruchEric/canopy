@@ -30,6 +30,8 @@ export interface RunArgs {
   loadout?: string;
   /** canopy's tools on or off for this start (FR-038); absent, the settings' */
   canopyTools?: boolean;
+  /** the run's name, in place of one cut from its note (FR-073) */
+  name?: string;
   backend?: string;
   on?: string;
 }
@@ -52,6 +54,8 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
   const rawProfiles = take(args, "--profiles");
   const loadoutFlag = args.includes("--loadout");
   const loadout = take(args, "--loadout");
+  const nameFlag = args.includes("--name");
+  const name = take(args, "--name");
   const reviewersFlag = args.includes("--reviewers");
   const rawReviewers = take(args, "--reviewers");
   const autoLand = has(args, "--auto-land");
@@ -67,6 +71,7 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
   if (timesFlag && rawTimes === undefined) return "--times needs a value";
   if (profilesFlag && rawProfiles === undefined) return "--profiles needs a list of names";
   if (loadoutFlag && loadout === undefined) return "--loadout needs a name";
+  if (nameFlag && !name?.trim()) return "--name needs the run's name";
   if (reviewersFlag && rawReviewers !== "1" && rawReviewers !== "2") return "--reviewers must be 1 or 2";
   const priority = rawPriority === undefined ? undefined : parsePriority(rawPriority);
   if (priorityFlag && (priority === undefined || priority === null)) return "--priority must be interactive, normal or low";
@@ -87,6 +92,8 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
     if (times < 1 || times > 3) return "--times must be 1, 2, or 3";
   }
   if (loadout !== undefined && loadout !== "none" && (times > 1 || profilesFlag)) return "--loadout starts one run; use --profiles for a group";
+  if (name !== undefined && times > 1) return "--name names one run; a group's members share its note";
+  if (name !== undefined && rawAction === "coordinate") return "a coordinator takes no name";
   if (autoLand && times === 1) return "--auto-land requires --times 2 or 3";
   if (profilesFlag && times === 1) return "--profiles requires --times 2 or 3";
   if (reviewersFlag && times === 1) return "--reviewers requires --times 2 or 3";
@@ -107,6 +114,7 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
     ...(priority ? { priority } : {}),
     ...(toolsOn || toolsOff ? { canopyTools: toolsOn } : {}),
     ...(loadout !== undefined ? { loadout } : {}),
+    ...(name !== undefined ? { name: name.trim() } : {}),
     ...(backend !== undefined ? { backend } : {}),
     ...(on !== undefined ? { on } : {}),
   };
@@ -163,7 +171,7 @@ export async function dispatchRunCommand(argv: string[], deps: RunCommandDeps): 
   const args = [...argv];
   const first = firstWord(args);
   if (first === "pickup") return pickupCommand(args, deps);
-  if (first === undefined || first === "show" || first === "export" || first === "fork" || first === "prune" || first === "say" || first === "interrupt") {
+  if (first === undefined || first === "show" || first === "export" || first === "fork" || first === "prune" || first === "say" || first === "interrupt" || first === "ls" || first === "name" || first === "stop") {
     if (deps.transcripts) return deps.transcripts(args, { fail: deps.fail });
     return deps.fail(RUN_USAGE);
   }
@@ -197,7 +205,7 @@ export function runCommand(argv: string[], deps: RunCommandDeps): Promise<void> 
 function firstWord(args: string[]): string | undefined {
   for (let i = 0; i < args.length; i += 1) {
     const value = args[i];
-    if (value === "-m" || value === "--times" || value === "--backend" || value === "--on" || value === "--priority" || value === "--at" || value === "--profile" || value === "--profiles" || value === "--reviewers" || value === "--loadout") {
+    if (value === "-m" || value === "--times" || value === "--backend" || value === "--on" || value === "--priority" || value === "--at" || value === "--profile" || value === "--profiles" || value === "--reviewers" || value === "--loadout" || value === "--name") {
       i += 1;
       continue;
     }
@@ -269,6 +277,7 @@ async function runStartCommand(argv: string[], { fail }: RunCommandDeps): Promis
     ...(parsed.priority ? { priority: parsed.priority } : {}),
     ...(parsed.canopyTools !== undefined ? { canopyTools: parsed.canopyTools } : {}),
     ...(parsed.loadout !== undefined ? { loadout: parsed.loadout } : {}),
+    ...(parsed.name !== undefined ? { name: parsed.name } : {}),
   };
   const result = await ask<Run | RunGroup>(
     target,

@@ -3,18 +3,22 @@
 import { writeFile } from "node:fs/promises";
 import { forkLine } from "../core/handoff";
 import { RUN_ID } from "../core/runlog";
+import { runSubject } from "../core/runname";
 import { ago } from "../core/treelines";
-import type { KeptRunHead, Run, RunReplay, RunStep } from "../core/types";
+import { isRunActive, type KeptRunHead, type Run, type RunReplay, type RunStep } from "../core/types";
 import { apiBase } from "./api";
 import { ask, askText, errText, has, take, Unreachable, type Target } from "./health";
 
 type Fail = (message: string) => never;
 
-export const RUN_USAGE = `usage: canopy run <repo> <action> [-m note] [--times 1|2|3] [--profiles a,b,c] [--reviewers 2] [--auto-land] [--pr] [--priority interactive|normal|low] [--tools|--no-tools] [--loadout NAME] [--backend URL] [--on NAME]
+export const RUN_USAGE = `usage: canopy run <repo> <action> [-m note] [--times 1|2|3] [--profiles a,b,c] [--reviewers 2] [--auto-land] [--pr] [--priority interactive|normal|low] [--tools|--no-tools] [--loadout NAME] [--name "words"] [--backend URL] [--on NAME]
        canopy run [--backend URL]
        canopy run show <id> [--wire] [--backend URL]
        canopy run export <id> [--out file.md] [--backend URL]
        canopy run fork <id> [--at N] [--profile NAME] [-m note] [--backend URL]
+       canopy run ls [--backend URL]
+       canopy run name <id> <words…> [--backend URL]
+       canopy run stop <id> [--backend URL]
        canopy run say <id> <words…> [--backend URL]
        canopy run interrupt <id> [words…] [--backend URL]
        canopy run prune [--backend URL]
@@ -24,7 +28,17 @@ export const RUN_USAGE = `usage: canopy run <repo> <action> [-m note] [--times 1
 export function keptLines(heads: readonly KeptRunHead[], now: number = Date.now()): string[] {
   return [...heads]
     .sort((a, b) => b.ended - a.ended)
-    .map((head) => `${head.id.padEnd(8)}  ${ago(head.ended / 1000, now).padEnd(3)}  ${head.repo.padEnd(24)}  ${head.verb}  ${head.status.padEnd(6)}  ${head.cost === null ? "-" : `$${head.cost.toFixed(2)}`}`);
+    .map((head) => `${head.id.padEnd(8)}  ${ago(head.ended / 1000, now).padEnd(3)}  ${head.repo.padEnd(24)}  ${head.verb}  ${head.status.padEnd(6)}  ${head.cost === null ? "-" : `$${head.cost.toFixed(2)}`}${head.name ? `  ${head.name}` : ""}`);
+}
+
+/** One line per run still going, oldest first: id, how long ago it
+ *  started, repo, state, what it is, and the name it goes by (FR-073).
+ *  `now` is unix milliseconds. */
+export function liveLines(runs: readonly Run[], now: number = Date.now()): string[] {
+  return runs
+    .filter(isRunActive)
+    .sort((a, b) => a.startedAt - b.startedAt)
+    .map((run) => `${run.id.padEnd(8)}  ${ago(run.startedAt / 1000, now).padEnd(3)}  ${run.repoId.padEnd(24)}  ${run.status.padEnd(7)}  ${run.verb}${run.branch ? ` on ${run.branch.name}` : ""}${runSubject(run) ? `  ${runSubject(run)}` : ""}`);
 }
 
 /** The run's export-style head followed by its timeline in UTC. */
@@ -46,6 +60,7 @@ function headLines(run: Run): string[] {
   return [
     `${run.verb} in ${run.repoId} (${run.kept ? "kept" : "live"})`,
     `run: ${run.id}`,
+    ...(run.name ? [`name: ${run.name}`] : []),
     `action: ${run.action}`,
     `agent: ${agentName(run.harness)}, model ${model}`,
     `when: ${new Date(run.startedAt).toISOString()} to ${endLabel}, ${duration}`,
@@ -171,6 +186,27 @@ export async function runTranscriptCommand(argv: string[], { fail }: { fail: Fai
     const run = await ask<Run>(target, "POST", "/api/runs/fork", body).catch(requestFailure(target, fail));
     console.log(`${run.id} ${run.status}`);
     if (run.forkOf) console.log(forkLine(run.forkOf));
+    return;
+  }
+
+  // the runs still going, a name for one, and its end (FR-073)
+  if (sub === "ls") {
+    if (args.length > 0 || outFlag) return fail(RUN_USAGE);
+    const lines = liveLines(await ask<Run[]>(target, "GET", "/api/runs").catch(requestFailure(target, fail)));
+    if (lines.length === 0) return console.log("no runs going");
+    for (const line of lines) console.log(line);
+    return;
+  }
+
+  if (sub === "name" || sub === "stop") {
+    const id = args.shift();
+    if (!id || outFlag) return fail(RUN_USAGE);
+    if (!RUN_ID.test(id)) return fail(`invalid run id: ${id}`);
+    const name = args.join(" ").trim();
+    if (sub === "name" && !name) return fail("canopy run name needs the name to give it");
+    if (sub === "stop" && name) return fail(RUN_USAGE);
+    const run = await ask<Run>(target, "POST", sub === "name" ? "/api/runs/name" : "/api/runs/stop", sub === "name" ? { id, name } : { id }).catch(requestFailure(target, fail));
+    console.log(sub === "name" ? `${run.id} ${run.name ?? ""}`.trim() : `${run.id} ${run.status}`);
     return;
   }
 

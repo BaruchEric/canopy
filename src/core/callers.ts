@@ -128,7 +128,7 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["repos/movecheck"], right: "read" },
   // stopping a turn ends what the agent was doing, as a stop does, so a
   // run's token, which holds plan alone, never interrupts another run
-  { methods: POST, paths: ["runs/answer", "runs/stop", "runs/fork", "runs/interrupt"], right: "operate" },
+  { methods: POST, paths: ["runs/answer", "runs/stop", "runs/fork", "runs/interrupt", "runs/name"], right: "operate" },
   // a coordinator's token holds plan alone: it proposes cards, and editing
   // them, starting them or holding the goal is the user's
   { methods: POST, paths: ["coordinator/plan"], right: "plan" },

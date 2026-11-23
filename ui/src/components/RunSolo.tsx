@@ -7,6 +7,7 @@ import { setTitleBase } from "../title";
 import { Console } from "./RunSheet";
 import { Wordmark } from "./TopBar";
 import { runRepoName } from "../goals";
+import { runPanelLabel } from "../runs";
 
 /**
  * One chat in a window of its own (`?view=run&run=<id>`): the dock's run
@@ -21,7 +22,7 @@ export function RunSolo({ id, popped }: { id: string; popped: boolean }) {
   const run = useStore((s) => s.runs[id]);
   const repo = useStore((s) => (run ? s.repos.find((r) => r.id === run.repoId) : undefined));
   const repoName = useStore((s) => (run ? runRepoName(s.repos, run.repoId) : ""));
-  const name = run ? `${run.verb} · ${repoName}` : null;
+  const name = run ? runPanelLabel(run, repoName) : null;
 
   useEffect(() => {
     setTitleBase(name ? `${name} · canopy` : "chat · canopy");
@@ -64,7 +65,7 @@ export function RunSolo({ id, popped }: { id: string; popped: boolean }) {
       <div className="run-solo-main">
         {run ? (
           <div className="sheet run-tab">
-            <Console run={run} repo={repo} onClose={popped ? closePopped : close} />
+            <Console run={run} repo={repo} onClose={popped ? closePopped : close} solo />
           </div>
         ) : (
           <p className="empty">
