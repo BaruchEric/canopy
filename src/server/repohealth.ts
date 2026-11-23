@@ -10,17 +10,19 @@
  * - A check canopy will not run here stays listed as off, saying why.
  * - A repo on another host has its file read over ssh at most every five
  *   minutes; a forge-only repo has canopy's layer alone.
+ * - A run that stops working on a repo has that repo's down checks probed
+ *   again at once (`onRun`), whatever their `every`.
  */
 
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { checkEnv } from "../core/cli";
 import { exec, onHost, type ExecResult } from "../core/exec";
-import { fail, pass, type ProbeResult } from "../core/health";
+import { fail, isBad, pass, type ProbeResult } from "../core/health";
 import { parseLocator } from "../core/host";
 import { CHECK_EVERY, HEALTH_FILE, healOf, mergeChecks, normalizeCheck, parseHealthFile, repoCheckId, type CheckContext } from "../core/repohealth";
 import { healthFor, removeHealthCheck, setHealthCheck } from "../core/store";
-import type { CanopyConfig, MergedCheck, Repo, RepoCheckDef, RepoHealthInfo, TaskInfo } from "../core/types";
+import type { CanopyConfig, MergedCheck, Repo, RepoCheckDef, RepoHealthInfo, Run as AgentRun, RunStatus, TaskInfo } from "../core/types";
 import type { CheckDef, HealthHub } from "./health";
 
 const HTTP_TIMEOUT = 5_000;
@@ -211,6 +213,9 @@ export function healFor(c: RepoCheckDef, repo: Repo, deps: ProbeDeps): (() => Pr
   return undefined;
 }
 
+/** a run in the middle of a turn */
+const working = (s: RunStatus | undefined): boolean => s === "working" || s === "waiting";
+
 const probeTimeout = (c: RepoCheckDef): number =>
   c.kind === "command" ? COMMAND_TIMEOUT + 3_000 : c.kind === "compose" ? COMPOSE_TIMEOUT + 3_000 : 8_000;
 
@@ -243,6 +248,8 @@ export class RepoHealth {
   private again = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
+  /** the status each live run last had, so the end of a turn is seen once */
+  private runStatus = new Map<string, RunStatus>();
 
   constructor(private readonly deps: RepoHealthDeps) {
     if (deps.every) this.timer = setInterval(() => void this.sync().catch(() => {}), deps.every);
@@ -266,6 +273,25 @@ export class RepoHealth {
       } while (this.again && !this.stopped);
     })().finally(() => (this.syncing = null));
     return this.syncing;
+  }
+
+  /**
+   * A run changed. When one stops working on a repo (a chat answered, a run
+   * ended any way), that repo's checks that are down or gave up are probed
+   * again now. The agent may have fixed what they look at, which is what
+   * "fix with the agent" on a check's row asks for, and a check with a long
+   * `every` would say down for hours more. A run first seen at rest (a chat
+   * found idle after a restart) ended no turn.
+   */
+  onRun(run: Pick<AgentRun, "id" | "repoId" | "status">): void {
+    const was = this.runStatus.get(run.id);
+    if (working(run.status) || run.status === "idle") this.runStatus.set(run.id, run.status);
+    else this.runStatus.delete(run.id);
+    if (!working(was) || working(run.status) || this.stopped) return;
+    const { hub } = this.deps;
+    for (const c of hub.list()) {
+      if (c.scope.kind === "repo" && c.scope.repoId === run.repoId && isBad(c)) void hub.probeNow(c.id);
+    }
   }
 
   private async fileOf(repo: Repo): Promise<string | null> {

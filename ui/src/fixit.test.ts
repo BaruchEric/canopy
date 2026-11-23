@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AUTO_FIX_MS, fixedNote, fixMove, fixPrompt, freshFailure, lastRun, moveDone, repairConfirmed, repairStatusSnapshot, repairTurnIdentity, taskFixPrompt, type RepairRun, type RepairStatus } from "./fixit";
+import { AUTO_FIX_MS, fixedNote, fixMove, fixPrompt, freshFailure, healthFixPrompt, lastRun, moveDone, repairConfirmed, repairStatusSnapshot, repairTurnIdentity, taskFixPrompt, type RepairRun, type RepairStatus } from "./fixit";
 import type { RepoFile } from "../../src/core/types";
 
 describe("fixMove", () => {
@@ -80,6 +80,51 @@ describe("taskFixPrompt", () => {
     expect(p).toContain("line 99");
     expect(p).toContain("line 40");
     expect(p).not.toContain("line 39\n");
+  });
+});
+
+describe("healthFixPrompt", () => {
+  const down = { label: "archify", state: "down" as const, why: "Archify 3.3.0 is out and canopy has 3.2.0", detail: "exit 1", fails: 0 };
+
+  test("a command check: what it runs, what it said, and the command to pass again", () => {
+    const p = healthFixPrompt(down, { name: "archify", kind: "command", run: "bun scripts/archify-update.ts --check" });
+    expect(p.startsWith("The archify health check canopy keeps for this repo is down. It runs bun scripts/archify-update.ts --check in the repo and passes when that exits 0.")).toBe(true);
+    expect(p).toContain("\n\nArchify 3.3.0 is out and canopy has 3.2.0\nexit 1\n\n");
+    expect(p).toContain("then run bun scripts/archify-update.ts --check again until it passes.");
+    expect(p).toContain("do not commit or push.");
+  });
+
+  test("the other kinds say what they pass on", () => {
+    const of = (def: Parameters<typeof healthFixPrompt>[1]) => healthFixPrompt(down, def);
+    expect(of({ name: "a", kind: "http", url: "http://127.0.0.1:5173/" })).toContain("It asks http://127.0.0.1:5173/ and passes on a 2xx or 3xx.");
+    expect(of({ name: "a", kind: "http", url: "http://127.0.0.1:5173/", expect: 204 })).toContain("passes on a 204.");
+    expect(of({ name: "a", kind: "port", port: 5432 })).toContain("It passes when 127.0.0.1:5432 takes a connection.");
+    expect(of({ name: "a", kind: "task", task: "dev" })).toContain("It passes while the repo's dev task runs.");
+    expect(of({ name: "a", kind: "compose", service: "db", file: "infra.yml" })).toContain("the compose service db (docker compose -f infra.yml) runs");
+    expect(of({ name: "a", kind: "port", port: 5432, while: "dev" })).toContain("canopy looks only while the dev task runs.");
+    expect(of({ name: "a", kind: "port", port: 5432 })).toContain("then check that it passes again.");
+  });
+
+  test("a check with no definition at hand still says what it said", () => {
+    const p = healthFixPrompt({ ...down, why: null, detail: undefined });
+    expect(p.startsWith("The archify health check canopy keeps for this repo is down. What it last said:")).toBe(true);
+    expect(p).toContain("(it said nothing)");
+  });
+
+  test("a give-up and the fix that did not hold are said", () => {
+    const p = healthFixPrompt({ ...down, state: "gave-up", fails: 5 }, { name: "archify", kind: "port", port: 1, fix: "docker compose up -d" });
+    expect(p).toContain("is down, and canopy gave up healing it.");
+    expect(p).toContain("canopy's own fix for it is docker compose up -d, which ran 5 times without bringing it back.");
+    expect(healthFixPrompt(down, { name: "a", kind: "port", port: 1, fix: "make up" })).toContain("canopy's own fix for it is make up.");
+  });
+
+  test("a task check quotes the end of the task's last run", () => {
+    const p = healthFixPrompt(down, { name: "dev", kind: "task", task: "dev" }, Array.from({ length: 100 }, (_, i) => `line ${i}`));
+    expect(p).toContain("The end of the dev task's last run:");
+    expect(p).toContain("line 99");
+    expect(p).toContain("line 40");
+    expect(p).not.toContain("line 39\n");
+    expect(healthFixPrompt(down, { name: "a", kind: "port", port: 1 }, ["noise"])).not.toContain("noise");
   });
 });
 

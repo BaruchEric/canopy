@@ -195,4 +195,78 @@ describe("RepoHealth", () => {
     expect(restarts).toEqual(["dev"]);
     expect(hub.get("repo:app:dev")?.state).toBe("ok");
   });
+
+  /** one command check with a long `every`, whose command the test answers */
+  function smoke(repos: Repo[] = [repo()]) {
+    const seen = { code: 1, probes: 0 };
+    const hub = new HealthHub({ broadcast: () => {}, debounce: 5 });
+    const rh = new RepoHealth({
+      ...noTasks,
+      hub,
+      repos: () => repos,
+      own: async () => true,
+      seed: () => false,
+      config: async () => ({ health: { "/tmp/app": [{ name: "smoke", kind: "command", run: "x", every: 3600, heal: "none" }] } }),
+      readFile: async () => null,
+      run: async () => {
+        seen.probes++;
+        return seen.code === 0 ? ran(0, "fine\n") : ran(seen.code, "", "stale\n");
+      },
+    });
+    cleanups.push(() => {
+      rh.stop();
+      hub.stop();
+    });
+    const settle = async (state: string) => {
+      for (let i = 0; i < 50 && hub.get("repo:app:smoke")?.state !== state; i++) await sleep(10);
+    };
+    return { hub, rh, seen, settle };
+  }
+
+  test("a run that stops working on a repo probes its down checks again", async () => {
+    const { hub, rh, seen, settle } = smoke();
+    await rh.sync();
+    await settle("down");
+    expect(seen.probes).toBe(1);
+    // the agent fixed it; the check's own timer is an hour away
+    seen.code = 0;
+    rh.onRun({ id: "r1", repoId: "app", status: "working" });
+    rh.onRun({ id: "r1", repoId: "app", status: "waiting" });
+    rh.onRun({ id: "r1", repoId: "app", status: "working" });
+    await sleep(30);
+    expect(seen.probes).toBe(1);
+    rh.onRun({ id: "r1", repoId: "app", status: "idle" });
+    await settle("ok");
+    expect(hub.get("repo:app:smoke")).toMatchObject({ state: "ok", detail: "fine" });
+    expect(seen.probes).toBe(2);
+  });
+
+  test("a well check, a run seen only at rest and another repo's run probe nothing", async () => {
+    const { rh, seen, settle } = smoke();
+    await rh.sync();
+    await settle("down");
+    // a chat found idle after a restart, and the same word twice
+    rh.onRun({ id: "r1", repoId: "app", status: "idle" });
+    rh.onRun({ id: "r1", repoId: "app", status: "idle" });
+    // work on another repo
+    rh.onRun({ id: "r2", repoId: "other", status: "working" });
+    rh.onRun({ id: "r2", repoId: "other", status: "done" });
+    await sleep(30);
+    expect(seen.probes).toBe(1);
+    // a run that failed or was stopped may have changed things too
+    rh.onRun({ id: "r3", repoId: "app", status: "working" });
+    rh.onRun({ id: "r3", repoId: "app", status: "failed" });
+    await sleep(30);
+    expect(seen.probes).toBe(2);
+    seen.code = 0;
+    rh.onRun({ id: "r4", repoId: "app", status: "working" });
+    rh.onRun({ id: "r4", repoId: "app", status: "done" });
+    await settle("ok");
+    expect(seen.probes).toBe(3);
+    // well now: the next run's end leaves it to its timer
+    rh.onRun({ id: "r5", repoId: "app", status: "working" });
+    rh.onRun({ id: "r5", repoId: "app", status: "done" });
+    await sleep(30);
+    expect(seen.probes).toBe(3);
+  });
 });

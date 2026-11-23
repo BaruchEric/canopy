@@ -18,7 +18,8 @@ import { activeRunFor, useStore } from "../store";
 
 /** what failed: a move, git's answer and when it came (the mount, unless
  *  the caller kept it), or a prompt read when pressed (a failed task's,
- *  whose log is fetched then) */
+ *  whose log is fetched then, or a down health check's, whose definition
+ *  is) */
 type What = { move: FixMove; text: string; at?: number } | { ask: () => Promise<string> };
 type RepairAttempt = { runId: string; before: RepairStatus | null; previousTurn: string | null };
 
@@ -30,7 +31,8 @@ const handed = new Set<string>();
  *  the repo by itself, told what was pressed and what came back
  *  (`fixPrompt`). A failed task waits for "fix with the agent" (`short`
  *  words it "fix", for a task row with little room), since a task fails
- *  without anyone pressing anything (`taskFixPrompt`). An idle chat there
+ *  without anyone pressing anything (`taskFixPrompt`), and so does a repo's
+ *  health check that is down or gave up (`healthFixPrompt`). An idle chat there
  *  takes it as its next turn; a run still busy refuses, and the refusal
  *  shows beside the button. Once handed over, the note follows the run
  *  (`FIX_WATCH`) with a way back to the chat, and offers the button again

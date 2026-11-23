@@ -4,6 +4,7 @@ import { checkTarget, normalizeCheck } from "../../../src/core/repohealth";
 import type { HealthCheck, Repo, RepoCheckKind, RepoHealMode, RepoHealthInfo } from "../../../src/core/types";
 import { api } from "../api";
 import { openView } from "../clirun";
+import { healthFixPrompt, lastRun } from "../fixit";
 import { HEALTH_PANEL, STATE_TONE, STATE_WORD, groupRows, healthRows, healthSummary, repoChecks, repoWord, type HealthGroup, type HealthRow } from "../health";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
@@ -11,6 +12,7 @@ import { POPUP_WORD } from "../sectiontabs";
 import { useStore } from "../store";
 import { escapeCloses, keepKeys } from "../surface";
 import { ago } from "../util";
+import { AgentFix } from "./AgentFix";
 import { Section, useSectionClosed } from "./Surface";
 
 /** every shown backend's rows, recomputed only when one of their inputs moves */
@@ -60,6 +62,19 @@ function HealButton({ backend, check }: { backend: string; check: HealthCheck })
   );
 }
 
+/** What "fix with the agent" says of a repo's check, read when pressed: the
+ *  check's definition, and for a task check the end of the task's last run.
+ *  Either read may fail (a backend that went away, a task with no log yet)
+ *  and the prompt goes without it. */
+async function fixAsk(repoId: string, check: HealthCheck): Promise<string> {
+  const def = await api.repoHealth(repoId).then(
+    (info) => info.checks.find((c) => c.name === check.label),
+    () => undefined,
+  );
+  const log = def?.kind === "task" ? await api.taskLog(repoId, def.task).then((page) => lastRun(page.lines), () => []) : [];
+  return healthFixPrompt(check, def, log);
+}
+
 function HealthItem({ row, open }: { row: HealthRow; open: boolean }) {
   const { check } = row;
   const [shown, setShown] = useState(open);
@@ -68,6 +83,10 @@ function HealthItem({ row, open }: { row: HealthRow; open: boolean }) {
   // the count stays until the check has held for a while; on a well row it reads as trouble
   const fails = check.state === "ok" ? 0 : check.fails;
   const healIn = check.state === "healing" && check.nextHeal !== null ? Math.max(0, Math.round((check.nextHeal - Date.now()) / 1000)) : null;
+  const heals = check.button && (check.state === "down" || check.state === "gave-up" || check.state === "healing");
+  // a repo's check that stays broken can go to the repo's agent; while
+  // canopy is still healing it, the heal has the turn
+  const fixIn = check.scope.kind === "repo" && (check.state === "down" || check.state === "gave-up") ? check.scope.repoId : null;
   return (
     <li className={`health-row ${check.state}`}>
       <span className="health-main">
@@ -81,7 +100,12 @@ function HealthItem({ row, open }: { row: HealthRow; open: boolean }) {
             {ago(check.since / 1000)}
           </span>
         )}
-        {check.button && (check.state === "down" || check.state === "gave-up" || check.state === "healing") && <HealButton backend={row.backend} check={check} />}
+        {(heals || fixIn !== null) && (
+          <span className="health-acts">
+            {heals && <HealButton backend={row.backend} check={check} />}
+            {fixIn !== null && <AgentFix repoId={fixIn} ask={() => fixAsk(fixIn, check)} />}
+          </span>
+        )}
       </span>
       {check.why && <span className="health-why">{check.why}</span>}
       {(check.detail || healIn !== null || fails > 0) && (

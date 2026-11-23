@@ -1,4 +1,4 @@
-import type { RepoStatus, Run, RunStatus, TaskInfo, TaskLogLine } from "../../src/core/types";
+import type { HealthCheck, RepoCheckDef, RepoStatus, Run, RunStatus, TaskInfo, TaskLogLine } from "../../src/core/types";
 
 /** The moves an agent can carry through when one fails, each with the
  *  words for it in the prompt. Moves left out are not an agent's to fix:
@@ -138,4 +138,47 @@ export function taskFixPrompt(task: Pick<TaskInfo, "name" | "cmd" | "exitCode">,
     `Find the cause and fix it, then run ${task.cmd} again until it passes. The output above is only its end, so run the failing part again to see all of it.`,
     "Keep my changes, and do not commit or push.",
   ].join("\n");
+}
+
+/** what a check passes on, in a sentence */
+function passesOn(def: RepoCheckDef): string {
+  switch (def.kind) {
+    case "command":
+      return `It runs ${def.run} in the repo and passes when that exits 0.`;
+    case "http":
+      return `It asks ${def.url} and passes on ${def.expect === undefined ? "a 2xx or 3xx" : `a ${def.expect}`}.`;
+    case "port":
+      return `It passes when ${def.host ?? "127.0.0.1"}:${def.port} takes a connection.`;
+    case "task":
+      return `It passes while the repo's ${def.task} task runs.`;
+    case "compose":
+      return `It passes while the compose service ${def.service}${def.file ? ` (docker compose -f ${def.file})` : ""} runs, healthy where it has a healthcheck.`;
+  }
+}
+
+/** What "fix with the agent" says about a repo's check that is down or
+ *  gave up: what the check passes on (its definition, when the page could
+ *  read it), what it last said, the fix canopy has for it and how often
+ *  that ran without holding, and for a task check the end of the task's
+ *  last run. A command check is proved by its command; committing stays
+ *  the user's call, as with a failed task. */
+export function healthFixPrompt(
+  check: Pick<HealthCheck, "label" | "state" | "why" | "detail" | "fails">,
+  def?: RepoCheckDef,
+  taskOutput: readonly string[] = [],
+): string {
+  const head = [`The ${check.label} health check canopy keeps for this repo is down${check.state === "gave-up" ? ", and canopy gave up healing it" : ""}.`];
+  if (def) head.push(passesOn(def));
+  if (def?.while) head.push(`canopy looks only while the ${def.while} task runs.`);
+  if (def?.fix) head.push(`canopy's own fix for it is ${def.fix}${check.fails > 0 ? `, which ran ${check.fails} ${check.fails === 1 ? "time" : "times"} without bringing it back` : ""}.`);
+  head.push("What it last said:");
+  const said = [check.why, check.detail].filter(Boolean).join("\n");
+  const lines = [head.join(" "), "", said || "(it said nothing)", ""];
+  const tail = def?.kind === "task" ? taskOutput.join("\n").trim().split("\n").slice(-TASK_LINES).join("\n") : "";
+  if (def?.kind === "task" && tail) lines.push(`The end of the ${def.task} task's last run:`, "", tail, "");
+  lines.push(
+    `Find the cause and fix it, then ${def?.kind === "command" ? `run ${def.run} again until it passes` : "check that it passes again"}.`,
+    "Keep my changes, and do not commit or push.",
+  );
+  return lines.join("\n");
 }

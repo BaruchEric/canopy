@@ -15414,7 +15414,14 @@ span.effective-flag:not(:first-child) {
   align-items: baseline;
   gap: 4px 10px;
 }
-.health-main .mini {
+/* a row's moves at its right edge: heal, and fix with the agent with the
+   word on the run it started */
+.health-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 4px 8px;
   margin-left: auto;
 }
 .health-label {

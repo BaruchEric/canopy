@@ -7112,6 +7112,7 @@ export async function startServer(opts: {
       state.triggers.onRun(run);
       state.coordinator.onRun(run);
       state.work.onRun(run);
+      state.repoHealth.onRun(run);
       recountAwake(state);
       // a coordinator's token and folder live exactly as long as its run
       if (run.action === "coordinate" && !isRunActive(run)) {
