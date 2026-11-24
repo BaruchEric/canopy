@@ -137,7 +137,11 @@ function CellDetail({ backend, check, now }: { backend: string; check: HealthChe
         </span>
       </span>
       {check.why && <span className="hp-why">{check.why}</span>}
-      {more.length > 0 && <span className="hp-faint">{more.join(", ")}</span>}
+      {more.map((f) => (
+        <span key={f} className="hp-faint">
+          {f}
+        </span>
+      ))}
       <Acts backend={backend} check={check} />
       <ol className="hp-log">
         {[...check.history].reverse().map((h) => (
