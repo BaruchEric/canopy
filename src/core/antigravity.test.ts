@@ -115,7 +115,7 @@ interface Scenario {
   turns?: Step[][];
 }
 
-async function drive(scenario: Scenario, opts: { chat?: boolean; agent?: Partial<DriveAgent>; resume?: string; graceMs?: number } = {}) {
+async function drive(scenario: Scenario, opts: { chat?: boolean; agent?: Partial<DriveAgent>; resume?: string; graceMs?: number; unattended?: string } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "canopy-agy-"));
   scratch.push(dir);
   const repo = join(dir, "repo");
@@ -144,7 +144,7 @@ async function drive(scenario: Scenario, opts: { chat?: boolean; agent?: Partial
     {
       cwd: repo,
       agent: { ...AGENT, ...opts.agent },
-      spec: { allowedTools: [], maxTurns: 10, ...(opts.resume ? { resume: opts.resume } : {}) },
+      spec: { allowedTools: [], maxTurns: 10, ...(opts.resume ? { resume: opts.resume } : {}), ...(opts.unattended ? { unattended: opts.unattended } : {}) },
       env: { FAKE_AGY_SCENARIO: scenarioPath, FAKE_AGY_LOG: logPath },
       label: "Antigravity",
       wire: () => {},
@@ -239,6 +239,54 @@ describe("an Antigravity run", () => {
     const log = await d.sent();
     expect(replyTo(log, "1")?.result).toEqual({ outcome: { outcome: "selected", optionId: "deny" } });
     expect(replyTo(log, "2")?.result).toEqual({ outcome: { outcome: "cancelled" } });
+    // a deny with no reason has nothing more to tell agy
+    expect(requests(log, "session/prompt")).toHaveLength(1);
+  });
+
+  const promptText = (m: Record<string, unknown> | undefined) => ((m?.["params"] as { prompt?: { text?: string }[] } | undefined)?.prompt?.[0]?.text ?? "");
+  const usage = (total: number) => ({ inputTokens: total - 10, outputTokens: 10, totalTokens: total });
+
+  test("a deny's reason reaches agy as the next message, and the job ends on agy's answer to it", async () => {
+    const d = await drive({ turns: [[permission(), { stop: "end_turn", usage: usage(100) }], [text("fine, just hi"), { stop: "end_turn", usage: usage(50) }]] });
+    await d.until((r) => r.status === "waiting", "the prompt");
+    d.ctx.answer("p1", { kind: "deny", message: "No pushing; just say hi." });
+    const run = await d.until(d.ended, "the end");
+    const prompts = requests(await d.sent(), "session/prompt");
+    expect(prompts).toHaveLength(2);
+    expect(promptText(prompts[1])).toBe("git push was declined: No pushing; just say hi.");
+    expect(run.status).toBe("done");
+    expect(run.result).toMatchObject({ text: "fine, just hi", turns: 2 });
+    expect(run.result?.tokens?.total).toBe(150);
+    expect(run.steps.some((s) => s.kind === "note" && s.text === "told Antigravity why: No pushing; just say hi.")).toBe(true);
+  });
+
+  test("a chat's deny reason goes on before the chat waits for the person", async () => {
+    const d = await drive({ turns: [[permission(), { stop: "end_turn" }], [text("understood"), { stop: "end_turn" }]] }, { chat: true });
+    await d.until((r) => r.status === "waiting", "the prompt");
+    d.ctx.answer("p1", { kind: "deny", message: "not now" });
+    const run = await d.until((r) => r.status === "idle" && r.result?.text === "understood", "the chat's turn");
+    expect(requests(await d.sent(), "session/prompt")).toHaveLength(2);
+    expect(run.result?.turns).toBe(2);
+  });
+
+  test("an unattended run's fixed reason reaches agy once, not after every deny", async () => {
+    const d = await drive(
+      { turns: [[permission(), { stop: "end_turn" }], [permission(), { stop: "end_turn" }], [text("never sent"), { stop: "end_turn" }]] },
+      { unattended: "No one answers this run." },
+    );
+    const run = await d.until(d.ended, "the end");
+    const prompts = requests(await d.sent(), "session/prompt");
+    expect(prompts).toHaveLength(2);
+    expect(promptText(prompts[1])).toBe("git push was declined: No one answers this run.");
+    expect(run.status).toBe("done");
+  });
+
+  test("a stop while a prompt waits sends no reason", async () => {
+    const d = await drive({ turns: [[permission(), { stop: "end_turn" }], [text("never sent"), { stop: "end_turn" }]] });
+    await d.until((r) => r.status === "waiting", "the prompt");
+    d.driver.stop();
+    await d.until(d.ended, "the end");
+    expect(requests(await d.sent(), "session/prompt")).toHaveLength(1);
   });
 
   test("an interrupt sends session/cancel and the job ends interrupted", async () => {

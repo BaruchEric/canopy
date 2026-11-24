@@ -197,6 +197,14 @@ export class AntigravityDriver implements RunDriver {
   private completedTools = new Set<string>();
   private toolCalls = 0;
   private capped: string | null = null;
+  /** this turn's denials that came with a reason. ACP's permission reply
+   *  carries allow or reject and no words, so agy hears the reasons as the
+   *  next message once the turn ends, as Claude Code and Codex hear them
+   *  inside the turn. */
+  private reasons: { what: string; why: string }[] = [];
+  /** reason messages sent since the last message from outside: an
+   *  unattended run's fixed reason goes once, never after every deny */
+  private followUps = 0;
 
   constructor(private opts: AntigravityOptions = {}) {}
 
@@ -218,6 +226,7 @@ export class AntigravityDriver implements RunDriver {
 
   say(text: string): void {
     if (!this.ctx || this.closed || this.session === null || this.turning) return;
+    this.followUps = 0;
     void this.send(text, false);
   }
 
@@ -402,12 +411,16 @@ export class AntigravityDriver implements RunDriver {
     if (required) throw new Error(`Antigravity did not advertise a thinking-level option for ${JSON.stringify(requested)}`);
   }
 
-  private async send(text: string, first: boolean): Promise<void> {
+  private async send(text: string, first: boolean, followUp = false): Promise<void> {
     const rpc = this.rpc;
     const ctx = this.ctx;
     const session = this.session;
     if (!rpc || !ctx || rpc.closed || session === null || this.closed) return;
+    // a reason's turn carries on the message's: its time counts from there
+    const at = this.fold.turnAt;
     acpTurn(this.fold, Date.now());
+    if (followUp) this.fold.turnAt = at;
+    this.reasons = [];
     this.completedTools.clear();
     this.toolCalls = 0;
     this.capped = null;
@@ -425,6 +438,12 @@ export class AntigravityDriver implements RunDriver {
       const problem = this.capped ?? (this.cut ? (ctx.chat ? null : "interrupted") : null);
       const done = acpResult(this.fold, response, problem, Date.now());
       this.cut = false;
+      const reasons = done.problem ? null : this.followUp();
+      if (reasons) {
+        // the turn's tokens are counted above; its result is not the run's
+        ctx.note(`told Antigravity why: ${reasons.why}`);
+        return await this.send(reasons.text, false, true);
+      }
       ctx.result(done.result, done.problem);
       if (!ctx.chat) this.close();
     } catch (err) {
@@ -456,6 +475,16 @@ export class AntigravityDriver implements RunDriver {
         ctx.result({ text: "", durationMs: 0, turns: this.fold.turns }, problem);
       }
     }
+  }
+
+  /** The message that tells agy why this turn's denials were made, or null
+   *  when none came with a reason or an unattended run already said it. */
+  private followUp(): { text: string; why: string } | null {
+    const reasons = this.reasons;
+    this.reasons = [];
+    if (!reasons.length || (this.ctx?.spec.unattended && this.followUps > 0)) return null;
+    this.followUps += 1;
+    return { text: reasons.map((r) => `${r.what} was declined: ${r.why}`).join("\n"), why: reasons.map((r) => r.why).join("; ") };
   }
 
   private cancel(): void {
@@ -500,8 +529,11 @@ export class AntigravityDriver implements RunDriver {
       // through RunCtx even when the harness is otherwise in yolo mode.
       const answer = ctx.agent.yolo && !ctx.spec.unattended ? { kind: "allow" as const } : await ctx.ask(shown, key, promptFacts(shown));
       if (this.replied.has(key) || rpc.closed) return;
-      rpc.reply(request.id, choosePermission(params, answer, this.stopping || this.cut));
+      const cancelled = this.stopping || this.cut;
+      rpc.reply(request.id, choosePermission(params, answer, cancelled));
       this.replied.add(key);
+      const why = answer.kind === "deny" ? answer.message?.trim() : undefined;
+      if (why && !cancelled) this.reasons.push({ what: shown.kind === "permission" ? shown.title : "the request", why });
     } finally {
       this.pending.delete(key);
       this.replied.delete(key);

@@ -65,9 +65,11 @@ prompt, and the prompt appears in the run like Claude Code's and Codex's:
 allow, deny or allow all. A command's prompt shows the command, and any other
 action's shows its input. Canopy answers agy "allow once" every time, even for
 allow all, and keeps the allow-all scope itself, so it ends with the run and
-never lands in agy's own settings. A deny's reason stays in canopy: ACP's
-reply to agy says allow or reject and nothing more, so agy hears only the
-refusal, and a job usually ends its turn there. Yolo passes
+never lands in agy's own settings. ACP's reply to agy says allow or reject
+and nothing more, so a deny's reason waits until agy's turn ends and then
+goes to it as the next message, which the run shows as "told Antigravity
+why". The run carries on with agy's answer to it. An unattended run's fixed
+reason goes once, not after every deny. Yolo passes
 `--dangerously-skip-permissions`, and agy asks nothing.
 
 The extra-flags box applies to shells only. A run with extra flags is refused
