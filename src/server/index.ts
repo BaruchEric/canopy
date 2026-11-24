@@ -6837,6 +6837,9 @@ async function handleApi(
       if (typeof times !== "number" || !Number.isInteger(times) || times < 1 || times > GROUP_MAX) return json({ error: `times must be 1 to ${GROUP_MAX}` }, 400);
       if (b.autoLand !== undefined && typeof b.autoLand !== "boolean") return json({ error: "autoLand must be true or false" }, 400);
       const rawProfiles = b.profiles;
+      // a single run would start on the repo's route and drop the pick, so
+      // it is refused, as the CLI's --profiles is without --times 2 or 3
+      if (rawProfiles !== undefined && times === 1) return json({ error: "profiles pick a group's members; a single run takes a loadout" }, 400);
       if (rawProfiles !== undefined && (!Array.isArray(rawProfiles) || rawProfiles.length > times || !rawProfiles.every((p) => p === null || isProfileName(p)))) return json({ error: `profiles must list at most ${times} valid names, null for the repo's job route` }, 400);
       const profiles = Array.isArray(rawProfiles) ? rawProfiles.map((p) => (isProfileName(p) ? p : null)) : undefined;
       if (b.reviewers !== undefined && b.reviewers !== 1 && b.reviewers !== 2) return json({ error: "reviewers must be 1 or 2" }, 400);

@@ -434,6 +434,7 @@ test("validation refuses malformed times, non-branch groups, too many profiles a
     { reviewers: "2" },
     { reviewers: 2, times: 1 },
     { reviewers: 2, branch: undefined },
+    { profiles: ["default"], times: 1 },
   ]) {
     const response = await w.start(over);
     expect(response.status).toBe(400);
