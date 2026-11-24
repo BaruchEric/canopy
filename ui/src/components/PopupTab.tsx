@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { itemMark } from "../ctxmenu";
 import type { PopupName } from "../sectiontabs";
 import { useStore } from "../store";
 import { ChanPopBody } from "./Chan";
@@ -18,11 +19,12 @@ import { WaitingBody } from "./Waiting";
  * what it shows. A tab passes no `onDone`: a move that would close the
  * popover leaves the tab where it is. The wrapper fills the pane and
  * scrolls inside it, and `data-popup` lets the stylesheet give a body the
- * padding its popover gave it.
+ * padding its popover gave it. `data-item` says what it is to a right-click
+ * (FR-084).
  */
 export function PopupTabView({ name }: { name: PopupName }) {
   return (
-    <div className="popup-tab" data-popup={name}>
+    <div className="popup-tab" data-popup={name} data-item={itemMark({ kind: "popup", ref: name })}>
       <PopupBody name={name} />
     </div>
   );

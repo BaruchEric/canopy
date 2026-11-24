@@ -9,6 +9,7 @@
  * first, each described as plain data (`CtxNode`), so this file never
  * touches the DOM and the tests need none.
  */
+import { ITEM_KINDS, type ItemKind } from "./sectiontabs";
 
 export interface Point {
   x: number;
@@ -251,7 +252,25 @@ export type CtxSubject =
   /** a section of a repo panel, by key; `repo` from the panel around it */
   | { kind: "section"; key: string; repo: string | null }
   /** an agent's card on the board */
-  | { kind: "agent"; id: string };
+  | { kind: "agent"; id: string }
+  /** a dock panel that is no repo's (`.panel[data-panel]`): a chat's, an
+   *  agent's, a popup's or the command line's, `head` over its head */
+  | { kind: "dock"; id: string; head: boolean }
+  /** a chat, an agent's screen or a popup showing outside the dock
+   *  (`[data-item]`): in a popover, on a sheet, or as a tab beside shells */
+  | { kind: "item"; item: ItemKind; ref: string };
+
+/** `data-item`'s value read back: `<kind>:<ref>`, the kind one an item has */
+export function itemOf(v: string | undefined): { item: ItemKind; ref: string } | null {
+  if (!v) return null;
+  const c = v.indexOf(":");
+  const item = ITEM_KINDS.find((k) => k === v.slice(0, c));
+  const ref = v.slice(c + 1);
+  return c > 0 && item && ref ? { item, ref } : null;
+}
+
+/** what marks an item for a right-click: `data-item`'s value */
+export const itemMark = (t: { kind: ItemKind; ref: string }): string => `${t.kind}:${t.ref}`;
 
 /** Every subject on the way up, innermost first, each kind once. */
 export function ctxSubjects(chain: readonly CtxNode[]): CtxSubject[] {
@@ -285,6 +304,11 @@ export function ctxSubjects(chain: readonly CtxNode[]): CtxSubject[] {
     }
     const repo = n.attrs["data-repo"];
     if (repo !== undefined && n.cls.includes("panel")) put({ kind: "panel", id: repo, head });
+    const dock = n.attrs["data-panel"];
+    if (dock && n.cls.includes("panel")) put({ kind: "dock", id: dock, head });
+    // an item inside a dock panel is that panel's, which speaks for it
+    const item = itemOf(n.attrs["data-item"]);
+    if (item && !chain.slice(i + 1).some((m) => m.attrs["data-panel"] !== undefined)) put({ kind: "item", ...item });
     const card = n.attrs["data-card"];
     if (card) put({ kind: "agent", id: card });
   });

@@ -912,18 +912,14 @@ describe("end goal's second press", () => {
 
 describe("the address on a change of view", () => {
   test("the top view's goal and new goal box go with it, and so does project", () => {
-    expect(viewAddress("https://c.test/?view=manager&new=1", "git", false)).toBe("https://c.test/");
-    expect(viewAddress("https://c.test/?view=manager&new=1&kind=project&sprout=sp_0123456789ab", "agents", false)).toBe("https://c.test/?view=agents");
-    expect(viewAddress("https://c.test/?view=manager&run=k", "agents", false)).toBe("https://c.test/?view=agents");
-    expect(viewAddress("https://c.test/?view=library&project=x", "manager", false)).toBe("https://c.test/?view=manager");
+    expect(viewAddress("https://c.test/?view=manager&new=1", "git")).toBe("https://c.test/");
+    expect(viewAddress("https://c.test/?view=manager&new=1&kind=project&sprout=sp_0123456789ab", "agents")).toBe("https://c.test/?view=agents");
+    expect(viewAddress("https://c.test/?view=manager&run=k", "agents")).toBe("https://c.test/?view=agents");
+    expect(viewAddress("https://c.test/?view=library&project=x", "manager")).toBe("https://c.test/?view=manager");
   });
 
   test("back to the top view after a new goal box opens the goals, not the box again", () => {
-    const left = viewAddress("https://c.test/?view=manager&new=1", "git", false);
-    expect(new URL(viewAddress(left, "manager", false)).searchParams.has("new")).toBe(false);
-  });
-
-  test("a window opened on one run keeps its run", () => {
-    expect(viewAddress("https://c.test/?run=r1&view=git", "manager", true)).toBe("https://c.test/?run=r1&view=manager");
+    const left = viewAddress("https://c.test/?view=manager&new=1", "git");
+    expect(new URL(viewAddress(left, "manager")).searchParams.has("new")).toBe(false);
   });
 });

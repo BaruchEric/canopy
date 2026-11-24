@@ -66,8 +66,8 @@ export function markScreen(): void {
 export const UI_SCALE: Partial<Record<ScreenClass, number>> = { wide: 1.1, ultra: 1.25 };
 
 /** What a window is for, which is its layout: the whole grove, one repo's
- *  panel, one section of it, or one shell. */
-export type WindowKind = "main" | "solo" | "section" | "shell" | "agent";
+ *  panel, one section of it, one shell, one agent's screen or one popup. */
+export type WindowKind = "main" | "solo" | "section" | "shell" | "agent" | "popup";
 
 const WINDOW_WORD: Record<WindowKind, string> = {
   main: "main window",
@@ -75,13 +75,15 @@ const WINDOW_WORD: Record<WindowKind, string> = {
   section: "section window",
   shell: "shell window",
   agent: "agent window",
+  popup: "popup window",
 };
 
 export const windowWord = (kind: WindowKind): string => WINDOW_WORD[kind];
 
 /** the kind of window a route (routes.ts) makes */
-export function windowKindOf(route: { solo: boolean; shell: boolean; section: string | null; agent?: unknown }): WindowKind {
+export function windowKindOf(route: { solo: boolean; shell: boolean; section: string | null; agent?: unknown; popup?: unknown }): WindowKind {
   if (route.agent) return "agent";
+  if (route.popup) return "popup";
   if (route.section !== null) return "section";
   if (route.shell) return "shell";
   if (route.solo) return "solo";

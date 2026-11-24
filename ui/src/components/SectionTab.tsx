@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
+import { itemMark } from "../ctxmenu";
 import { isItemTab, isPopupName, type ItemTab, type PageTab, type SectionTab } from "../sectiontabs";
 import { AgentScreen, useAllAgents } from "./AgentFocus";
 import { PanelSection } from "./Dock";
@@ -29,7 +30,8 @@ export function SectionTabView({ tab }: { tab: SectionTab }) {
 
 /** Whatever a page tab holds: a section, a run (an agent's chat or a
  *  coordinator, as the run sheet shows it), an agent session as the board
- *  shows it, or one of the top bar's popups. */
+ *  shows it, or one of the top bar's popups. An item's own element says
+ *  what it is (`data-item`), which a right-click reads (FR-084). */
 export function PageTabView({ tab }: { tab: PageTab }) {
   if (!isItemTab(tab)) return <SectionTabView tab={tab} />;
   switch (tab.kind) {
@@ -50,7 +52,7 @@ function RunTabView({ tab }: { tab: ItemTab }) {
   const untab = useStore((s) => s.untab);
   if (!run) return <p className="panel-clean sec-tab-gone">That run is not on the server now.</p>;
   return (
-    <div className="sheet run-tab">
+    <div className="sheet run-tab" data-item={itemMark(tab)}>
       <Console run={run} repo={repo} onClose={() => untab(tab.id)} />
     </div>
   );
@@ -67,7 +69,7 @@ function AgentTabView({ tab }: { tab: ItemTab }) {
   }, []);
   if (!card) return <p className="panel-clean sec-tab-gone">That agent is not running now.</p>;
   return (
-    <div className="agent-tab">
+    <div className="agent-tab" data-item={itemMark(tab)}>
       <AgentScreen card={card} live active showing now={now} />
     </div>
   );

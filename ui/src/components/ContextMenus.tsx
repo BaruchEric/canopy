@@ -7,23 +7,37 @@
  * pointer, then the thing it is on, then the surface's settings. Nowhere
  * to go and nothing to set leaves the page's own row: views, the command
  * line, the clipboard.
+ *
+ * "Open in its own window" (FR-084) is one row for everything a click is
+ * in that can be a window: a card, a dock panel of any kind, a section, a
+ * popup, a sheet's chat, a tab beside shells, a board card and the view.
+ * It leads the menu when the thing clicked is one of those, and follows
+ * the thing's own rows when the click is on a row inside one.
  */
 import { RUN_CARD, agentName } from "../allagents";
 import { machineOf } from "../agentcards";
+import { AGENT_GLYPH } from "../agentpanel";
+import { CLI_GLYPH, CLI_NAME } from "../cli";
 import { gearAround } from "../ctxgears";
 import { ctxLink, ctxSubjects, factLabel, isFact, type CtxItem, type CtxNode, type CtxSubject } from "../ctxmenu";
 import { pickable } from "../flows";
+import { runRepoName } from "../goals";
+import { ITEM_GLYPH, isReservedPanel, itemOfPanel, panelOfItem, panelOfWindow } from "../itempanel";
 import { lastShell, typeInto } from "../liveTerms";
+import { PHONE } from "../media";
 import { backendOf } from "../registry";
 import { lacks } from "../callerToken";
+import { isOwnWindow, openElsewhere, openItemWindow, openSectionElsewhere, openViewWindow, parseRoute, type ItemRef } from "../routes";
+import { runPanelLabel } from "../runs";
 import { say } from "../said";
+import { POPUP_WORD, isPopupName } from "../sectiontabs";
 import { copyText } from "../share";
 import { GO, type CopyKey } from "../shortcuts";
-import { SECTION_KEYS, SECTION_WORD, type SectionKey } from "../surface";
+import { SECTION_KEYS, SECTION_WORD, isSectionKey, type SectionKey } from "../surface";
 import { eventActs, statusWord } from "../triggers";
 import { GLYPH, linkLabel, stateOf } from "../util";
-import { WAITING_PANEL } from "../waiting";
-import { closedIn, idText, inboxItems, isFavorite, multi, useStore, type CanopyState } from "../store";
+import { WAITING_GLYPH, WAITING_PANEL } from "../waiting";
+import { closedIn, dockless, idText, inboxItems, isFavorite, multi, useStore, type CanopyState } from "../store";
 import { openView } from "../clirun";
 import { isGoalAnchor } from "../../../src/core/coordinator";
 import type { Repo } from "../../../src/core/types";
@@ -31,6 +45,7 @@ import { ContextMenuHost, GearBlock, type CtxBlock, type CtxHead, type CtxQuick,
 import { Icon } from "./Icon";
 import { KIND_GLYPH } from "./Inbox";
 import { copyPart, copyableOfKey, triggerEventOf } from "./KbFocus";
+import { closePopup } from "./PopGrip";
 import { RepoMenuItems } from "./RepoMenu";
 
 /** Mounted once per window, by App. */
@@ -108,16 +123,25 @@ export function buildMenu(target: Element, chain: CtxNode[], selection: string):
     subjectBlocks = built.blocks;
   }
 
+  // everything the click is in that can be a window of its own: first in
+  // the menu when the thing clicked is one, after its own rows otherwise
+  // (a row of the inbox in a panel is the row first, then its panel)
+  const win = built ? windowRows(s, subjects, target) : null;
+  const winBlock: CtxBlock | null = win?.rows.length ? { kind: "items", key: "window", items: win.rows } : null;
+  if (winBlock && win?.lead) blocks.push(winBlock);
+  blocks.push(...subjectBlocks);
+  if (winBlock && !win?.lead) blocks.push(winBlock);
+
   // a surface's gear, where the click is on the surface itself and not on
-  // a card, a row or a tab that has a menu of its own; a panel's head and
-  // tab carry the repo's actions, its body and its sections their gear
-  const onThing = first !== undefined && first.kind !== "panel" && first.kind !== "section";
+  // a card, a row or a tab that has a menu of its own; a repo panel's head
+  // and tab carry the repo's actions, its body and its sections their
+  // gear, and a panel or popup that is no repo's has only its gear
+  const onThing = first !== undefined && first.kind !== "panel" && first.kind !== "section" && first.kind !== "dock" && first.kind !== "item";
   const gear = onThing || (first?.kind === "panel" && first.head) ? null : gearAround(target);
   if (gear) {
     if (!head) head = { title: gear.reg.label().replace(/^the /, "") };
-    subjectBlocks.push({ kind: "node", key: "gear", node: (done) => <GearBlock reg={gear.reg} done={done} /> });
+    blocks.push({ kind: "node", key: "gear", node: (done) => <GearBlock reg={gear.reg} done={done} /> });
   }
-  blocks.push(...subjectBlocks);
 
   // nothing about the thing itself: the page's own row
   if (!built) blocks.push(pageBlock(s));
@@ -150,8 +174,14 @@ function subjectMenu(s: CanopyState, sub: CtxSubject, target: Element): Built | 
     case "tab":
     case "panel": {
       const repo = s.repos.find((r) => r.id === sub.id);
-      return repo ? repoMenu(s, repo, sub.kind === "tab" ? "tab" : sub.head ? "head" : "body") : null;
+      if (repo) return repoMenu(s, repo, sub.kind === "tab" ? "tab" : sub.head ? "head" : "body");
+      // a tab of a panel that is no repo's: a chat's, an agent's, a popup's
+      return sub.kind === "tab" && isReservedPanel(sub.id) ? dockMenu(s, sub.id, true) : null;
     }
+    case "dock":
+      return dockMenu(s, sub.id, false);
+    case "item":
+      return { label: `Menu for ${itemName(s, { kind: sub.item, ref: sub.ref })}`, head: itemHead(s, { kind: sub.item, ref: sub.ref }), blocks: [] };
     case "section":
       return sub.repo ? sectionMenu(s, sub.key, sub.repo) : null;
     case "inbox":
@@ -214,7 +244,6 @@ function repoMenu(s: CanopyState, repo: Repo, where: "card" | "tab" | "head" | "
       panel.push(front ? { kind: "run", id: "p:back", label: "put the project back", keys: "Esc", run: () => s.bringProject(null) } : { kind: "run", id: "p:front", label: "bring the project to the front", keys: "double-click", run: () => s.bringOnDouble(id) });
     }
     panel.push(
-      { kind: "run", id: "p:pop", label: "pop out into a window", run: () => s.popOut(id) },
       { kind: "run", id: "p:fold", label: "fold every section", run: () => s.foldSections(id, true) },
       { kind: "run", id: "p:unfold", label: "unfold every section", run: () => s.foldSections(id, false) },
       { kind: "run", id: "p:close", label: "close the panel", tone: "rust", run: () => s.closePanel(id) },
@@ -249,6 +278,155 @@ function repoMenu(s: CanopyState, repo: Repo, where: "card" | "tab" | "head" | "
   }
   blocks.push({ kind: "items", key: "more", items: more });
   return { label: `Menu for ${repo.name}`, head: repoHead(s, repo), quick, blocks };
+}
+
+/** what an item is called: a chat's name and repo, an agent's name, a
+ *  popup's word */
+function itemName(s: CanopyState, item: ItemRef): string {
+  if (item.kind === "popup") return isPopupName(item.ref) ? POPUP_WORD[item.ref] : "popup";
+  if (item.kind === "run") {
+    const run = s.runs[item.ref];
+    return run ? runPanelLabel(run, runRepoName(s.repos, run.repoId)) : "chat";
+  }
+  const card = s.registry[item.ref];
+  if (card) return agentName(card);
+  // a chat's own card on the board: the chat's name, as its panel has it
+  const run = item.ref.startsWith(RUN_CARD) ? s.runs[item.ref.slice(RUN_CARD.length)] : undefined;
+  return run ? runPanelLabel(run, runRepoName(s.repos, run.repoId)) : "agent";
+}
+
+/** The line naming a chat, an agent or a popup, with the mark its panel's
+ *  head carries. */
+function itemHead(s: CanopyState, item: ItemRef): CtxHead {
+  const title = itemName(s, item);
+  if (item.kind === "popup") return { glyph: item.ref === "waiting" ? WAITING_GLYPH : ITEM_GLYPH, title };
+  if (item.kind === "run") {
+    const run = s.runs[item.ref];
+    return { glyph: ITEM_GLYPH, title, facts: [{ text: "chat" }, ...(run ? [{ text: run.status }] : [])] };
+  }
+  const card = s.registry[item.ref];
+  return { glyph: AGENT_GLYPH, title, facts: [{ text: "agent" }, ...(card ? [{ text: card.state }, { text: machineOf(card) }] : [])] };
+}
+
+/** A dock panel that is no repo's (a chat's, an agent's, a popup's, the
+ *  command line's), from its tab, its head or its body: what it is, its
+ *  tab brought forward, and its close. Its window is the window row's and
+ *  its zoom, layout and share its gear's, which the caller adds. */
+function dockMenu(s: CanopyState, id: string, tab: boolean): Built {
+  const item = itemOfPanel(id);
+  const head: CtxHead = item ? itemHead(s, item) : { glyph: CLI_GLYPH, title: CLI_NAME, facts: [{ text: "the command line" }] };
+  const items: CtxItem[] = [];
+  if (tab) items.push({ kind: "run", id: "d:show", label: "show it", run: () => s.showPanel(id) });
+  items.push({ kind: "run", id: "d:close", label: "close the panel", tone: "rust", run: () => s.closePanel(id) });
+  return { label: `Menu for ${head.title}`, head, blocks: [{ kind: "items", key: "panel", label: "panel", items }] };
+}
+
+/** what every window row says; the fact at its end names the thing */
+const WINDOW = "open in its own window";
+
+/** a window the browser would not open says so, in rust */
+function opened(win: Window | null): void {
+  if (!win) throw new Error("The browser blocked the window. Allow popups for this page and try again.");
+}
+
+/** what a view is called in a row: the `g` chord's word for it */
+const viewWord = (view: string): string => GO.find((g) => g.view === view)?.what.replace(/[:,].*$/, "") ?? `the ${view} view`;
+
+/**
+ * The window rows of a right-click (FR-084): one for each thing on the way
+ * up that can be a window of its own, innermost first. `lead` says the
+ * thing clicked is itself one of them. The view's own row is the page
+ * block's, on a click that is on nothing.
+ *
+ * - A card or a tree row: the repo's solo window, a copy that leaves the
+ *   dock as it is (a shift-click's window).
+ * - A dock panel or its tab, a repo's or not: popped out, so it leaves the
+ *   dock and comes back to its slot when the window goes. On a phone, and
+ *   in a window with no dock, it is a copy: a phone's window is a tab the
+ *   dock would never hear go.
+ * - A section: the section's window. A board card: its chat's window, else
+ *   the agent's.
+ * - A popup, a sheet's chat or a tab beside shells: the item's window; the
+ *   popover or the sheet closes once the window is open.
+ *
+ * A window never offers itself, and the command line's panel shows the row
+ * dimmed, since its transcript is the page's and would not go along.
+ */
+function windowRows(s: CanopyState, subjects: readonly CtxSubject[], target: Element): { rows: CtxItem[]; lead: boolean } {
+  const here = parseRoute(location.search);
+  const own = panelOfWindow(here);
+  const copies = window.matchMedia(PHONE).matches || dockless();
+  const rows: CtxItem[] = [];
+  let lead = false;
+  const put = (key: string, what: string, run: () => unknown, off?: string) => {
+    if (rows.some((r) => r.id === `win:${key}`)) return false;
+    rows.push({ kind: "run", id: `win:${key}`, label: WINDOW, ...(off ? { off } : { fact: factLabel(what, 30), title: `${what}, in a window of its own` }), run });
+    return true;
+  };
+  const item = (ref: ItemRef, after?: () => void): boolean =>
+    panelOfItem(ref) !== own &&
+    put(`panel:${panelOfItem(ref) ?? `${ref.kind}:${ref.ref}`}`, itemName(s, ref), () => {
+      opened(openItemWindow(ref));
+      after?.();
+    });
+  const docked = (id: string): boolean => {
+    // this window is the panel's own already
+    if (own === id && (here.solo || here.repo === null)) return false;
+    const ref = itemOfPanel(id);
+    const repo = s.repos.find((r) => r.id === id);
+    if (!ref && !repo) return isReservedPanel(id) && put(`panel:${id}`, CLI_NAME, () => undefined, "its transcript stays here");
+    return put(`panel:${id}`, ref ? itemName(s, ref) : (repo?.name ?? idText(id)), () => {
+      if (!copies && s.panels.includes(id)) {
+        s.popOut(id);
+        // popOut takes the panel out only once its window is open
+        if (useStore.getState().panels.includes(id)) opened(null);
+      } else if (ref) opened(openItemWindow(ref));
+      else openElsewhere(id, "window");
+    });
+  };
+  subjects.forEach((sub, i) => {
+    let made = false;
+    switch (sub.kind) {
+      case "repo": {
+        const repo = s.repos.find((r) => r.id === sub.id);
+        // a forge repo has no panel; this window's own repo is here already
+        if (repo && !repo.forge && !(here.repo === repo.id && here.solo)) made = put(`repo:${repo.id}`, repo.name, () => openElsewhere(repo.id, "window"));
+        break;
+      }
+      case "tab":
+      case "panel":
+      case "dock":
+        made = docked(sub.id);
+        break;
+      case "section": {
+        const repo = sub.repo === null ? undefined : s.repos.find((r) => r.id === sub.repo);
+        const key = sub.key;
+        if (repo && !repo.error && isSectionKey(key) && !(here.repo === repo.id && here.section === key)) {
+          made = put(`section:${repo.id}:${key}`, `${SECTION_WORD[key]} at ${repo.name}`, () => openSectionElsewhere(repo.id, key, "window"));
+        }
+        break;
+      }
+      case "agent": {
+        const run = sub.id.startsWith(RUN_CARD) ? s.runs[sub.id.slice(RUN_CARD.length)] : undefined;
+        if (run || s.registry[sub.id]) made = item(run ? { kind: "run", ref: run.id } : { kind: "agent", ref: sub.id });
+        break;
+      }
+      case "item":
+        made = item({ kind: sub.item, ref: sub.ref }, () => {
+          // the popover or the sheet that showed it gives way to the
+          // window; a tab beside shells stays where it is. A popover the
+          // press on this row already closed gets no Escape of its own.
+          if (target.closest(".settings-pop")?.isConnected) closePopup();
+          else if (target.closest(".sheet-back")?.isConnected) s.leaveSheet();
+        });
+        break;
+      case "inbox":
+      case "trigger":
+        break;
+    }
+    if (i === 0) lead = made;
+  });
+  return { rows, lead };
 }
 
 /** A section of a repo panel: its fold and its gear (zoom, layout, share),
@@ -392,6 +570,8 @@ function pageBlock(s: CanopyState): CtxBlock {
     { kind: "run", id: "page:clips", label: "the clipboard", keys: "v", run: () => s.openClips() },
     { kind: "run", id: "page:notes", label: "notes and reminders", run: () => s.openQuickNotes() },
     { kind: "run", id: "page:keys", label: "keyboard shortcuts", keys: "?", run: () => s.openKeys(view) },
+    // the view as a window of its own (FR-084); a window of one thing is one already
+    ...(isOwnWindow(parseRoute(location.search)) ? [] : [{ kind: "run" as const, id: "page:window", label: "this view in its own window", fact: viewWord(view), run: () => opened(openViewWindow(view)) }]),
     { kind: "run", id: "page:reload", label: "reload the page", run: () => location.reload() },
   ];
   return { kind: "items", key: "page", label: "canopy", items };

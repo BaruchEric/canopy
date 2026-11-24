@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isPopupPanel, isReservedPanel, isRunPanel, panelOfItem, popupOfPanel, popupPanel, runOfPanel, runPanel } from "./itempanel";
+import { isPopupPanel, isReservedPanel, isRunPanel, itemOfPanel, panelOfItem, panelOfWindow, popupOfPanel, popupPanel, runOfPanel, runPanel } from "./itempanel";
 
 describe("run panels", () => {
   test("round trip, and nothing else reads as one", () => {
@@ -41,6 +41,45 @@ describe("panelOfItem", () => {
     expect(panelOfItem({ kind: "popup", ref: "tasks" })).toBe("/popup/tasks");
     expect(panelOfItem({ kind: "popup", ref: "waiting" })).toBe("/waiting");
     expect(panelOfItem({ kind: "popup", ref: "weather" })).toBeNull();
+  });
+});
+
+describe("itemOfPanel", () => {
+  test("panelOfItem read backwards, for every item a panel shows", () => {
+    for (const item of [
+      { kind: "run", ref: "r1" },
+      { kind: "agent", ref: "claude:abc" },
+      { kind: "popup", ref: "tasks" },
+      { kind: "popup", ref: "waiting" },
+      { kind: "popup", ref: "health" },
+    ] as const) {
+      const panel = panelOfItem(item);
+      expect(panel).not.toBeNull();
+      expect(itemOfPanel(panel ?? "")).toEqual(item);
+    }
+  });
+
+  test("a repo's panel and the command line's are no item", () => {
+    expect(itemOfPanel("web-apps/ripe")).toBeNull();
+    expect(itemOfPanel("/cli")).toBeNull();
+    expect(itemOfPanel("/popup/weather")).toBeNull();
+  });
+});
+
+describe("panelOfWindow", () => {
+  const none = { run: null, popup: null, agent: null, repo: null };
+  test("the panel a window of one thing speaks for", () => {
+    expect(panelOfWindow({ ...none, run: "r1" })).toBe("/run/r1");
+    expect(panelOfWindow({ ...none, popup: "inbox" })).toBe("/popup/inbox");
+    expect(panelOfWindow({ ...none, popup: "waiting" })).toBe("/waiting");
+    expect(panelOfWindow({ ...none, agent: { card: "claude:abc", follow: false } })).toBe("/agent/claude:abc");
+    expect(panelOfWindow({ ...none, repo: "web-apps/ripe" })).toBe("web-apps/ripe");
+    expect(panelOfWindow(none)).toBeNull();
+  });
+
+  test("the board's focus pane follows the board and is no panel", () => {
+    expect(panelOfWindow({ ...none, agent: { card: "claude:abc", follow: true } })).toBeNull();
+    expect(panelOfWindow({ ...none, agent: { card: null, follow: false } })).toBeNull();
   });
 });
 

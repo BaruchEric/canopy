@@ -1,5 +1,6 @@
 import { FOCUS_PANE } from "./panes";
 import { isSproutId } from "../../src/core/sprout";
+import { isPopupName, type ItemKind, type PopupName } from "./sectiontabs";
 import { isSectionKey, type SectionKey } from "./surface";
 
 /** What the URL asked this window to show. `/?repo=<id>` pins that repo on
@@ -20,8 +21,9 @@ export interface Route {
   /** `?view=agents&ask=<id>`: the inbox opened on that ask, the link the
    *  broker's away DM carries */
   ask: string | null;
-  /** `popped=1`: a solo window the dock popped its panel out to, the only
-   *  kind that tells the dock it has the panel */
+  /** `popped=1`: a window the dock popped a panel out to (a repo's, a
+   *  chat's, an agent's or a popup's), the only kind that tells the dock it
+   *  has the panel */
   popped: boolean;
   /** `?view=agent`: one agent's screen in a window of its own, the agents
    *  board's focus popped out; `card` names it, `follow=1` makes it show
@@ -30,6 +32,9 @@ export interface Route {
   /** `?view=run&run=<id>`: one chat in a window of its own, the dock's
    *  run panel popped out (FR-047) */
   run: string | null;
+  /** `?view=popup&popup=<name>`: one of the top bar's popups in a window
+   *  of its own (FR-084) */
+  popup: PopupName | null;
 }
 
 /** a registry card's id: a harness and a session, or a scan's */
@@ -47,6 +52,11 @@ export function parseRoute(search: string): Route {
   const section = q.get("section");
   const task = q.get("task");
   const run = runOf(q);
+  const agent = agentOf(q);
+  const popup = popupOf(q);
+  // an agent's window is a dock panel's only on one agent, never the
+  // board's focus pane, which speaks the channel under its own name
+  const panel = view === "solo" || run !== null || popup !== null || (agent !== null && agent.card !== null && !agent.follow);
   return {
     repo: repo || null,
     solo: view === "solo",
@@ -55,11 +65,17 @@ export function parseRoute(search: string): Route {
     section: view === "section" && isSectionKey(section) ? section : null,
     task: view === "shell" && task && /^[a-z0-9][a-z0-9._-]{0,39}$/.test(task) ? task : null,
     ask: askOf(q),
-    popped: (view === "solo" || run !== null) && q.get("popped") === "1",
-    agent: agentOf(q),
+    popped: panel && q.get("popped") === "1",
+    agent,
     run,
+    popup,
   };
 }
+
+/** Whether a route makes a window of one thing (a repo's panel, one of its
+ *  sections, a shell, a chat, an agent or a popup) and not the whole page. */
+export const isOwnWindow = (r: Route): boolean =>
+  r.run !== null || r.agent !== null || r.popup !== null || (r.repo !== null && (r.solo || r.shell || r.section !== null));
 
 /** a run's id: the backend's short id, after another backend's name for
  *  one of its runs */
@@ -69,6 +85,12 @@ function runOf(q: URLSearchParams): string | null {
   if (q.get("view") !== "run" || q.get("repo")) return null;
   const run = q.get("run");
   return run && RUN_ID.test(run) ? run : null;
+}
+
+function popupOf(q: URLSearchParams): PopupName | null {
+  if (q.get("view") !== "popup" || q.get("repo")) return null;
+  const name = q.get("popup");
+  return isPopupName(name) ? name : null;
 }
 
 function agentOf(q: URLSearchParams): Route["agent"] {
@@ -170,8 +192,7 @@ export function managerUrl(runId: string | null, opts?: ManagerOpen): string {
  *  thing shows only what its address named when it opened, so it loads anew. */
 export function openManager(runId: string | null, opts?: ManagerOpen): void {
   const url = managerUrl(runId, opts);
-  const r = parseRoute(location.search);
-  if (r.run || r.agent || (r.repo && (r.solo || r.shell || r.section))) {
+  if (isOwnWindow(parseRoute(location.search))) {
     location.assign(url);
     return;
   }
@@ -235,9 +256,10 @@ export function groveUrl(): string {
  *  tall as the screen allows, centred. availHeight already excludes the menu
  *  bar and the dock. Clamped at both ends so a laptop does not get a window
  *  wider than its screen and a 5K display does not get one the width of a
- *  wall. */
-export function popupFeatures(avail: { width: number; height: number }): string {
-  const w = Math.round(Math.min(1200, Math.max(720, avail.width * 0.55)));
+ *  wall. `slim` is a list's window (a popup's): a column wide, like the
+ *  popover it came from. */
+export function popupFeatures(avail: { width: number; height: number }, slim = false): string {
+  const w = slim ? Math.round(Math.min(640, Math.max(440, avail.width * 0.28))) : Math.round(Math.min(1200, Math.max(720, avail.width * 0.55)));
   const h = Math.min(1500, avail.height);
   const width = Math.min(w, avail.width);
   const height = Math.min(h, avail.height);
@@ -261,22 +283,81 @@ export function popOutWindow(id: string): Window | null {
   return openNamed(`canopy:pop:${id}`, soloUrl(id, { popped: true }), "window");
 }
 
-/** one chat in a window of its own (RunSolo.tsx) */
-export function runUrl(runId: string, opts?: { popped?: boolean }): string {
+/** this page's address with nothing asked of it but `params` */
+function bareUrl(params: Record<string, string>, popped?: boolean): string {
   const u = new URL(window.location.href);
   u.search = "";
   u.hash = "";
-  u.searchParams.set("view", "run");
-  u.searchParams.set("run", runId);
-  if (opts?.popped) u.searchParams.set("popped", "1");
+  for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+  if (popped) u.searchParams.set("popped", "1");
   return u.toString();
 }
 
-/** A chat's panel popped out of the dock (FR-047): its window joins the
- *  panes protocol under the panel's id as a repo's does. The window, or
- *  null when the browser blocked it. */
-export function popOutRun(runId: string): Window | null {
-  return openNamed(`canopy:pop:run:${runId}`, runUrl(runId, { popped: true }), "window");
+/** one chat in a window of its own (RunSolo.tsx) */
+export const runUrl = (runId: string, opts?: { popped?: boolean }): string => bareUrl({ view: "run", run: runId }, opts?.popped);
+
+/** one agent's screen in a window of its own, on that agent and not the
+ *  board's focus (AgentSolo.tsx) */
+export const agentUrl = (card: string, opts?: { popped?: boolean }): string => bareUrl({ view: "agent", card }, opts?.popped);
+
+/** one of the top bar's popups in a window of its own (PopupSolo.tsx) */
+export const popupUrl = (name: PopupName, opts?: { popped?: boolean }): string => bareUrl({ view: "popup", popup: name }, opts?.popped);
+
+/** the whole page on one view; the git view is the page with no view named */
+export const pageUrl = (view: string): string => bareUrl(view === "git" ? {} : { view });
+
+/** What a popup, a sheet, a tab or a dock panel shows as an item (a chat,
+ *  an agent's screen, a popup; sectiontabs.ts). */
+export interface ItemRef {
+  kind: ItemKind;
+  ref: string;
+}
+
+/** An item's window (FR-084): its address, and the name the browser keeps
+ *  the window under, so a second ask brings the same one forward. A panel
+ *  popped out of the dock is named apart from a plain window, as a repo's
+ *  is, and says `popped=1`. Null for a popup by a name it has not. */
+export function itemWindow(item: ItemRef, popped = false): { name: string; url: string; slim: boolean } | null {
+  const name = `canopy:${popped ? "pop:" : ""}${item.kind}:${item.ref}`;
+  switch (item.kind) {
+    case "run":
+      return { name, url: runUrl(item.ref, { popped }), slim: false };
+    case "agent":
+      return { name, url: agentUrl(item.ref, { popped }), slim: false };
+    case "popup":
+      return isPopupName(item.ref) ? { name, url: popupUrl(item.ref, { popped }), slim: true } : null;
+  }
+}
+
+/** A chat, an agent's screen or a popup in a window of its own, which takes
+ *  nothing from where it was showing. The window, or null when the browser
+ *  blocked it. */
+export function openItemWindow(item: ItemRef): Window | null {
+  const w = itemWindow(item);
+  return w ? openNamed(w.name, w.url, "window", w.slim) : null;
+}
+
+/** An item's panel popped out of the dock (FR-047, FR-084): its window
+ *  joins the panes protocol under the panel's id as a repo's does. The
+ *  window, or null when the browser blocked it. */
+export function popOutItem(item: ItemRef): Window | null {
+  const w = itemWindow(item, true);
+  return w ? openNamed(w.name, w.url, "window", w.slim) : null;
+}
+
+/** A chat's panel popped out of the dock (FR-047). */
+export const popOutRun = (runId: string): Window | null => popOutItem({ kind: "run", ref: runId });
+
+/** One view of the whole page in a window of its own, reused on a second
+ *  ask for the same view. */
+export function openViewWindow(view: string): Window | null {
+  return openNamed(`canopy:view:${view}`, pageUrl(view), "window");
+}
+
+/** The whole page on a view, from a window of one thing, which shows no
+ *  view of its own: one tab, taken again on the next ask. */
+export function openPage(view: string): Window | null {
+  return openNamed("canopy:page", pageUrl(view), "tab");
 }
 
 /** A shell at a repo in a tab or window of its own. Every click is a new
@@ -292,19 +373,20 @@ export function openSectionElsewhere(id: string, section: SectionKey, target: "t
 }
 
 /** A shell that is already running, in a tab or window of its own: the new
- *  window joins it rather than starting another. */
-export function popShell(id: string, term: string, target: "tab" | "window") {
-  openNamed(`canopy:shell:${term}`, heldShellUrl(id, term), target);
+ *  window joins it rather than starting another. A task's shell says which
+ *  task, so its window only ever joins. */
+export function popShell(id: string, term: string, target: "tab" | "window", task?: string) {
+  openNamed(`canopy:shell:${term}`, task ? taskShellUrl(id, term, task) : heldShellUrl(id, term), target);
 }
 
-function openNamed(name: string, url: string, target: "tab" | "window"): Window | null {
+function openNamed(name: string, url: string, target: "tab" | "window", slim = false): Window | null {
   const avail = {
     width: window.screen?.availWidth || 1440,
     height: window.screen?.availHeight || 900,
   };
   const win =
     target === "window"
-      ? window.open(url, name, popupFeatures(avail))
+      ? window.open(url, name, popupFeatures(avail, slim))
       : window.open(url, name);
   win?.focus();
   return win;

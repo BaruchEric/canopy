@@ -1,7 +1,8 @@
 import { agentName } from "../allagents";
 import { useEffect, useRef, useState } from "react";
 import { machineOf } from "../agentcards";
-import { FOCUS_PANE, PANES_CHANNEL, parsePaneMsg, type PaneMsg } from "../panes";
+import { agentPanel } from "../agentpanel";
+import { FOCUS_PANE, PANES_CHANNEL, parsePaneMsg, tellPanes, type PaneMsg } from "../panes";
 import { groveUrl } from "../routes";
 import { useStore } from "../store";
 import { setTitleBase } from "../title";
@@ -16,8 +17,13 @@ import { Wordmark } from "./TopBar";
  * out through panes.ts): it shows whichever agent the board names in a
  * "show", says hello when it shows (and again on "who"), bye when it goes,
  * hands the focus back with "return", and closes on the board's "return".
+ *
+ * With `popped` it is an agent's dock panel popped out (FR-084): App.tsx
+ * speaks the panes channel for it under the panel's id, as it does for a
+ * repo's and a chat's, and "back to the dock" puts the panel back at its
+ * slot.
  */
-export function AgentSolo({ card: first, follow }: { card: string | null; follow: boolean }) {
+export function AgentSolo({ card: first, follow, popped = false }: { card: string | null; follow: boolean; popped?: boolean }) {
   const [id, setId] = useState<string | null>(first);
   useShellProbe();
   const card = useAgentCard(id);
@@ -30,8 +36,12 @@ export function AgentSolo({ card: first, follow }: { card: string | null; follow
   // with it, as its dock panel does; the board's focus pane follows the
   // board instead, which picks another
   useEffect(() => {
-    if (sweptAway && !follow) window.close();
-  }, [sweptAway, follow]);
+    if (!sweptAway || follow) return;
+    // the dock forgets a popped panel's slot first, so the window's bye
+    // does not bring an ended agent's panel back
+    if (popped && id) tellPanes({ type: "close", id: agentPanel(id) });
+    window.close();
+  }, [sweptAway, follow, popped, id]);
   const chanRef = useRef<BroadcastChannel | null>(null);
 
   useEffect(() => {
@@ -107,6 +117,19 @@ export function AgentSolo({ card: first, follow }: { card: string | null; follow
             }}
           >
             back to the board
+          </button>
+        )}
+        {popped && id && !following && (
+          <button
+            type="button"
+            className="mini"
+            title="Put the agent's panel back in the dock and close this window"
+            onClick={() => {
+              tellPanes({ type: "return", id: agentPanel(id) });
+              window.close();
+            }}
+          >
+            back to the dock
           </button>
         )}
         <a className="mini" href={groveUrl()} target="_blank">

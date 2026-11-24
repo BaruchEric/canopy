@@ -19,6 +19,7 @@ import { SelectBar } from "./components/SelectBar";
 import { Sidebar } from "./components/Sidebar";
 import { AgentSolo } from "./components/AgentSolo";
 import { ContextMenus } from "./components/ContextMenus";
+import { PopupSolo } from "./components/PopupSolo";
 import { RunSolo } from "./components/RunSolo";
 import { SectionSolo, Solo } from "./components/Solo";
 import { ShellSolo, TermDock } from "./components/TermDock";
@@ -32,8 +33,8 @@ import { TYPES_INTO, ringTakes, type RingPress } from "./kbfocus";
 import { KbWatch, kbCopy, kbEnter, kbHide, kbMove, kbPeek, kbZone } from "./components/KbFocus";
 import { Said } from "./components/Said";
 import { noteCopied, onCopied, pageCopyText } from "./clipsink";
-import { runPanel } from "./itempanel";
-import { dropAskHere, openManager, parseRoute, viewOf } from "./routes";
+import { panelOfWindow } from "./itempanel";
+import { dropAskHere, isOwnWindow, openManager, openPage, parseRoute, viewOf } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, attentionCount, dockless, landingAll, prsAll, statusOf, useStore, type CanopyState } from "./store";
 import { heldEverywhere, viewShown } from "./scopeGate";
@@ -296,8 +297,14 @@ export function App() {
   const [project, setProject] = useState(() => new URLSearchParams(location.search).get("project"));
   const navigate = useCallback((to: string) => {
     const next = viewOf(to);
-    // the top view's goal and new box belong to the top view; a chat's window keeps its own run
-    history.pushState(null, "", viewAddress(location.href, next, route.run !== null));
+    // a window of one thing shows no view: the whole page opens on it, in
+    // a tab of its own, and this window stays what it is (FR-084)
+    if (isOwnWindow(route)) {
+      openPage(next);
+      return;
+    }
+    // the top view's goal and new box belong to the top view
+    history.pushState(null, "", viewAddress(location.href, next));
     setView(next);
     setProject(null);
     // the top view reads its goal from the address and follows popstate, so
@@ -432,10 +439,11 @@ export function App() {
   // Pop out and back, the pop-out's side: only a solo window opened with
   // popped=1 joins, so a plain solo tab never takes a panel from the dock.
   // It says hello from its first render, before the grove has loaded, so a
-  // reload's hello lands inside the dock's wait on its bye. A chat's
-  // window speaks under its panel's id (FR-047).
+  // reload's hello lands inside the dock's wait on its bye. A chat's, an
+  // agent's and a popup's window each speak under their panel's id (FR-047,
+  // FR-084).
   useEffect(() => {
-    const id = route.run ? runPanel(route.run) : route.repo;
+    const id = panelOfWindow(route);
     if (!route.popped || !id || typeof BroadcastChannel === "undefined") return;
     const ch = new BroadcastChannel(PANES_CHANNEL);
     const hello: PaneMsg = { type: "hello", id };
@@ -533,8 +541,8 @@ export function App() {
       }
       const sc = press === null ? null : shortcutFor(press, view);
       if (!sc || (box && !sc.anywhere)) return;
-      // a window holding one panel, one shell or one chat has no prompt
-      const whole = !route.run && !(route.repo && (route.solo || route.shell || route.section));
+      // a window holding one panel, one shell, one chat or one popup has no prompt
+      const whole = !route.run && !route.popup && !(route.repo && (route.solo || route.shell || route.section));
       const st = useStore.getState();
       const over = !!document.querySelector(OVER_PAGE);
       switch (sc.action) {
@@ -713,7 +721,9 @@ export function App() {
   }
   // a window of one thing keeps the mic that follows focus
   const solo = route.agent ? (
-    <AgentSolo card={route.agent.card} follow={route.agent.follow} />
+    <AgentSolo card={route.agent.card} follow={route.agent.follow} popped={route.popped} />
+  ) : route.popup ? (
+    <PopupSolo name={route.popup} popped={route.popped} />
   ) : route.run ? (
     <RunSolo id={route.run} popped={route.popped} />
   ) : route.solo && route.repo ? (

@@ -40,7 +40,7 @@ import { WAITING_GLYPH, WAITING_GROUPS, WAITING_PANEL, isWaitingPanel } from "..
 import { CLI_GLYPH, CLI_NAME, CLI_PANEL, isCliPanel } from "../cli";
 import { HEALTH_GLYPH, HEALTH_NAME, HEALTH_PANEL, isHealthPanel } from "../health";
 import { AGENT_GLYPH, cardOfPanel, isAgentPanel } from "../agentpanel";
-import { ITEM_GLYPH, isPopupPanel, isReservedPanel, isRunPanel, popupOfPanel, runOfPanel } from "../itempanel";
+import { ITEM_GLYPH, isPopupPanel, isReservedPanel, isRunPanel, itemOfPanel, popupOfPanel, runOfPanel } from "../itempanel";
 import { Console } from "./RunSheet";
 import { PopupTabView } from "./PopupTab";
 import { tabEntries } from "./PopGrip";
@@ -2181,8 +2181,8 @@ function agentPanelName(id: string): string {
 }
 
 /** The gear of the "waiting on you" panel: its zoom, the dock's layout and
- *  moves, the close setting, folding its groups, and sharing it. No pop
- *  out, new tab or bench: those are a repo's. */
+ *  moves, popping it out (FR-084), the close setting, folding its groups,
+ *  and sharing it. No new tab or bench: those are a repo's. */
 function WaitingGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement | null }) {
   const arrange = useArrangeEntries();
   const setSetting = useStore((s) => s.setSetting);
@@ -2193,6 +2193,7 @@ function WaitingGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement 
   const movePanel = useStore((s) => s.movePanel);
   const folds = useStore((s) => sectionsFor(s.closedSections, WAITING_PANEL));
   const foldSections = useStore((s) => s.foldSections);
+  const popOut = useStore((s) => s.popOut);
   const phone = useMedia(PHONE);
   const layout: GearEntry[] = [
     ...arrange,
@@ -2211,6 +2212,7 @@ function WaitingGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement 
         useStore.getState().closePanel(WAITING_PANEL);
       },
     },
+    ...(phone ? [] : ([{ type: "item", label: "pop out", run: () => popOut(WAITING_PANEL) }] satisfies GearEntry[])),
     closeEntry(panelClose, setSetting),
   ];
   return (
@@ -2282,6 +2284,7 @@ function WaitingPanel({
     <section
       ref={box}
       className={`panel waiting-panel${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}`}
+      data-panel={id}
       aria-label={WAITING_NAME}
       hidden={hidden}
       data-cell={cell}
@@ -2314,8 +2317,8 @@ function WaitingPanel({
   );
 }
 
-/** The health panel's gear: its zoom, the dock's layout and moves, the
- *  close setting, and sharing it. */
+/** The health panel's gear: its zoom, the dock's layout and moves, popping
+ *  it out (FR-084), the close setting, and sharing it. */
 function HealthGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement | null }) {
   const arrange = useArrangeEntries();
   const setSetting = useStore((s) => s.setSetting);
@@ -2324,6 +2327,7 @@ function HealthGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement |
   const panels = useStore((s) => s.panels);
   const dockLayout = useStore((s) => s.dockLayout);
   const movePanel = useStore((s) => s.movePanel);
+  const popOut = useStore((s) => s.popOut);
   const phone = useMedia(PHONE);
   const layout: GearEntry[] = [
     ...arrange,
@@ -2332,6 +2336,7 @@ function HealthGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement |
       : ([
           { type: "item", label: "carousel", on: carousel, run: () => setSetting("dockCarousel", !carousel) },
           ...stepEntries(HEALTH_PANEL, panels, dockLayout, movePanel),
+          { type: "item", label: "pop out", run: () => popOut(HEALTH_PANEL) },
         ] satisfies GearEntry[])),
     closeEntry(panelClose, setSetting),
   ];
@@ -2383,6 +2388,7 @@ function HealthPanel({
     <section
       ref={box}
       className={`panel health-panel${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}`}
+      data-panel={id}
       aria-label={HEALTH_NAME}
       hidden={hidden}
       data-cell={cell}
@@ -2442,9 +2448,10 @@ function ItemGear({
   const movePanel = useStore((s) => s.movePanel);
   const popOut = useStore((s) => s.popOut);
   const phone = useMedia(PHONE);
-  // a chat's panel can go to a window of its own and come back to its
-  // slot, as a repo's can (not on a phone, for the same reason)
-  const windows: GearEntry[] = !phone && isRunPanel(id) ? [{ type: "item", label: "pop out", run: () => popOut(id) }] : [];
+  // a chat's, an agent's and a popup's panel can each go to a window of
+  // its own and come back to its slot, as a repo's can (not on a phone,
+  // for the same reason)
+  const windows: GearEntry[] = !phone && itemOfPanel(id) !== null ? [{ type: "item", label: "pop out", run: () => popOut(id) }] : [];
   const layout: GearEntry[] = [
     ...arrange,
     ...(phone
@@ -2511,6 +2518,7 @@ function AgentPanel({
     <section
       ref={box}
       className={`panel agent-panel${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}`}
+      data-panel={id}
       aria-label={`agent ${name}`}
       hidden={hidden}
       data-cell={cell}
@@ -2607,6 +2615,7 @@ function RunPanel({
     <section
       ref={box}
       className={`panel run-panel${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}`}
+      data-panel={id}
       aria-label={`chat ${name}`}
       hidden={hidden}
       data-cell={cell}
@@ -2683,6 +2692,7 @@ function PopupPanel({
     <section
       ref={box}
       className={`panel popup-panel${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}`}
+      data-panel={id}
       aria-label={name}
       hidden={hidden}
       data-cell={cell}
@@ -2784,6 +2794,7 @@ function CliPanel({
     <section
       ref={box}
       className={`panel cli-panel${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}`}
+      data-panel={id}
       aria-label={CLI_NAME}
       hidden={hidden}
       data-cell={cell}

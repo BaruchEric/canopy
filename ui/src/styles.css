@@ -17947,6 +17947,34 @@ body.resizing-nesw {
 .run-solo-main > .empty {
   padding: 24px;
 }
+/* a popup in a window of its own (PopupSolo, FR-084): its list fills the
+   window under the bar and scrolls inside it, as it fills a dock panel. The
+   window opens a column wide; dragged wider, the list keeps a readable
+   measure in the middle. */
+.popup-solo-main {
+  position: relative;
+  min-height: 0;
+  background: var(--bark0);
+}
+.popup-solo-main > .popup-tab {
+  position: absolute;
+  inset: 0;
+  height: auto;
+  max-width: 760px;
+  margin-inline: auto;
+  background: var(--bark1);
+  border-inline: 1px solid var(--hair);
+}
+/* the bar names the popup, so the body's own first heading (the inbox's,
+   the ranger's, a first section's) would say it twice */
+.popup-solo-main > .popup-tab > .panel-label:first-child,
+.popup-solo-main > .popup-tab > :first-child > .panel-label:first-child {
+  display: none;
+}
+.popup-solo-main > .popup-tab > .inbox-top {
+  justify-content: flex-end;
+  padding-top: 4px;
+}
 
 /* Best-of-N comparison: columns share one sheet, stack on narrow screens. */
 .group-columns {

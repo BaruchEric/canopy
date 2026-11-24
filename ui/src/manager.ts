@@ -750,13 +750,12 @@ export function confirmPress(armedAt: number | null, now: number): { armedAt: nu
 /** The address a change of view goes to from `href`: `view` set (none for
  *  the git view), and `project`, the top view's goal (`run`), its new box
  *  (`new`, `kind`) and a project's sheet (`sprout`) dropped, since they
- *  belong to the view being left. A window opened on one run (`keepRun`)
- *  keeps its `run`. */
-export function viewAddress(href: string, next: string, keepRun: boolean): string {
+ *  belong to the view being left. Only the whole page changes view: a
+ *  window of one thing opens the page on the view instead (App.tsx). */
+export function viewAddress(href: string, next: string): string {
   const url = new URL(href);
   if (next === "git") url.searchParams.delete("view");
   else url.searchParams.set("view", next);
-  for (const key of ["project", "new", "kind", "sprout"]) url.searchParams.delete(key);
-  if (!keepRun) url.searchParams.delete("run");
+  for (const key of ["project", "new", "kind", "sprout", "run"]) url.searchParams.delete(key);
   return url.toString();
 }

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
 import { PHONE, useMedia } from "../media";
-import { useStore } from "../store";
+import { dockless, useStore } from "../store";
 import { boxWord, seamTag } from "../seamtag";
 import { type PopAnchor, type PopSize, gripSize, popRoom } from "../pop";
 import { ZOOM_MAX, ZOOM_MIN, zoomStep, zoomWord } from "../surface";
@@ -9,6 +9,8 @@ import { Gear, type GearEntry } from "./Gear";
 import type { TabRef } from "../sectiontabs";
 import type { Arrangement } from "../grid";
 import { openView } from "../clirun";
+import { itemMark } from "../ctxmenu";
+import { openItemWindow } from "../routes";
 
 const KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]);
 
@@ -57,7 +59,7 @@ export interface PopSpec {
 
 /** Every popup and sheet closes on Escape, so one sent after a popup turns
  *  into a tab closes it, whichever kind it is. */
-const closePopup = () => requestAnimationFrame(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+export const closePopup = () => requestAnimationFrame(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
 
 /** The gear lines that move a popup, a sheet or a dock panel into a tab
  *  in a shell window: the strip's, and a run's card's shells too. `from`
@@ -87,6 +89,22 @@ function dockEntries(tab: TabRef, after: () => void): GearEntry[] {
   return [
     { type: "item", label: "a card in the dock", title: "Out of the popup into a panel of its own in the dock, side by side with the rest", run: to("columns") },
     { type: "item", label: "a tab in the dock", title: "Out of the popup into a tab of the dock's showing cell", run: to("tabs") },
+  ];
+}
+
+/** The gear line that opens what a popup or a sheet shows in a window of
+ *  its own (FR-084): a chat, an agent's screen or the popup's list. The
+ *  popup closes once the window is open; a blocked window leaves it. */
+function windowEntries(tab: TabRef, after: () => void): GearEntry[] {
+  return [
+    {
+      type: "item",
+      label: "a window of its own",
+      title: "Out of the popup into a window of its own, which stays up beside the page",
+      run: () => {
+        if (openItemWindow(tab)) after();
+      },
+    },
   ];
 }
 
@@ -121,6 +139,16 @@ export function PopGrip({ name, anchor, gap = 8, gear = false, tab }: PopSpec & 
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
   }, [saved, anchor, gap]);
+
+  // what the popup shows, said on its own element: a right-click anywhere
+  // in it reads its "open in its own window" off this (FR-084)
+  const mark = tab ? itemMark(tab) : null;
+  useLayoutEffect(() => {
+    const pop = ref.current?.parentElement;
+    if (!pop || !mark) return;
+    pop.setAttribute("data-item", mark);
+    return () => pop.removeAttribute("data-item");
+  }, [mark]);
 
   // the zoom goes on everything in the popup but its head and its controls,
   // so the gear stays under the pointer as it steps
@@ -264,7 +292,8 @@ export function usePopEntries({ name, anchor, gap = 8, tab }: PopSpec, pop: () =
       ...(off || !sized ? { off: off ?? "It is at its own size" } : {}),
       run: () => saveSize(name, null),
     },
-    ...(tab ? [...dockEntries(tab, closePopup), ...tabEntries(tab, "the popup", closePopup)] : []),
+    // a window of one thing has no dock to move it into
+    ...(tab ? [...(dockless() ? [] : dockEntries(tab, closePopup)), ...tabEntries(tab, "the popup", closePopup), ...(phone ? [] : windowEntries(tab, closePopup))] : []),
   ];
   if (!zoomed) return size;
   return [

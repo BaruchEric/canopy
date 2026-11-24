@@ -51,7 +51,7 @@ import {
   type DockShape,
   type Zone,
 } from "./grid";
-import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutRun, popOutWindow, soloUrl } from "./routes";
+import { heldShellUrl, openElsewhere, openItemWindow, openShellElsewhere, parseRoute, popOutItem, popOutWindow, popShell, soloUrl } from "./routes";
 import { poppedOf, poppedOut, without } from "./panes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { snapshot, watch, type Note as Notice, type Watch } from "./notify";
@@ -74,7 +74,7 @@ import { convOf, isUnread, mergeMessages } from "./chan";
 import type { AdviceAccepted, AdviceOffer, AgentCard, AgentEffort, AgentKind, AgentPulse, Ask, AwakeInfo, AwakeMode, BranchTreesInfo, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, ScenarioNames, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo, WorktreesInfo } from "../../src/core/types";
 import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
-import { isReservedPanel, panelOfItem, runOfPanel, runPanel } from "./itempanel";
+import { isReservedPanel, itemOfPanel, panelOfItem, panelOfWindow, runPanel } from "./itempanel";
 import type { Delivery, TriggersInfo } from "../../src/core/trigger";
 import type { WorkInfo } from "../../src/core/work";
 import { freeBranchSlots, mergeLanding } from "./landing";
@@ -3510,12 +3510,20 @@ export const useStore = create<CanopyState>((set, get) => ({
       .then((r) => set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks } })))
       .catch(() => {});
   },
-  openPanel: (id, into) =>
+  openPanel: (id, into) => {
+    // A window of one thing has no dock to put a panel in, so a panel asked
+    // for there opens in a window of its own (FR-084). The window's own
+    // panel is the one it shows already.
+    if (dockless() && !shownHere(id)) {
+      openPanelWindow(id);
+      return;
+    }
     set((s) => {
       const next = dockPanel(s, id, into);
       // a panel shell another device opened here waits for its panel
       return { ...next, terms: dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, next.panels, skipped(s.hiddenTerms)) };
-    }),
+    });
+  },
   showPanel: (id) =>
     set((s) => (s.panels.includes(id) ? { activePanel: id, dockLayout: activate(laidOut(s), id) } : {})),
   openRepo: (id, mods) => {
@@ -3655,11 +3663,12 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   popOut: (id) => {
     // the window first: a blocked popup leaves the panel where it was.
-    // A chat's panel has a window of its own (RunSolo, FR-047); any other
-    // reserved panel is no repo's and has none
+    // A chat's, an agent's and a popup's panel each have a window of their
+    // own (FR-047, FR-084); the command line's has none, since its
+    // transcript is this page's
     if (!get().panels.includes(id)) return;
-    const runId = runOfPanel(id);
-    const win = runId !== null ? popOutRun(runId) : isReservedPanel(id) ? null : popOutWindow(id);
+    const item = itemOfPanel(id);
+    const win = item ? popOutItem(item) : isReservedPanel(id) ? null : popOutWindow(id);
     if (!win) return;
     get().claimPanel(id);
     // a window closed before it loads never says hello: then it comes back
@@ -5156,9 +5165,11 @@ export const useStore = create<CanopyState>((set, get) => ({
     const repo = info && s.repos.find((r) => r.id === info.repoId);
     if (!info || !repo) return;
     // a solo or shell window has no strip or dock of its own to put a tab
-    // in: it becomes the shell's own window instead
+    // in: it becomes the shell's own window instead. A popup's window is a
+    // list that stays up, so the shell gets a window of its own (FR-084).
     if (dockless()) {
-      window.location.assign(shellUrlFor(repo.id, id));
+      if (parseRoute(window.location.search).popup !== null) popShell(repo.id, id, "window");
+      else window.location.assign(shellUrlFor(repo.id, id));
       return;
     }
     const tab: TermTab = s.terms.find((t) => t.id === id) ?? {
@@ -5919,7 +5930,23 @@ function loneWindow(): boolean {
 export function dockless(): boolean {
   if (typeof window === "undefined") return false;
   const route = parseRoute(window.location.search);
-  return route.solo || route.shell || route.section !== null || route.agent !== null;
+  return route.solo || route.shell || route.section !== null || route.agent !== null || route.popup !== null;
+}
+
+/** whether this window of one thing is `id`'s own: the repo it names, or
+ *  the panel it shows */
+function shownHere(id: string): boolean {
+  const route = parseRoute(window.location.search);
+  return route.repo === id || panelOfWindow(route) === id;
+}
+
+/** A panel in a window of its own, from a window with no dock: a chat's,
+ *  an agent's or a popup's as its item's window, a repo's as its solo
+ *  window. The command line's has none. */
+function openPanelWindow(id: string): void {
+  const item = itemOfPanel(id);
+  if (item) openItemWindow(item);
+  else if (!isReservedPanel(id)) openElsewhere(id, "window");
 }
 
 /** The latest clips, for tailchan's "copy the latest", whether or not this

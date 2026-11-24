@@ -24,6 +24,8 @@ describe("windowKindOf", () => {
     expect(windowKindOf({ solo: true, shell: false, section: null })).toBe("solo");
     expect(windowKindOf({ solo: false, shell: true, section: null })).toBe("shell");
     expect(windowKindOf({ solo: false, shell: false, section: "changes" })).toBe("section");
+    expect(windowKindOf({ solo: false, shell: false, section: null, agent: { card: null, follow: true } })).toBe("agent");
+    expect(windowKindOf({ solo: false, shell: false, section: null, popup: "inbox" })).toBe("popup");
   });
 });
 

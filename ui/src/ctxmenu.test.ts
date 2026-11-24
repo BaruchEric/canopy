@@ -9,6 +9,8 @@ import {
   headingInto,
   inTriangle,
   isFact,
+  itemMark,
+  itemOf,
   placeAt,
   placeSub,
   placeUnder,
@@ -212,12 +214,40 @@ describe("ctxSubjects", () => {
     expect(ctxSubjects([node("li", [], { "data-kb": "trigger:mac:e1" })])).toEqual([{ kind: "trigger", id: "mac:e1" }]);
     expect(ctxSubjects([node("article", ["bt"], { "data-card": "c1" })])).toEqual([{ kind: "agent", id: "c1" }]);
   });
-  test("an inbox row in the dock's waiting panel is the row, not a repo panel", () => {
-    const chain = [node("li", ["inbox-item"], { "data-kb": "inbox:ask:9" }), node("section", ["panel", "waiting-panel"])];
-    expect(ctxSubjects(chain)).toEqual([{ kind: "inbox", key: "ask:9" }]);
+  test("an inbox row in the dock's waiting panel is the row, then the panel it is in, which is no repo's", () => {
+    const chain = [node("li", ["inbox-item"], { "data-kb": "inbox:ask:9" }), node("section", ["panel", "waiting-panel"], { "data-panel": "/waiting" })];
+    expect(ctxSubjects(chain)).toEqual([
+      { kind: "inbox", key: "ask:9" },
+      { kind: "dock", id: "/waiting", head: false },
+    ]);
+  });
+  test("a panel that is no repo's, its head told apart from its body (FR-084)", () => {
+    const panel = node("section", ["panel", "run-panel"], { "data-panel": "/run/r1" });
+    expect(ctxSubjects([node("div", ["panel-body"]), panel])).toEqual([{ kind: "dock", id: "/run/r1", head: false }]);
+    expect(ctxSubjects([node("span"), node("header", ["panel-head"]), panel])).toEqual([{ kind: "dock", id: "/run/r1", head: true }]);
+    // the attribute alone, off a panel, names nothing
+    expect(ctxSubjects([node("div", [], { "data-panel": "/run/r1" })])).toEqual([]);
+  });
+  test("a popup, a sheet's chat or a tab beside shells is the item it shows", () => {
+    expect(ctxSubjects([node("li"), node("div", ["settings-pop"], { "data-item": "popup:inbox" })])).toEqual([{ kind: "item", item: "popup", ref: "inbox" }]);
+    expect(ctxSubjects([node("div", ["sheet", "run-tab"], { "data-item": "run:mini|r1" })])).toEqual([{ kind: "item", item: "run", ref: "mini|r1" }]);
+    // an agent's card id has a colon of its own
+    expect(ctxSubjects([node("div", ["agent-tab"], { "data-item": "agent:claude:abc" })])).toEqual([{ kind: "item", item: "agent", ref: "claude:abc" }]);
+  });
+  test("an item inside a dock panel is the panel's, which speaks for it", () => {
+    const chain = [node("div", ["popup-tab"], { "data-item": "popup:tasks" }), node("div", ["panel-body"]), node("section", ["panel", "popup-panel"], { "data-panel": "/popup/tasks" })];
+    expect(ctxSubjects(chain)).toEqual([{ kind: "dock", id: "/popup/tasks", head: false }]);
   });
   test("nothing known is nothing", () => {
     expect(ctxSubjects([node("div"), node("main", ["main"])])).toEqual([]);
+  });
+});
+
+describe("itemOf", () => {
+  test("reads a mark back, and only one an item has", () => {
+    expect(itemOf(itemMark({ kind: "run", ref: "r1" }))).toEqual({ item: "run", ref: "r1" });
+    expect(itemOf(itemMark({ kind: "agent", ref: "codex:a:b" }))).toEqual({ item: "agent", ref: "codex:a:b" });
+    for (const v of [undefined, "", "run", "run:", ":r1", "section:changes", "repo:x"]) expect(itemOf(v)).toBeNull();
   });
 });
 

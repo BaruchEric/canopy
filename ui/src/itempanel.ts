@@ -10,10 +10,11 @@
  * itempanel.test.ts.
  */
 
-import { agentPanel, isAgentPanel } from "./agentpanel";
+import { agentPanel, cardOfPanel, isAgentPanel } from "./agentpanel";
 import { isCliPanel } from "./cli";
 import { HEALTH_PANEL, isHealthPanel } from "./health";
-import { isPopupName, type PopupName, type TabRef } from "./sectiontabs";
+import type { Route } from "./routes";
+import { isPopupName, type ItemKind, type PopupName, type TabRef } from "./sectiontabs";
 import { WAITING_PANEL, isWaitingPanel } from "./waiting";
 
 const RUN = "/run/";
@@ -55,9 +56,33 @@ export function panelOfItem(item: Pick<TabRef, "kind" | "ref">): string | null {
   }
 }
 
+/** The item a panel shows, `panelOfItem` read backwards: a run, an agent or
+ *  a popup, "waiting on you" and health among the popups. Null for a
+ *  repo's panel and for the command line's, which is no item. */
+export function itemOfPanel(id: string): { kind: ItemKind; ref: string } | null {
+  const run = runOfPanel(id);
+  if (run !== null) return { kind: "run", ref: run };
+  const card = cardOfPanel(id);
+  if (card !== null) return { kind: "agent", ref: card };
+  const popup = popupOfPanel(id);
+  return popup ? { kind: "popup", ref: popup } : null;
+}
+
+/** The dock panel a window of one thing shows (FR-084), which is the name
+ *  a popped-out window speaks under on the panes channel: a chat's, a
+ *  popup's, one agent's (the board's focus pane follows the board and is no
+ *  panel), else the repo the window names. */
+export function panelOfWindow(route: Pick<Route, "run" | "popup" | "agent" | "repo">): string | null {
+  if (route.run !== null) return runPanel(route.run);
+  if (route.popup !== null) return popupPanel(route.popup);
+  if (route.agent !== null) return route.agent.card !== null && !route.agent.follow ? agentPanel(route.agent.card) : null;
+  return route.repo;
+}
+
 /** a dock panel that is no repo's: "waiting on you", the command line's
  *  transcript, health, an agent's, a run's or a popup's. No scan prunes
- *  one, and neither pops out or takes a bench. */
+ *  one and none takes a bench. Each pops out as its item's window
+ *  (`itemOfPanel`) but the command line's, whose transcript is the page's. */
 export const isReservedPanel = (id: string): boolean =>
   isWaitingPanel(id) || isCliPanel(id) || isHealthPanel(id) || isAgentPanel(id) || isRunPanel(id) || isPopupPanel(id);
 

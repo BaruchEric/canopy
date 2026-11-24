@@ -1,5 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { managerHere, managerNew, managerUrl, newKindHere, parseRoute, popupFeatures, runUrl, soloUrl, sproutHere, viewOf } from "./routes";
+import {
+  agentUrl,
+  isOwnWindow,
+  itemWindow,
+  managerHere,
+  managerNew,
+  managerUrl,
+  newKindHere,
+  pageUrl,
+  parseRoute,
+  popupFeatures,
+  popupUrl,
+  runUrl,
+  soloUrl,
+  sproutHere,
+  viewOf,
+} from "./routes";
 
 const features = (w: number, h: number): Record<string, number> => {
   const out: Record<string, number> = {};
@@ -35,7 +51,7 @@ describe("parseRoute", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=solo&section=history").section).toBeNull();
     expect(parseRoute("?view=section&section=history").section).toBeNull();
   });
-  const none = { repo: null, solo: false, shell: false, term: null, section: null, task: null, ask: null, popped: false, agent: null, run: null };
+  const none = { repo: null, solo: false, shell: false, term: null, section: null, task: null, ask: null, popped: false, agent: null, run: null, popup: null };
   test("reads the repo and the shell view", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=shell")).toEqual({
       repo: "web-apps/ripe",
@@ -48,6 +64,7 @@ describe("parseRoute", () => {
       popped: false,
       agent: null,
       run: null,
+      popup: null,
     });
     expect(parseRoute("?view=shell")).toEqual(none);
   });
@@ -74,6 +91,7 @@ describe("parseRoute", () => {
       popped: false,
       agent: null,
       run: null,
+      popup: null,
     });
     expect(parseRoute("?repo=web-apps/ripe")).toEqual({
       repo: "web-apps/ripe",
@@ -86,6 +104,7 @@ describe("parseRoute", () => {
       popped: false,
       agent: null,
       run: null,
+      popup: null,
     });
     // solo needs a repo to be solo about
     expect(parseRoute("?view=solo")).toEqual(none);
@@ -131,7 +150,102 @@ test("a popped solo window says so in its URL, and only then", () => {
   }
 });
 
+describe("a popup's window (FR-084)", () => {
+  test("names its popup, and only one the top bar has", () => {
+    expect(parseRoute("?view=popup&popup=inbox").popup).toBe("inbox");
+    expect(parseRoute("?view=popup&popup=waiting").popup).toBe("waiting");
+    expect(parseRoute("?view=popup&popup=weather").popup).toBeNull();
+    expect(parseRoute("?view=popup").popup).toBeNull();
+    // a repo's window is never a popup's, and neither is another view
+    expect(parseRoute("?repo=a/b&view=popup&popup=inbox").popup).toBeNull();
+    expect(parseRoute("?view=health&popup=inbox").popup).toBeNull();
+  });
+
+  test("is popped only when it says so", () => {
+    expect(parseRoute("?view=popup&popup=inbox").popped).toBe(false);
+    expect(parseRoute("?view=popup&popup=inbox&popped=1").popped).toBe(true);
+    expect(parseRoute("?view=popup&popup=weather&popped=1").popped).toBe(false);
+  });
+});
+
+test("an agent's window is a dock panel's on one agent, never the board's focus pane", () => {
+  expect(parseRoute("?view=agent&card=claude:abc&popped=1").popped).toBe(true);
+  expect(parseRoute("?view=agent&card=claude:abc").popped).toBe(false);
+  expect(parseRoute("?view=agent&card=claude:abc&follow=1&popped=1").popped).toBe(false);
+  expect(parseRoute("?view=agent&popped=1").popped).toBe(false);
+});
+
+test("isOwnWindow: a window of one thing, and not the whole page on a view", () => {
+  for (const q of [
+    "?repo=a/b&view=solo",
+    "?repo=a/b&view=shell",
+    "?repo=a/b&view=section&section=history",
+    "?view=run&run=1a2b3c4d",
+    "?view=agent&card=claude:abc",
+    "?view=agent&follow=1",
+    "?view=popup&popup=tasks",
+  ]) {
+    expect(isOwnWindow(parseRoute(q))).toBe(true);
+  }
+  for (const q of ["", "?view=agents", "?repo=a/b", "?view=manager&run=1a2b3c4d", "?view=popup&popup=weather"]) {
+    expect(isOwnWindow(parseRoute(q))).toBe(false);
+  }
+});
+
+describe("an item's window (FR-084)", () => {
+  const withWindow = (fn: () => void) => {
+    const g = globalThis as unknown as { window?: unknown };
+    g.window = { location: { href: "http://x/?view=agents&ask=1#frag" } };
+    try {
+      fn();
+    } finally {
+      delete g.window;
+    }
+  };
+
+  test("each kind's address reads back as that window, with nothing of this page's", () => {
+    withWindow(() => {
+      expect(agentUrl("claude:abc")).toBe("http://x/?view=agent&card=claude%3Aabc");
+      expect(parseRoute(new URL(agentUrl("claude:abc")).search).agent).toEqual({ card: "claude:abc", follow: false });
+      expect(parseRoute(new URL(agentUrl("claude:abc", { popped: true })).search).popped).toBe(true);
+      expect(popupUrl("tasks")).toBe("http://x/?view=popup&popup=tasks");
+      expect(parseRoute(new URL(popupUrl("tasks", { popped: true })).search)).toMatchObject({ popup: "tasks", popped: true });
+    });
+  });
+
+  test("a plain window and a popped one keep apart by name, so neither takes the other's place", () => {
+    withWindow(() => {
+      expect(itemWindow({ kind: "run", ref: "r1" })).toEqual({ name: "canopy:run:r1", url: "http://x/?view=run&run=r1", slim: false });
+      // the name a chat's popped window had before every item got one
+      expect(itemWindow({ kind: "run", ref: "r1" }, true)).toEqual({ name: "canopy:pop:run:r1", url: "http://x/?view=run&run=r1&popped=1", slim: false });
+      expect(itemWindow({ kind: "agent", ref: "claude:abc" })?.name).toBe("canopy:agent:claude:abc");
+      expect(itemWindow({ kind: "popup", ref: "inbox" })).toEqual({ name: "canopy:popup:inbox", url: "http://x/?view=popup&popup=inbox", slim: true });
+      expect(itemWindow({ kind: "popup", ref: "inbox" }, true)?.url).toBe("http://x/?view=popup&popup=inbox&popped=1");
+    });
+  });
+
+  test("a popup by a name the top bar has not has no window", () => {
+    withWindow(() => {
+      expect(itemWindow({ kind: "popup", ref: "weather" })).toBeNull();
+    });
+  });
+
+  test("a view's window is the whole page on that view, the grove with no view named", () => {
+    withWindow(() => {
+      expect(pageUrl("agents")).toBe("http://x/?view=agents");
+      expect(pageUrl("git")).toBe("http://x/");
+    });
+  });
+});
+
 describe("popupFeatures", () => {
+  test("a list's window is a column wide, on any screen", () => {
+    const slim = (w: number, h: number): number => Number(/width=(\d+)/.exec(popupFeatures({ width: w, height: h }, true))?.[1]);
+    expect(slim(1512, 945)).toBe(440);
+    expect(slim(2560, 1440)).toBe(640);
+    expect(slim(1920, 1080)).toBe(538);
+  });
+
   test("takes a wide slice of the screen and all of its usable height", () => {
     const f = features(1512, 945);
     expect(f.width).toBe(832);

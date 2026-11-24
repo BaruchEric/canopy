@@ -57,7 +57,9 @@ import { setBase, setRegistry } from "./registry";
 import type { BackendAuth } from "./callerToken";
 import { hasOtherBackend, RETRY_FIRST } from "./backends";
 import { WAITING_PANEL } from "./waiting";
-import { runPanel } from "./itempanel";
+import { popupPanel, runPanel } from "./itempanel";
+import { agentPanel } from "./agentpanel";
+import { CLI_PANEL } from "./cli";
 import { itemTabId } from "./sectiontabs";
 import { DEFAULT_CAPACITY, emptyCapacity } from "../../src/core/capacity";
 import { needs } from "../../src/core/callers";
@@ -2067,7 +2069,7 @@ describe("several backends", () => {
     expect(s.root).toBe("/a");
   });
 
-  test("a home scan keeps the waiting on you panel, its width and its folds, and it never pops out", async () => {
+  test("a home scan keeps the waiting on you panel, its width and its folds, and it takes no bench", async () => {
     await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }), backendAnswers(scanOf("/b", [repo("proj")]), []));
     await settle();
     useStore.getState().openPanel("proj");
@@ -2079,7 +2081,6 @@ describe("several backends", () => {
     expect(s.panels).toContain(WAITING_PANEL);
     expect(s.panelWidths[WAITING_PANEL]).toBe(600);
     expect(sectionsFor(s.closedSections, WAITING_PANEL)).toEqual(expect.arrayContaining(["inbox", "repos", "failed"]));
-    useStore.getState().popOut(WAITING_PANEL);
     useStore.getState().bringProject(WAITING_PANEL);
     s = useStore.getState();
     expect(s.panels).toContain(WAITING_PANEL);
@@ -4212,16 +4213,60 @@ describe("chats, agents and popups as dock panels (FR-047)", () => {
       s = useStore.getState();
       expect(s.panels).toEqual(["a", chat]);
       expect(s.popped).toEqual({});
-      // a blocked window leaves the panel where it was; the other reserved
-      // panels have no window of their own
+      // a blocked window leaves the panel where it was
       win = null;
       useStore.getState().popOut(chat);
+      expect(opened).toHaveLength(2);
       expect(useStore.getState().panels).toEqual(["a", chat]);
       win = { focus: () => {} };
+      // "waiting on you" and an agent's panel go to their own windows too
+      // (FR-084), each named apart and saying it is popped
       useStore.getState().openPanel(WAITING_PANEL);
       useStore.getState().popOut(WAITING_PANEL);
-      expect(opened).toHaveLength(2);
-      expect(useStore.getState().panels).toContain(WAITING_PANEL);
+      const agent = agentPanel("claude:abc");
+      useStore.getState().openPanel(agent);
+      useStore.getState().popOut(agent);
+      expect(opened.slice(2).map((o) => o.name)).toEqual(["canopy:pop:popup:waiting", "canopy:pop:agent:claude:abc"]);
+      expect(opened.slice(2).map((o) => new URL(o.url).search)).toEqual(["?view=popup&popup=waiting&popped=1", "?view=agent&card=claude%3Aabc&popped=1"]);
+      s = useStore.getState();
+      expect(s.panels).toEqual(["a", chat]);
+      expect(Object.keys(s.popped).sort()).toEqual([agent, WAITING_PANEL].sort());
+      // the command line's transcript is this page's, so its panel has no window
+      useStore.getState().openPanel(CLI_PANEL);
+      useStore.getState().popOut(CLI_PANEL);
+      expect(opened).toHaveLength(4);
+      expect(useStore.getState().panels).toContain(CLI_PANEL);
+    } finally {
+      delete w.window;
+      useStore.setState({ repos: [], loaded: false, popped: {}, recalled: [] });
+    }
+  });
+
+  test("a window of one thing has no dock, so a panel asked for there opens in a window of its own (FR-084)", () => {
+    const w = globalThis as unknown as { window?: unknown };
+    const opened: string[] = [];
+    const at = (search: string) => {
+      w.window = { location: { href: `http://a.test/${search}`, search }, open: (_url: string, name: string) => (opened.push(name), { focus: () => {} }) };
+    };
+    try {
+      useStore.setState({ repos: [repo("a"), repo("b")], loaded: true, popped: {}, recalled: [] });
+      // a popup's window: a repo's panel, a chat's and another popup's
+      at("?view=popup&popup=waiting");
+      useStore.getState().openPanel("a");
+      useStore.getState().openPanel(runPanel("1a2b3c4d"));
+      useStore.getState().openPanel(popupPanel("inbox"));
+      expect(opened).toEqual(["canopy:a", "canopy:run:1a2b3c4d", "canopy:popup:inbox"]);
+      expect(useStore.getState().panels).toEqual([]);
+      // the command line's transcript has no window, and the window's own
+      // panel is the one it shows already
+      useStore.getState().openPanel(CLI_PANEL);
+      useStore.getState().openPanel(WAITING_PANEL);
+      expect(opened).toHaveLength(3);
+      // a repo's solo window: another repo's panel, never its own
+      at("?repo=a&view=solo");
+      useStore.getState().openPanel("a");
+      useStore.getState().openPanel("b");
+      expect(opened.slice(3)).toEqual(["canopy:b"]);
     } finally {
       delete w.window;
       useStore.setState({ repos: [], loaded: false, popped: {}, recalled: [] });

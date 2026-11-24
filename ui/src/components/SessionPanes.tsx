@@ -9,6 +9,7 @@ import { atFrom, dropBox, edgeAt, leaveGroup, pruneGroups, setAt, seamsOf, split
 import { connOf, dockless, useStore } from "../store";
 import { seamTag, shareWord } from "../seamtag";
 import { openView } from "../clirun";
+import { openItemWindow, openSectionElsewhere, parseRoute, popShell } from "../routes";
 import type { TermTab } from "../term";
 import { isItemTab, itemTabsAt, sectionTabsAt, type ItemTab, type PageTab, type SectionPlace, type SectionTab } from "../sectiontabs";
 import { SECTION_WORD, type SectionKey } from "../surface";
@@ -632,6 +633,14 @@ export function TabMenu({
             move {moveOut.label}
           </button>
         )}
+        <button
+          type="button"
+          role="menuitem"
+          title="A window of its own that stays up beside the page; the tab stays here (FR-084)"
+          onClick={act(() => (isItemTab(page) ? openItemWindow(page) : openSectionElsewhere(page.repoId, page.key, "window")))}
+        >
+          open in its own window
+        </button>
         {onUntab &&
           (isItemTab(page) ? (
             <>
@@ -721,6 +730,18 @@ export function TabMenu({
       {moveOut && (
         <button type="button" role="menuitem" title="Into that shell window, as a tab of its own; drag the tab onto a pane there to split instead" onClick={act(() => moveOut.run(id))}>
           move {moveOut.label}
+        </button>
+      )}
+      {/* the ranger's session is no repo's, and a shell window is the
+          shell's own window already */}
+      {!tab.ranger && !parseRoute(window.location.search).shell && (
+        <button
+          type="button"
+          role="menuitem"
+          title="This shell in a window of its own, which joins it; the tab stays here (FR-084)"
+          onClick={act(() => popShell(tab.repoId, tab.id, "window", tab.task))}
+        >
+          open in its own window
         </button>
       )}
       {onMove && (

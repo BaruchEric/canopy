@@ -16,6 +16,10 @@
 // 1440 and 390px on a goal (its @ menu, a file's chip) and on a project (the
 // words and chip kept, and at 1440 start project sending the form), opened
 // from its address, the command line's new and the top bar's + new.
+// It drives a right-click's "open in its own window" (FR-084): a repo's panel
+// popped out and back, "waiting on you" in a window of its list, a window
+// that offers none of itself, a repo's row opened from that list, the view's
+// own window, and a phone's copy.
 // It also drives the level (FR-079): at intermediate the quiet top bar in
 // one row with its menu, a turn's commands folded in a run's timeline and
 // the start box, which opens on a new worktree where the checkout is in
@@ -1408,6 +1412,117 @@ try {
       check(shown && state.focused && state.search === "?view=manager&new=1", `the top bar's + new opens the box ${state.focused ? "focused" : "not focused"} (${state.search})`);
       await page.close();
     }
+  }
+
+  {
+    // A right-click's "open in its own window" (FR-084). A repo's panel
+    // pops out of the dock and comes back from its window's "back to the
+    // dock"; "waiting on you" goes to a window of its list and comes back
+    // when that window closes; a window of one thing never offers itself;
+    // and a phone gets a copy, with the panel left in the dock.
+    const rowsAt = async (p: Page, sel: string, at: { x: number; y: number }) => {
+      await p.locator(sel).first().click({ button: "right", position: at });
+      const shown = await p.locator(".ctx-menu").first().waitFor({ timeout: 5000 }).then(() => true, () => false);
+      // the menu settles in over 140ms
+      await p.waitForTimeout(300);
+      return shown ? (await p.locator('.ctx-menu [role="menuitem"]').allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim()) : [];
+    };
+    const pick = async (p: Page) => {
+      const [win] = await Promise.all([
+        p.context().waitForEvent("page", { timeout: 8000 }).catch(() => null),
+        p.locator('.ctx-menu [role="menuitem"]', { hasText: "open in its own window" }).first().click({ timeout: 4000 }).catch(() => undefined),
+      ]);
+      await win?.waitForLoadState("load");
+      return win;
+    };
+    const ROW = "open in its own window";
+    const page = await fresh();
+    await page.addInitScript(() => localStorage.setItem("canopy.settings", JSON.stringify({ level: "advanced", onboarded: true })));
+    await page.goto(`${base}/`, { waitUntil: "load" });
+    await page.waitForSelector(".app", { timeout: 20_000 });
+    await page.locator(".app-view").getByText("demo", { exact: true }).last().click();
+    await page.waitForSelector(".panel[data-repo]", { timeout: 10_000 });
+    // a panel still settling in moves from under a menu, which closes it
+    await page.waitForTimeout(1200);
+    const head = (await rowsAt(page, ".panel[data-repo] .panel-head", { x: 200, y: 10 })).filter((t) => t.length > 1);
+    check(head[0] === `${ROW} demo`, `a right-click on a repo panel's head leads with "${ROW}" ("${head.slice(0, 2).join('", "')}")`);
+    await page.screenshot({ path: `${shots}/window-row.png` });
+    const solo = await pick(page);
+    const soloAt = solo ? new URL(solo.url()).search : "";
+    await solo?.waitForSelector(".solo .panel", { timeout: 10_000 }).catch(() => undefined);
+    await page.waitForTimeout(700);
+    const left = await page.locator(".panel[data-repo]").count();
+    check(soloAt === "?repo=demo&view=solo&popped=1" && left === 0, `the row pops the panel out to its own window (${soloAt || "no window"}), and the dock lets it go (${left} left)`);
+    if (solo) {
+      const own = await rowsAt(solo, ".panel[data-repo] .panel-head", { x: 200, y: 10 });
+      check(own.length > 0 && !own.includes(`${ROW} demo`), `the window's own panel offers no window of itself (${own.filter((t) => t.startsWith(ROW)).join(", ") || "none"})`);
+      await solo.keyboard.press("Escape");
+      await solo.getByRole("button", { name: "back to the dock" }).click();
+      await page.waitForTimeout(1500);
+      const back = await page.locator(".panel[data-repo]").count();
+      check(back === 1 && solo.isClosed(), `"back to the dock" puts the panel back and closes the window (${back} in the dock, window ${solo.isClosed() ? "closed" : "open"})`);
+    }
+
+    await page.locator(".topbar").first().click({ position: { x: 300, y: 5 } });
+    await page.keyboard.press("w");
+    const docked = await page.waitForSelector('.panel[data-panel="/waiting"]', { timeout: 5000 }).then(() => true, () => false);
+    await page.waitForTimeout(1200);
+    const waiting = docked ? await rowsAt(page, '.panel[data-panel="/waiting"] .panel-head', { x: 150, y: 10 }) : [];
+    check(waiting[0] === `${ROW} waiting on you`, `"waiting on you", a panel that is no repo's, leads with it too ("${waiting[0] ?? "no menu"}")`);
+    const list = docked ? await pick(page) : null;
+    const listAt = list ? new URL(list.url()).search : "";
+    await list?.waitForSelector(".popup-solo .waiting-body", { timeout: 10_000 }).catch(() => undefined);
+    await page.waitForTimeout(700);
+    const gone = await page.locator('.panel[data-panel="/waiting"]').count();
+    if (list) {
+      // the window opens a column wide, like the popover a popup's list hangs in
+      await list.setViewportSize({ width: 440, height: 800 });
+      await list.waitForTimeout(400);
+      const seen = await list.evaluate(() => ({
+        text: document.querySelector(".popup-solo-main")?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+        wider: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      }));
+      check(
+        listAt === "?view=popup&popup=waiting&popped=1" && gone === 0 && seen.text.includes("twin") && seen.wider <= 0,
+        `its window (${listAt}) holds the list at 440px with nothing off the side (${seen.wider}px), and the dock lets the panel go (${gone} left): "${seen.text.slice(0, 40)}"`,
+      );
+      await list.screenshot({ path: `${shots}/window-popup.png` });
+      const bar = await rowsAt(list, ".popup-solo .topbar", { x: 200, y: 20 });
+      check(bar.length > 0 && !bar.some((t) => t.includes("own window")), `a popup's window offers no window of its view (${bar.filter((t) => t.includes("window")).join(", ") || "none"})`);
+      // a repo's row has no dock to open a panel in, so the repo gets a window of its own
+      await list.keyboard.press("Escape");
+      const [repoWin] = await Promise.all([
+        page.context().waitForEvent("page", { timeout: 8000 }).catch(() => null),
+        list.locator(".popup-solo-main .waiting-row", { hasText: "twin" }).first().click({ timeout: 4000 }).catch(() => undefined),
+      ]);
+      const repoAt = repoWin ? new URL(repoWin.url()).search : "";
+      check(repoAt === "?repo=twin&view=solo" && new URL(list.url()).search === listAt, `a repo's row in that window opens the repo's own window (${repoAt || "nothing"}) and the list stays`);
+      await repoWin?.close();
+      await list.close();
+      const returned = await page.waitForSelector('.panel[data-panel="/waiting"]', { timeout: 6000 }).then(() => true, () => false);
+      check(returned, "closing the window brings the panel back to the dock");
+    } else {
+      check(false, `"waiting on you" opened no window (${waiting.join(", ") || "no menu"})`);
+    }
+    const view = await rowsAt(page, ".app-view", { x: 400, y: 700 });
+    check(view.some((t) => t.startsWith("this view in its own window")), `a right-click on nothing offers the view's own window (${view.filter((t) => t.includes("window")).join(", ") || "none"})`);
+    await page.close();
+
+    const phone = await fresh(undefined, false, true);
+    await phone.addInitScript(() => localStorage.setItem("canopy.settings", JSON.stringify({ level: "advanced", onboarded: true })));
+    await phone.goto(`${base}/?repo=demo`, { waitUntil: "load" });
+    await phone.waitForSelector(".panel[data-repo]", { timeout: 20_000 });
+    await phone.waitForTimeout(1200);
+    // a finger's long press arrives as the same event a right-click sends
+    await phone.locator(".panel[data-repo] .panel-head").first().dispatchEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 80, button: 2 });
+    await phone.locator(".ctx-menu").first().waitFor({ timeout: 5000 }).catch(() => undefined);
+    await phone.waitForTimeout(300);
+    const copy = await pick(phone);
+    const copyAt = copy ? new URL(copy.url()).search : "";
+    const kept = await phone.locator(".panel[data-repo]").count();
+    check(copyAt === "?repo=demo&view=solo" && kept === 1, `on a phone the row opens a copy (${copyAt || "no window"}) and the panel stays in the dock (${kept})`);
+    await phone.screenshot({ path: `${shots}/window-row-phone.png` });
+    await phone.close();
   }
 
   {
