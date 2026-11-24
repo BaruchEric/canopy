@@ -16343,6 +16343,574 @@ span.effective-flag:not(:first-child) {
   padding: 0;
 }
 
+/* ---------- the health page (components/HealthPage.tsx, FR-087) ----------
+   A chart recorder. Every tape spans the page's one window, so a moment
+   sits at the same fraction of every tape: well is a hairline, healing a
+   half block, down a full block, off a dashed line and nothing recorded a
+   row of dots. A pointer on any tape draws that moment across all of them
+   (.scrub, --hp-f) and the tip says what held then. The base .health-view
+   is shared with the other pages, so everything here hangs off
+   .health-page. */
+.health-view.health-page {
+  --hp-label: minmax(9rem, 15rem);
+  --hp-word: 4.6em;
+  /* the page's top padding, which a sticky head climbs back over */
+  --hp-pad: calc(22px * var(--ui));
+  max-width: calc(1440px * var(--ui));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: calc(30px * var(--ui));
+  align-content: start;
+  padding: var(--hp-pad) 20px 48px;
+}
+@media (min-width: 1440px) {
+  .health-view.health-page {
+    grid-template-columns: minmax(0, 1fr) minmax(260px, calc(340px * var(--ui)));
+    column-gap: calc(44px * var(--ui));
+  }
+  .hp-hero,
+  .hp-trouble {
+    grid-column: 1 / -1;
+  }
+}
+.health-page .moss {
+  color: var(--moss);
+}
+.health-page .lichen {
+  color: var(--lichen);
+}
+.health-page .rust {
+  color: var(--rust);
+}
+.health-page .faint,
+.hp-faint {
+  color: var(--ink-faint);
+}
+.hp-why {
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+
+/* the verdict and each backend's pulse */
+.hp-hero {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.hp-verdict {
+  margin: 0;
+  font-size: calc(var(--t-3xl) * 1.4);
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  text-wrap: balance;
+}
+.hp-hero.warn .hp-verdict {
+  color: var(--lichen);
+}
+.hp-hero.bad .hp-verdict {
+  color: var(--rust);
+}
+.hp-sub {
+  margin: 0;
+  max-width: 72ch;
+  font-size: var(--t-lg);
+  color: var(--ink-dim);
+}
+.hp-pulses {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: center;
+  column-gap: calc(16px * var(--ui));
+  row-gap: 8px;
+  margin-top: calc(18px * var(--ui));
+}
+.hp-pulse {
+  display: contents;
+}
+.hp-pulse-name {
+  font-size: var(--t-lg);
+  font-weight: 600;
+  color: var(--ink);
+}
+.hp-pulse-word {
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-md);
+  padding-left: 6px;
+}
+.hp-axis {
+  grid-column: 2;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: -2px;
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* the tape */
+.hp-tape {
+  position: relative;
+  display: block;
+  min-width: 0;
+  height: calc(14px * var(--ui));
+  background: radial-gradient(circle, var(--hair2) 0.9px, transparent 1.3px) 0 50% / 5px 5px repeat-x;
+  cursor: crosshair;
+  /* a finger dragging along a tape scrubs it; up and down still scroll */
+  touch-action: pan-y;
+}
+.hp-tape.big {
+  height: calc(22px * var(--ui));
+}
+.hp-mark {
+  position: absolute;
+  top: 50%;
+  left: min(calc(var(--l) * 100%), calc(100% - 3px));
+  width: max(3px, calc(var(--w) * 100%));
+  height: 2px;
+  transform: translateY(-50%);
+  border-radius: 1px;
+  background: currentColor;
+}
+.hp-tape.big .hp-mark.ok {
+  height: 3px;
+}
+.hp-mark.healing,
+.hp-mark.unknown {
+  height: 60%;
+  z-index: 1;
+}
+.hp-mark.down,
+.hp-mark.gave-up {
+  height: 100%;
+  z-index: 1;
+}
+.hp-mark.off {
+  height: 2px;
+  background: repeating-linear-gradient(to right, currentColor 0 5px, transparent 5px 9px);
+  opacity: 0.8;
+}
+/* the recorder's pen, at the now end of a backend's pulse */
+.hp-pen {
+  position: absolute;
+  top: 50%;
+  right: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+  background: currentColor;
+  z-index: 2;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hp-pen {
+    animation: hp-pen 2.6s var(--ease) infinite;
+  }
+  @keyframes hp-pen {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 50%, transparent);
+    }
+    70%,
+    100% {
+      box-shadow: 0 0 0 7px transparent;
+    }
+  }
+}
+/* the moment under the pointer, on every tape */
+.hp-tape::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  left: calc(var(--hp-f, 0) * 100%);
+  width: 1px;
+  background: var(--ink);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.health-page.scrub .hp-tape::after {
+  opacity: 0.45;
+}
+.hp-tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 60;
+  display: grid;
+  gap: 2px;
+  max-width: 300px;
+  padding: 7px 10px;
+  border: 1px solid var(--float-edge);
+  border-radius: var(--r);
+  background: var(--float);
+  box-shadow: 0 8px 24px var(--float-shadow);
+  font-size: var(--t-sm);
+  pointer-events: none;
+}
+.hp-tip[hidden] {
+  display: none;
+}
+.hp-tip > :first-child {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.hp-tip > :nth-child(2) {
+  font-weight: 600;
+}
+.hp-tip > :last-child {
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.hp-tip > :last-child:empty {
+  display: none;
+}
+
+/* what needs you: callouts hung off a rail */
+.hp-trouble ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
+.hp-callout {
+  --rail: var(--ink-faint);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  row-gap: 3px;
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid var(--rail);
+  font-size: var(--t-md);
+}
+.hp-callout > :not(.hp-callout-head, .hp-acts) {
+  grid-column: 1 / -1;
+}
+.hp-callout > .hp-acts {
+  grid-row: 1;
+  grid-column: 2;
+}
+.hp-callout.rust {
+  --rail: var(--rust);
+}
+.hp-callout.lichen {
+  --rail: var(--lichen);
+}
+.hp-callout-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.hp-callout-head b,
+.hp-callout-label {
+  font-size: var(--t-lg);
+  font-weight: 600;
+  color: var(--ink);
+}
+.hp-callout-label {
+  text-align: left;
+}
+.hp-callout-label:hover,
+.hp-label:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--hair2);
+  text-underline-offset: 3px;
+}
+.hp-state {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.hp-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin-left: auto;
+}
+
+/* every check across backends */
+.hp-matrix {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+}
+.hp-row {
+  display: grid;
+  grid-template-columns: var(--hp-label) repeat(var(--hp-n), minmax(0, 1fr));
+  align-items: center;
+  column-gap: calc(20px * var(--ui));
+  min-height: calc(30px * var(--ui));
+  margin: 0 -8px;
+  padding: 0 8px;
+  border-radius: var(--r);
+}
+@media (hover: hover) {
+  .hp-section .hp-row:not(.hp-detail):hover {
+    background: var(--well);
+  }
+}
+.hp-row.open {
+  background: var(--well);
+  border-radius: var(--r) var(--r) 0 0;
+}
+.hp-colhead {
+  position: sticky;
+  top: calc(-1 * var(--hp-pad));
+  z-index: 4;
+  min-height: 0;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--bark0) 90%, transparent);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 1px 0 var(--hair);
+  font-size: var(--t-md);
+}
+.hp-colhead-note {
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+.hp-col {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.hp-col b {
+  color: var(--ink);
+}
+.hp-col span {
+  font-size: var(--t-sm);
+}
+.hp-section {
+  display: grid;
+}
+.hp-section + .hp-section {
+  margin-top: calc(18px * var(--ui));
+}
+.hp-colhead + .hp-section .hp-section-head {
+  border-top: 0;
+}
+.hp-section-head {
+  margin: 0 0 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hair);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+.hp-label {
+  min-width: 0;
+  padding: 5px 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+  font-size: var(--t-md);
+  line-height: 1.3;
+  color: var(--ink);
+}
+.hp-row.open .hp-label {
+  font-weight: 600;
+}
+.hp-cell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--hp-word);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.hp-word {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-sm);
+  font-variant-numeric: tabular-nums;
+}
+.hp-detail {
+  align-items: start;
+  padding-top: 4px;
+  padding-bottom: 14px;
+  background: var(--well);
+  border-radius: 0 0 var(--r) var(--r);
+}
+.hp-cell-detail {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+  font-size: var(--t-sm);
+}
+.hp-cell-on {
+  display: none;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+.hp-cell-detail .hp-acts {
+  margin: 2px 0 0 -8px;
+}
+.hp-log {
+  list-style: none;
+  display: grid;
+  gap: 2px;
+  margin: 6px 0 0;
+  padding: 0;
+  font-size: var(--t-xs);
+}
+.hp-log li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+}
+.hp-log time {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* the changes, and what is off */
+.hp-side {
+  display: grid;
+  align-content: start;
+  gap: calc(28px * var(--ui));
+  min-width: 0;
+}
+.hp-h {
+  margin: 0 0 10px;
+  font-size: var(--t-lg);
+  font-weight: 600;
+  color: var(--ink);
+}
+.hp-changes > p {
+  margin: 0;
+  font-size: var(--t-md);
+}
+.hp-change-list {
+  list-style: none;
+  display: grid;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding: 0;
+}
+.hp-change-list li {
+  display: grid;
+  grid-template-columns: 4.6em minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 1px;
+  font-size: var(--t-md);
+}
+.hp-change-list.days li {
+  grid-template-columns: 7.2em minmax(0, 1fr);
+}
+.hp-change-list time {
+  padding-top: 1px;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.hp-change-list b {
+  font-weight: 600;
+}
+.hp-change-list .hp-why {
+  grid-column: 2;
+  font-size: var(--t-sm);
+}
+.hp-off summary {
+  cursor: pointer;
+  width: fit-content;
+  font-size: var(--t-lg);
+  font-weight: 600;
+  color: var(--ink);
+}
+.hp-off summary:hover {
+  color: var(--ink-dim);
+}
+.hp-off ul {
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  font-size: var(--t-md);
+}
+.hp-off .hp-why {
+  display: block;
+  font-size: var(--t-sm);
+}
+
+@media (max-width: 1100px) {
+  .health-view.health-page {
+    --hp-label: minmax(8rem, 11rem);
+  }
+}
+/* a phone: each check's name over its line of tapes, a column per backend */
+@media (max-width: 760px) {
+  .health-view.health-page {
+    --hp-word: auto;
+    --hp-pad: 16px;
+    gap: 24px;
+    padding: var(--hp-pad) 16px 32px;
+  }
+  .hp-verdict {
+    font-size: calc(var(--t-3xl) * 1.15);
+  }
+  .hp-sub {
+    font-size: var(--t-md);
+  }
+  .hp-pulses {
+    column-gap: 10px;
+    margin-top: 12px;
+  }
+  .hp-pulse-word {
+    max-width: 10ch;
+    padding-left: 4px;
+  }
+  .hp-row {
+    grid-template-columns: repeat(var(--hp-n), minmax(0, 1fr));
+    column-gap: 12px;
+    row-gap: 0;
+    padding-bottom: 6px;
+  }
+  .hp-row > .hp-label {
+    grid-column: 1 / -1;
+    padding-bottom: 2px;
+  }
+  .hp-colhead-note {
+    display: none;
+  }
+  .hp-detail {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 14px;
+  }
+  .hp-detail > span:first-child {
+    display: none;
+  }
+  .hp-cell-on {
+    display: block;
+  }
+  .hp-cell {
+    gap: 6px;
+  }
+  .hp-callout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .hp-callout > .hp-acts {
+    grid-row: auto;
+    grid-column: 1;
+    order: 1;
+    justify-content: flex-start;
+    margin: 2px 0 0 -8px;
+  }
+  .hp-word {
+    font-size: var(--t-xs);
+  }
+}
+
 /* the triggers view: rules with their hook, then events by section */
 .trigger-view {
   display: grid;

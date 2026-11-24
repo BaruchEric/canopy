@@ -32,7 +32,7 @@ const when = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour:
 
 type HealCall = { kind: "idle" } | { kind: "busy" } | { kind: "failed"; error: string };
 
-function HealButton({ backend, check }: { backend: string; check: HealthCheck }) {
+export function HealButton({ backend, check }: { backend: string; check: HealthCheck }) {
   const healCheck = useStore((s) => s.healCheck);
   const [call, setCall] = useState<HealCall>({ kind: "idle" });
   const busy = call.kind === "busy";
@@ -66,7 +66,7 @@ function HealButton({ backend, check }: { backend: string; check: HealthCheck })
  *  check's definition, and for a task check the end of the task's last run.
  *  Either read may fail (a backend that went away, a task with no log yet)
  *  and the prompt goes without it. */
-async function fixAsk(repoId: string, check: HealthCheck): Promise<string> {
+export async function fixAsk(repoId: string, check: HealthCheck): Promise<string> {
   const def = await api.repoHealth(repoId).then(
     (info) => info.checks.find((c) => c.name === check.label),
     () => undefined,
@@ -75,10 +75,9 @@ async function fixAsk(repoId: string, check: HealthCheck): Promise<string> {
   return healthFixPrompt(check, def, log);
 }
 
-function HealthItem({ row, open }: { row: HealthRow; open: boolean }) {
+function HealthItem({ row }: { row: HealthRow }) {
   const { check } = row;
-  const [shown, setShown] = useState(open);
-  useEffect(() => setShown(open), [open]);
+  const [shown, setShown] = useState(false);
   const word = STATE_WORD[check.state];
   // the count stays until the check has held for a while; on a well row it reads as trouble
   const fails = check.state === "ok" ? 0 : check.fails;
@@ -130,10 +129,10 @@ function HealthItem({ row, open }: { row: HealthRow; open: boolean }) {
   );
 }
 
-/** Every check, grouped by backend and by canopy or repo, the broken first.
- *  `open` shows every row's history. `only` keeps one repo's group (its
- *  qualified id), for a repo's panel. */
-export function HealthList({ open = false, only }: { open?: boolean; only?: string }) {
+/** Every check, grouped by backend and by its server or repo, the broken
+ *  first. `only` keeps one repo's group (its qualified id), for a repo's
+ *  panel. The page draws its own (HealthPage.tsx). */
+export function HealthList({ only }: { only?: string }) {
   const rows = useHealthRows();
   const groups = useHealthGroups(rows).filter((g) => only === undefined || g.repoId === only);
   if (groups.length === 0) return <p className="health-empty">{only === undefined ? "No backend has said anything yet." : "No checks for this repo."}</p>;
@@ -144,7 +143,7 @@ export function HealthList({ open = false, only }: { open?: boolean; only?: stri
           {only === undefined && <h3 className="panel-label">{g.title}</h3>}
           <ul>
             {g.rows.map((row) => (
-              <HealthItem key={`${row.backend}\u0000${row.check.id}`} row={row} open={open} />
+              <HealthItem key={`${row.backend}\u0000${row.check.id}`} row={row} />
             ))}
           </ul>
         </section>
@@ -251,15 +250,6 @@ export function HealthChip() {
         </div>
       )}
     </div>
-  );
-}
-
-/** The health page (`?view=health`): the same list, every history open. */
-export function HealthView() {
-  return (
-    <main className="health-view">
-      <HealthList open />
-    </main>
   );
 }
 

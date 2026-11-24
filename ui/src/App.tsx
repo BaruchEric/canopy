@@ -1,4 +1,4 @@
-import { HealthView } from "./components/Health";
+import { HealthView } from "./components/HealthPage";
 import { AgentsView, ClockView, CostsView, KitView, Library, ManagerView, PeopleView, PluginsView, SecretsView, SessionsView, TriggersView, WorkView, warmChunks } from "./components/LazyViews";
 import { JoinedNote } from "./components/PeopleChip";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";

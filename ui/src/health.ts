@@ -39,21 +39,31 @@ export const STATE_TONE: Record<HealthState, "moss" | "lichen" | "rust" | "faint
   off: "faint",
 };
 
-interface ConnLike {
+export interface ConnLike {
   status: { state: string; reason?: string };
 }
+
+/** why the page cannot reach a backend, in the words its row shows */
+export function awayWhy(conn: ConnLike | undefined): string {
+  const state = conn?.status.state ?? "connecting";
+  const reason = conn?.status.reason;
+  return state === "signin" ? "sign in to it" : state === "permission" ? "needs local network access" : state === "connecting" ? "connecting" : `offline${reason ? `: ${reason}` : ""}`;
+}
+
+/** the title of canopy's own checks' group: the backend's server, so it
+ *  never reads as the repo named canopy */
+export const SERVER_TITLE = "server";
 
 /** A backend the page cannot reach, as a check: what it last said of its
  *  own checks means nothing while it is away. */
 function awayCheck(backend: string, conn: ConnLike | undefined, now: number): HealthCheck {
   const state = conn?.status.state ?? "connecting";
-  const reason = conn?.status.reason;
   return {
     id: "backend",
     label: `the ${backend} backend`,
     scope: { kind: "canopy" },
     state: state === "connecting" ? "unknown" : "down",
-    why: state === "signin" ? "sign in to it" : state === "permission" ? "needs local network access" : state === "connecting" ? "connecting" : `offline${reason ? `: ${reason}` : ""}`,
+    why: awayWhy(conn),
     since: now,
     lastOk: null,
     heal: "none",
@@ -100,7 +110,7 @@ export function groupRows(rows: readonly HealthRow[], many: boolean, name: (back
     const key = `${row.backend}\u0000${repoId ?? ""}`;
     let g = groups.get(key);
     if (!g) {
-      const what = repoId === null ? "canopy" : name(row.backend, repoId);
+      const what = repoId === null ? SERVER_TITLE : name(row.backend, repoId);
       g = { key, title: many ? `${row.backend} · ${what}` : what, backend: row.backend, repoId, rows: [] };
       groups.set(key, g);
     }

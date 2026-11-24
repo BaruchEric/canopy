@@ -39,7 +39,7 @@ describe("healthRows", () => {
 });
 
 describe("groupRows", () => {
-  test("canopy's pieces and each repo, the bad first", () => {
+  test("the server's pieces and each repo, the bad first", () => {
     const rows = healthRows(
       {
         mac: [
@@ -53,15 +53,26 @@ describe("groupRows", () => {
       0,
     );
     const groups = groupRows(rows, false, (_b, id) => `repo ${id}`);
-    expect(groups.map((g) => g.title)).toEqual(["canopy", "repo app"]);
+    expect(groups.map((g) => g.title)).toEqual(["server", "repo app"]);
     expect(groups[0]?.rows.map((r) => r.check.label)).toEqual(["z", "b"]);
     expect(groups[1]?.repoId).toBe("app");
   });
 
   test("with several backends a group names its backend", () => {
     const rows = healthRows({ mac: [check("a", "ok")], mini: [check("a", "ok")] }, ["mac", "mini"], { mac: online, mini: online }, 0);
-    expect(groupRows(rows, true).map((g) => g.title)).toEqual(["mac · canopy", "mini · canopy"]);
+    expect(groupRows(rows, true).map((g) => g.title)).toEqual(["mac · server", "mini · server"]);
   });
+});
+
+test("canopy's own group never shares a title with the repo named canopy", () => {
+  const rows = healthRows(
+    { mac: [check("canopy:a", "ok"), check("repo:c:dev", "ok", { label: "dev", scope: { kind: "repo", repoId: "c" } })] },
+    ["mac"],
+    { mac: online },
+    0,
+  );
+  const titles = groupRows(rows, false, () => "canopy").map((g) => g.title);
+  expect(new Set(titles).size).toBe(titles.length);
 });
 
 test("healthSummary counts an offline backend as down", () => {
