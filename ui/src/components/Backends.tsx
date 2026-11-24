@@ -31,6 +31,21 @@ export function BackendTags() {
   );
 }
 
+/** The backends where the bar has no room for their names (styles.css,
+ *  "the top bar narrowing"): how many this page shows, rust while one is not
+ *  online, so a phone still sees there are several. The button's name and
+ *  tooltip carry the words; absent while the page shows one. */
+export function BackendCount() {
+  const shown = useStore((s) => s.backendOrder.length);
+  const down = useStore((s) => s.backendOrder.some((name) => connOf(s, name).status.state !== "online"));
+  if (shown < 2) return null;
+  return (
+    <span className={down ? "backend-count offline" : "backend-count"} aria-hidden="true">
+      {shown}
+    </span>
+  );
+}
+
 /**
  * The backends section of the backend menu: every backend the home one
  * named, hidden ones included, with its state, why it is offline, the URL

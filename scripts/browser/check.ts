@@ -276,7 +276,7 @@ try {
         }
         return mids.length;
       });
-    const at = async (level: "intermediate" | "advanced", phone = false) => {
+    const at = async (level: "intermediate" | "advanced", phone = false, prep?: (page: Page) => Promise<void>) => {
       const page = await fresh(undefined, true, phone);
       await page.addInitScript((saved) => localStorage.setItem("canopy.settings", JSON.stringify(saved)), { level, onboarded: true, sort: "state" });
       await page.route("**/api/runs", (r) => (r.request().method() === "GET" ? r.fulfill({ json: runs }) : r.continue()));
@@ -286,6 +286,8 @@ try {
         const body = (await res.json()) as { backend?: Record<string, unknown> };
         return r.fulfill({ response: res, json: { ...body, backend: { ...body.backend, harnesses: ["claude"] } } });
       });
+      // last, so its routes run before the ones above
+      if (prep) await prep(page);
       await page.goto(`${base}/`, { waitUntil: "load" });
       await page.waitForSelector(".card", { timeout: 20_000 });
       await page.waitForTimeout(500);
@@ -446,6 +448,62 @@ try {
       const more = level === "intermediate" ? await page.locator(".bar-more-btn").boundingBox() : null;
       check(rows === want && (level === "advanced" || (more !== null && more.x + more.width <= 390)), `on a phone at ${level} the top bar takes ${rows} rows${level === "intermediate" ? ", its menu on the screen" : ""}`);
       if (level === "intermediate") await page.screenshot({ path: `${shots}/level-phone.png` });
+      await page.close();
+    }
+
+    // A second backend the page cannot reach. Where the bar hides the
+    // backends' names (under 940px) it counts them instead, and the quiet
+    // bar's menu names each with its state: a phone once saw only "mini
+    // connected" there and took the other backends for missing.
+    const twoBackends = async (page: Page) => {
+      await page.route(`${base}/api/backends`, async (r) => {
+        const res = await r.fetch();
+        const body = (await res.json()) as { self: string; backends: { name: string }[] };
+        return r.fulfill({ response: res, json: { ...body, backends: [...body.backends, { name: "far", tailnet: "http://127.0.0.1:9" }] } });
+      });
+      // far answers nothing, not even the made-up runs the level's page routes for every host
+      await page.route("http://127.0.0.1:9/**", (r) => r.abort("connectionrefused"));
+    };
+    const chipOf = (page: Page) =>
+      page.evaluate(() => {
+        const btn = document.querySelector<HTMLElement>(".topbar .backend-btn");
+        const shown = (sel: string) => [...(btn?.querySelectorAll<HTMLElement>(sel) ?? [])].filter((el) => el.getClientRects().length > 0);
+        const count = shown(".backend-count")[0];
+        return {
+          names: shown(".backend-names .backend-tag").map((el) => el.textContent ?? ""),
+          count: count?.textContent ?? "",
+          rust: count?.classList.contains("offline") ?? false,
+          title: btn?.title ?? "",
+        };
+      });
+    for (const [level, phone] of [["advanced", true], ["advanced", false], ["intermediate", true]] as const) {
+      const page = await at(level, phone, twoBackends);
+      await page.waitForTimeout(1500);
+      const where = `${phone ? "on a phone" : "at 1400px"} at ${level}`;
+      if (level === "advanced") {
+        const chip = await chipOf(page);
+        const named = /far (not connected|connecting)/.test(chip.title);
+        if (phone) {
+          check(chip.count === "2" && chip.rust && chip.names.length === 0 && named, `${where} the backend chip counts the two backends in rust in place of their names (${chip.count || "no count"}${chip.rust ? ", rust" : ""}; names ${chip.names.join(" ") || "hidden"}; tooltip ${named ? "names far" : `"${chip.title.replace(/\n/g, " | ")}"`})`);
+          await page.screenshot({ path: `${shots}/backends-phone.png` });
+        } else {
+          check(chip.count === "" && chip.names.length === 2 && chip.names[1] === "far", `${where} the backend chip names both backends and shows no count (${chip.names.join(" ")}${chip.count ? `; count ${chip.count}` : ""})`);
+          // narrowed to a Fold's open screen, wider than a phone: the bar drops the names for the count
+          await page.setViewportSize({ width: 830, height: 900 });
+          await page.waitForTimeout(400);
+          const narrow = await chipOf(page);
+          check(narrow.count === "2" && narrow.rust && narrow.names.length === 0, `narrowed to 830px at advanced the backend chip counts the two backends where it named them (${narrow.count || "no count"}; names ${narrow.names.join(" ") || "hidden"})`);
+          await page.screenshot({ path: `${shots}/backends-830.png` });
+        }
+      } else {
+        const onBar = await page.evaluate(() => document.querySelector('[data-tuck="backend"]')?.classList.contains("quiet") === false);
+        await page.locator(".bar-more-btn").click();
+        const row = page.locator('.bar-more [role="radio"]').filter({ hasText: /^backend/ });
+        await row.first().waitFor({ timeout: 4000 }).catch(() => undefined);
+        const said = (await row.first().innerText().catch(() => "")).split("\n").map((l) => l.trim()).find((l) => l.includes("connect")) ?? "";
+        check(onBar && /connected, far (not connected|connecting)$/.test(said), `${where} the backend chip is on the bar while far is down (${onBar}), and the menu names both backends: "${said}"`);
+        await page.screenshot({ path: `${shots}/backends-phone-menu.png` });
+      }
       await page.close();
     }
   }

@@ -5,9 +5,9 @@ import { openNotes } from "../../../src/core/notes";
 import { capacityRows, capacityWord, heldRows, rowsTone } from "../capacity";
 import { ownRun } from "../flows";
 import { healthSummary } from "../health";
-import { barChips, type BarChip, type BarFacts } from "../quietbar";
+import { backendsWords, barChips, type BarChip, type BarFacts } from "../quietbar";
 import { rangerCard, rangerTone, shownRangers, worstTone } from "../ranger";
-import { activeFilterCount, allRuns, attentionCount, homeConn, inboxItems, pickedIds, useStore, waitingCount } from "../store";
+import { activeFilterCount, allRuns, attentionCount, connOf, inboxItems, pickedIds, useStore, waitingCount } from "../store";
 import { taskChip } from "../tasks";
 import { WAITING_PANEL } from "../waiting";
 import { freshElsewhere } from "./Clipboard";
@@ -68,8 +68,8 @@ export function useBarChips(): BarChip[] {
         health: health.n,
         healthLevel: health.level,
         healthWord: health.word,
-        backend: s.home,
-        backendState: homeConn(s).status.state,
+        backends: backendsWords(s.backendOrder.map((name) => ({ name, state: connOf(s, name).status.state }))),
+        backendsDown: s.backendOrder.filter((name) => connOf(s, name).status.state !== "online").length,
         peersLost: s.peerSeen.filter((p) => !p.ok).length,
       };
     }),

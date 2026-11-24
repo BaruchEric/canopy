@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Repo, Run, WorktreesInfo } from "../../src/core/types";
-import { api, onBackendSignal, PartialFleetError, readFrame, setStreamWaits, socketUrl, staleOf, STREAM_STALE, streamAction, subscribe } from "./api";
+import { api, onBackendSignal, PartialFleetError, readFrame, scopeUnknown, setStreamWaits, socketUrl, staleOf, STREAM_STALE, streamAction, subscribe } from "./api";
 import type { BackendSignal } from "./backends";
 import { setBase, setRegistry } from "./registry";
 
@@ -42,9 +42,7 @@ describe("a page with two backends", () => {
   /** answers by url: a function of the call, or a thrown error */
   let reply: (c: Call) => Response | Promise<Response> = () => new Response("{}");
 
-  beforeEach(() => {
-    calls = [];
-    signals = [];
+  beforeEach(async () => {
     setRegistry("a", ["a", "b"]);
     setBase("b", "http://b.test");
     onBackendSignal((b, sig) => signals.push([b, sig]));
@@ -53,8 +51,19 @@ describe("a page with two backends", () => {
       calls.push(c);
       return reply(c);
     }) as unknown as typeof fetch;
+    // each backend has said who this page is, as a loaded page's have: the
+    // team wall's gate (FR-074) reads /api/auth first for a backend it has
+    // not heard from, and a test that ran before used to leave that answer
+    reply = () => new Response(JSON.stringify({ mode: "on", pending: [], you: "owner" }));
+    await api.auth("a");
+    await api.auth("b");
+    calls = [];
+    signals = [];
+    reply = () => new Response("{}");
   });
   afterEach(() => {
+    scopeUnknown("a");
+    scopeUnknown("b");
     globalThis.fetch = realFetch;
     setRegistry("", [""]);
     setBase("b", "");

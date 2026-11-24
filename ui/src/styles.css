@@ -12939,8 +12939,15 @@ button.machine:hover {
 .backend-tag {
   color: var(--ink-dim);
 }
-.backend-tag.offline {
+.backend-tag.offline,
+.backend-count.offline {
   color: var(--rust);
+}
+/* the backends counted, only where the bar hides their names */
+.backend-count {
+  display: none;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
 }
 .backend-pop {
   width: 360px;
@@ -13128,6 +13135,9 @@ button.machine:hover {
   .topbar .backend-names {
     display: none;
   }
+  .topbar .backend-count {
+    display: inline;
+  }
   .tb-show > .search {
     min-width: 96px;
   }
@@ -13288,14 +13298,14 @@ button.machine:hover {
   .app-nav {
     gap: 10px;
   }
-  /* the backend menu in the first row is its light alone; the names are
-     in its tooltip and its sheet */
+  /* the backend menu in the first row is its light, and with several
+     backends their count; the names are in its tooltip and its sheet */
   .topbar.phone .backend-btn {
     min-width: 30px;
     justify-content: center;
     padding-inline: 6px;
   }
-  .topbar.phone .backend-btn > :not(.live-dot) {
+  .topbar.phone .backend-btn > :not(.live-dot, .backend-count) {
     display: none;
   }
   /* the sign-in chip and strip are part of the first row but take a line of their own

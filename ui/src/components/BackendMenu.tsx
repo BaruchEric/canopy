@@ -4,9 +4,10 @@ import { onBeat } from "../live";
 import { seenWord } from "../peers";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
-import { homeConn, useStore } from "../store";
+import { backendsWords } from "../quietbar";
+import { connOf, homeConn, useStore } from "../store";
 import { escapeCloses } from "../surface";
-import { BackendTags, BackendsSection } from "./Backends";
+import { BackendCount, BackendTags, BackendsSection } from "./Backends";
 import { DevicesSection, useDeviceCount } from "./Devices";
 import { Caret } from "./PickMenu";
 
@@ -48,8 +49,9 @@ export function LiveDot() {
 
 /**
  * The backend as one control: the live light and the name of each backend
- * this page shows (rust while one is not online), and a peer this backend
- * could not reach, rust, until it can. Open, it says the stream's state,
+ * this page shows (rust while one is not online), or how many where the bar
+ * has no room for the names, and a peer this backend could not reach, rust,
+ * until it can. Its tooltip names each backend with its state. Open, it says the stream's state,
  * then the backends with their switches, the peers the last pass reached,
  * and the browsers on the backend. These were four chips, read rarely and
  * side by side; the light and the names are what is worth a glance.
@@ -60,6 +62,7 @@ export function BackendMenu() {
   const peerSeen = useStore((s) => s.peerSeen);
   const state = useStore((s) => homeConn(s).status.state);
   const reason = useStore((s) => homeConn(s).status.reason);
+  const words = useStore((s) => backendsWords(s.backendOrder.map((name) => ({ name, state: connOf(s, name).status.state }))));
   const devices = useDeviceCount();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -85,6 +88,7 @@ export function BackendMenu() {
   const lost = peerSeen.filter((p) => !p.ok);
   const title = [
     liveWord(state, reason),
+    ...(several ? [words] : []),
     `${devices} ${devices === 1 ? "browser" : "browsers"} on the backend`,
     ...peerSeen.map(seenWord),
   ].join("\n");
@@ -101,6 +105,7 @@ export function BackendMenu() {
       >
         <LiveDot />
         <span className="backend-names">{several ? <BackendTags /> : <span className="backend-tag">{home || "backend"}</span>}</span>
+        {several && <BackendCount />}
         {lost.map((p) => (
           <span key={p.name} className="backend-tag offline" title={seenWord(p)}>
             {p.name}

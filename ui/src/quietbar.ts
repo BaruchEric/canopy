@@ -7,6 +7,8 @@
  *  whether that is worth a place on the bar. Pure; tested in
  *  quietbar.test.ts. `useBarChips` gathers the facts from the store. */
 
+import type { BackendState } from "./backends";
+
 /** the chips the quiet bar may put away, in the order the bar shows them */
 export const BAR_CHIPS = [
   "sort",
@@ -93,9 +95,10 @@ export interface BarFacts {
   health: number;
   healthLevel: "ok" | "warn" | "bad";
   healthWord: string;
-  /** the home backend's name, its stream's state, and peers it lost */
-  backend: string;
-  backendState: "connecting" | "online" | "offline" | "signin" | "permission";
+  /** every backend this page shows, home first, in words grouped by state
+   *  (`backendsWords`); how many of them are not online; peers home lost */
+  backends: string;
+  backendsDown: number;
   peersLost: number;
 }
 
@@ -114,13 +117,28 @@ export interface BarChip {
 
 const count = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
-const STREAM: Record<BarFacts["backendState"], string> = {
+const STREAM: Record<BackendState, string> = {
   online: "connected",
   connecting: "connecting",
   offline: "not connected",
   signin: "wants a sign-in",
   permission: "needs local network access",
 };
+
+/** "a", "a and b", "a, b and c" */
+const listed = (names: readonly string[]): string =>
+  names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+
+/** The backends a page shows, home first, in a few words grouped by state,
+ *  each state where its first backend comes: "mini, mac and desoto
+ *  connected", or "mini and desoto connected, mac wants a sign-in". Every
+ *  one is named, so a page whose bar is too narrow for the backends' names
+ *  still says in its menu that there are several. */
+export function backendsWords(list: readonly { name: string; state: BackendState }[]): string {
+  const groups = new Map<BackendState, string[]>();
+  for (const b of list) groups.set(b.state, [...(groups.get(b.state) ?? []), b.name]);
+  return [...groups].map(([state, names]) => `${listed(names)} ${STREAM[state]}`).join(", ");
+}
 
 const RANGER: Record<BarFacts["rangerTone"], string> = {
   ok: "running",
@@ -238,9 +256,9 @@ const RULES: Record<BarChipId, Rule> = {
   backend: (f) => ({
     group: "this backend",
     name: "backend",
-    state: [`${f.backend || "backend"} ${STREAM[f.backendState]}`, f.peersLost > 0 ? `${count(f.peersLost, "peer")} not reached` : ""].filter(Boolean).join(", "),
+    state: [f.backends || "backend connecting", f.peersLost > 0 ? `${count(f.peersLost, "peer")} not reached` : ""].filter(Boolean).join(", "),
     there: true,
-    says: f.backendState !== "online" || f.peersLost > 0,
+    says: f.backendsDown > 0 || f.peersLost > 0,
   }),
 };
 

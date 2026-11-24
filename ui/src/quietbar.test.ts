@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BAR_CHIPS, BAR_PRIORITY, barChip, barChips, chipId, crowdedChips, moreGroups, putAway, speaking, type BarChipId, type BarFacts } from "./quietbar";
+import { BAR_CHIPS, BAR_PRIORITY, backendsWords, barChip, barChips, chipId, crowdedChips, moreGroups, putAway, speaking, type BarChipId, type BarFacts } from "./quietbar";
 
 /** a page with nothing going: no chip has anything to say */
 const QUIET: BarFacts = {
@@ -40,8 +40,8 @@ const QUIET: BarFacts = {
   health: 4,
   healthLevel: "ok",
   healthWord: "ok",
-  backend: "mini",
-  backendState: "online",
+  backends: "mini connected",
+  backendsDown: 0,
   peersLost: 0,
 };
 const facts = (over: Partial<BarFacts>): BarFacts => ({ ...QUIET, ...over });
@@ -185,13 +185,40 @@ describe("the quiet bar", () => {
     expect(says("health", { health: 0, healthLevel: "bad" })).toBe(false);
   });
 
-  test("the backend speaks when its stream is not live or a peer is lost", () => {
+  test("the backend speaks when a backend this page shows is not live or a peer is lost", () => {
     expect(says("backend", {})).toBe(false);
     expect(state("backend")).toBe("mini connected");
-    for (const backendState of ["connecting", "offline", "signin", "permission"] as const) expect(says("backend", { backendState })).toBe(true);
-    expect(state("backend", { backendState: "offline" })).toBe("mini not connected");
+    expect(says("backend", { backends: "mini and desoto connected, mac wants a sign-in", backendsDown: 1 })).toBe(true);
+    expect(state("backend", { backends: "mini and desoto connected, mac wants a sign-in", backendsDown: 1 })).toBe("mini and desoto connected, mac wants a sign-in");
     expect(says("backend", { peersLost: 1 })).toBe(true);
     expect(state("backend", { peersLost: 1 })).toBe("mini connected, 1 peer not reached");
+  });
+
+  test("the backends' words name every one the page shows, home first, grouped by state", () => {
+    expect(backendsWords([{ name: "mini", state: "online" }])).toBe("mini connected");
+    expect(backendsWords([{ name: "mini", state: "offline" }])).toBe("mini not connected");
+    expect(backendsWords([{ name: "mini", state: "online" }, { name: "mac", state: "online" }])).toBe("mini and mac connected");
+    expect(
+      backendsWords([
+        { name: "mini", state: "online" },
+        { name: "mac", state: "online" },
+        { name: "desoto", state: "online" },
+      ]),
+    ).toBe("mini, mac and desoto connected");
+    expect(
+      backendsWords([
+        { name: "mini", state: "online" },
+        { name: "mac", state: "signin" },
+        { name: "desoto", state: "online" },
+      ]),
+    ).toBe("mini and desoto connected, mac wants a sign-in");
+    expect(
+      backendsWords([
+        { name: "mini", state: "connecting" },
+        { name: "mac", state: "permission" },
+      ]),
+    ).toBe("mini connecting, mac needs local network access");
+    expect(backendsWords([])).toBe("");
   });
 
   test("the menu lists the chips that are there under their headings, speaking or not", () => {

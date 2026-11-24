@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { api, onBackendSignal } from "./api";
+import { api, onBackendSignal, scopeUnknown } from "./api";
 import type { BackendSignal } from "./backends";
 import { setBase, setRegistry } from "./registry";
 import { isGateClosed } from "./secrets";
@@ -14,9 +14,7 @@ describe("the secrets calls", () => {
   let signals: [string, BackendSignal][] = [];
   let reply: (c: Call) => Response = () => new Response("{}");
 
-  beforeEach(() => {
-    calls = [];
-    signals = [];
+  beforeEach(async () => {
     setRegistry("a", ["a", "b"]);
     setBase("b", "http://b.test");
     onBackendSignal((b, sig) => signals.push([b, sig]));
@@ -25,8 +23,19 @@ describe("the secrets calls", () => {
       calls.push(c);
       return reply(c);
     }) as unknown as typeof fetch;
+    // each backend has said who this page is, as a loaded page's have: the
+    // team wall's gate (FR-074) reads /api/auth first for a backend it has
+    // not heard from, which is not what these tests are about
+    reply = () => json({ mode: "on", pending: [], you: "owner" });
+    await api.auth("a");
+    await api.auth("b");
+    calls = [];
+    signals = [];
+    reply = () => new Response("{}");
   });
   afterEach(() => {
+    scopeUnknown("a");
+    scopeUnknown("b");
     globalThis.fetch = realFetch;
     setRegistry("", [""]);
     setBase("b", "");
