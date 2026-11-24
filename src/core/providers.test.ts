@@ -116,6 +116,19 @@ test("a provider for another machine is off, and its kit file goes", () => {
   expect(got.actions).toEqual([{ kind: "remove", id: "gw" }]);
 });
 
+test("this machine's own file beats a kit.json provider for other machines; the kit's leftover does not (FR-083)", () => {
+  const far: KitProvider = { ...gw, machines: ["mini"] };
+  const own = plan({ providers: [far], files: { gw: "mine" } });
+  expect(own.views[0]).toMatchObject({ state: "hand", central: false, why: "kit.json's gw is for mini; this machine keeps its own providers/gw.json" });
+  expect(own.actions).toEqual([]);
+  // the kit's file, changed by hand since, is this machine's now: the kit lets go of it
+  const changed = plan({ providers: [far], files: { gw: "edited" }, record: { written: { gw: "kit" }, adopted: [] } });
+  expect(changed.views[0]?.state).toBe("hand");
+  expect(changed.actions).toEqual([{ kind: "forget", id: "gw" }]);
+  // a codex provider has no file here to read
+  expect(plan({ providers: [{ ...far, harness: "codex" }], files: { gw: "mine" } }).views[0]?.state).toBe("off");
+});
+
 test("a provider gone from kit.json takes its unchanged file with it; a changed one is let go", () => {
   expect(plan({ providers: [], files: { gw: "kit" }, record: { written: { gw: "kit" }, adopted: [] } }).actions).toEqual([{ kind: "remove", id: "gw" }]);
   expect(plan({ providers: [], files: { gw: "edited" }, record: { written: { gw: "kit" }, adopted: [] } }).actions).toEqual([{ kind: "forget", id: "gw" }]);

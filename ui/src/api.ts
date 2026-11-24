@@ -802,7 +802,7 @@ export const api = {
   kitProvider: (b: string, act: "adopt" | "restore", id: string) =>
     req<LoadoutsInfo>(b, `/api/kit/providers/${act}`, { method: "POST", body: JSON.stringify({ id }) }),
   /** the loadout a start in this repo takes when it names none, and the defaults passed over */
-  loadoutResolve: (id: string, action: string) => repoReq<LoadoutDefault>(id, (p) => `/api/loadouts/resolve?${rq(p, { action })}`),
+  loadoutResolve: (id: string, action: string, workflow?: string) => repoReq<LoadoutDefault>(id, (p) => `/api/loadouts/resolve?${rq(p, { action, ...(workflow ? { workflow } : {}) })}`),
   /** the machine's whole plan, or the actions given (one cell's) */
   kitApply: (b: string, machine: string, actions?: KitAction[]) =>
     req<KitApplyResult>(b, "/api/kit/apply", { method: "POST", body: JSON.stringify({ machine, actions }) }),

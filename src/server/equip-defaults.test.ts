@@ -35,6 +35,8 @@ let scratch: string;
 let root: string;
 let config: string;
 let cli: string;
+/** a page's token: setting a repo's route takes the shell right */
+let page: string;
 let server: Awaited<ReturnType<typeof startServer>>;
 const saved: Record<string, string | undefined> = {};
 const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_CALLERS", "CANOPY_TMUX", "CANOPY_COORD_SOCKET", "CANOPY_BIND", "CANOPY_KIT", "HOME", "CODEX_HOME", "KIT_CONTAINER", "EQUIP_TEST_UNSET"];
@@ -44,6 +46,8 @@ const get = (p: string) => fetch(url(p), { headers: { "x-canopy-token": cli } })
 const post = (p: string, body: unknown) =>
   fetch(url(p), { method: "POST", headers: { "content-type": "application/json", "x-canopy-token": cli }, body: JSON.stringify(body) });
 type Answer = { status: number; body: Partial<Run> & { error?: string } };
+const route = (id: string, body: unknown) =>
+  fetch(url(`/api/repos/agent?id=${id}`), { method: "POST", headers: { "content-type": "application/json", "x-canopy-token": page }, body: JSON.stringify(body) });
 const answer = async (res: Response): Promise<Answer> => ({ status: res.status, body: (await res.json()) as Answer["body"] });
 const live = new Set<string>();
 async function start(extra: Record<string, unknown>, repo = "app"): Promise<Answer> {
@@ -132,6 +136,7 @@ beforeAll(async () => {
   delete process.env["CANOPY_BIND"];
   const book = new CallerBook({ file: join(config, "callers.json") });
   cli = book.mint("cli", { label: "cli test" }).token;
+  page = book.mint("page", { label: "page test" }).token;
   await book.flush();
   server = await startServer({ root, port: 0, chan: null, harnesses: ["claude", "codex"], runner: { driver: (h: Harness) => new HeldDriver(h) } });
   expect((await post("/api/kit/scan", {})).status).toBe(200);
@@ -241,6 +246,28 @@ describe("a start that names no loadout", () => {
     expect(got.body.equip).toMatchObject({ loadout: "docs", from: { from: "machine", key: "here" } });
     const why = (await (await get("/api/loadouts/resolve?id=app&action=propose")).json()) as LoadoutDefault;
     expect(why).toEqual({ name: "docs", from: "machine", key: "here", skipped: ["repo app: cx runs codex; plan, then build needs Claude Code"] });
+  });
+
+  test("a repo's own route beats the machine's default and kit.json's (FR-083)", async () => {
+    // the route holds canopy's tools, which a default loadout without them used to drop
+    const codex = { harness: "codex", model: "default", effort: "default", yolo: false, extra: "", canopyTools: true };
+    expect((await route("plain", { all: codex })).status).toBe(200);
+    try {
+      const got = await start({}, "plain");
+      expect(got.status).toBe(201);
+      expect(got.body.harness).toBe("codex");
+      expect(got.body.equip).toBeUndefined();
+      expect(got.body.canopyTools).toBe(true);
+      const why = (await (await get("/api/loadouts/resolve?id=plain&action=ask")).json()) as LoadoutDefault;
+      expect(why).toEqual({ name: null, from: null, skipped: ["machine here: docs gives way to the repo's route", "default: feature gives way to the repo's route"] });
+      // a loadout the start names still beats the route
+      const named = await start({ loadout: "docs" }, "plain");
+      expect(named.body).toMatchObject({ harness: "claude", equip: { loadout: "docs" } });
+    } finally {
+      await route("plain", { all: null });
+    }
+    // with the route gone the machine's default is back
+    expect(((await (await get("/api/loadouts/resolve?id=plain")).json()) as LoadoutDefault).name).toBe("docs");
   });
 
   test("resolve answers what a start would take", async () => {

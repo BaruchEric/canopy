@@ -5,12 +5,12 @@ with that machine's own Google login. Pick **antigravity** as the harness in
 an agent profile, a role or a repo's agent settings. Shells, chats, jobs and
 ordinary workflow steps take it. Canopy stores no Google key and no login.
 
-A loadout replaces a route's harness, model and effort (FR-065), and that
-includes a default one from kit.json (FR-069). kit.json's loadouts are all
-Claude Code's, and the mini's machine default is `feature`, so a repo routed
-to Antigravity on the mini still starts Claude Code there. Start with the
-loadout `none` (the plan sheet's pick, or `canopy run --loadout none`) to get
-agy, or give kit.json an Antigravity loadout.
+A loadout a start names replaces a route's harness, model and effort
+(FR-065). A default loadout from kit.json (FR-069) gives way to a narrower
+route (FR-083): a repo routed to Antigravity runs agy on the mini even though
+the mini's machine default is `feature`, which is Claude Code's. kit.json's
+loadouts are all Claude Code's, so naming one of them at a start still runs
+Claude Code.
 
 ## Setup on a backend
 

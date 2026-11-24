@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { baseCovers, cardLoadout, defaultLoadout, loadoutOfEquip, mergeProviderSettings, parseLoadouts, planLoadoutStart, defaultsKey, repoKeysFor, skillOverridesFor, type LoadoutStartPlan } from "./loadout";
+import { baseCovers, cardLoadout, defaultLoadout, loadoutOfEquip, routeBeatsDefault, mergeProviderSettings, parseLoadouts, planLoadoutStart, defaultsKey, repoKeysFor, skillOverridesFor, type LoadoutStartPlan } from "./loadout";
 import { parseKit, withCanopyServer } from "./kit";
 import { sortMentions } from "./mentions";
-import { DEFAULT_AGENT, type Harness, type KitManifest, type Loadout, type LoadoutsInfo, type Mention } from "./types";
+import { DEFAULT_AGENT, type AgentLayer, type Harness, type KitManifest, type Loadout, type LoadoutsInfo, type Mention } from "./types";
 
 const srv = (agents?: string[]) => ({ command: "x", ...(agents ? { agents } : {}) });
 const parsed = parseKit({
@@ -302,27 +302,53 @@ test("a defaults block alone still parses", () => {
 describe("defaultLoadout", () => {
   const info = parseLoadouts({ ...defaultsKit, defaults: { loadout: "quick", machines: { mac: "feature" }, repos: { "dev-tools/canopy": "cx", "dev-tools/*": "feature", "dev-*/*": "none", "web-apps/*": "quick" } } }, kit);
   test("the exact repo beats a glob, a longer glob a shorter one, then the machine, then the default", () => {
-    expect(defaultLoadout(info, { machine: "mac", rel: "dev-tools/canopy" })).toEqual({ name: "cx", from: "repo", key: "dev-tools/canopy" });
-    expect(defaultLoadout(info, { machine: "mac", rel: "dev-tools/other" })).toEqual({ name: "feature", from: "repo", key: "dev-tools/*" });
-    expect(defaultLoadout(info, { machine: "mac", rel: "games/x" })).toEqual({ name: "feature", from: "machine", key: "mac" });
-    expect(defaultLoadout(info, { machine: null, rel: "games/x" })).toEqual({ name: "quick", from: "default" });
-    expect(defaultLoadout(info, { machine: null, rel: null })).toEqual({ name: "quick", from: "default" });
+    expect(defaultLoadout(info, { machine: "mac", rel: "dev-tools/canopy", route: null })).toEqual({ name: "cx", from: "repo", key: "dev-tools/canopy" });
+    expect(defaultLoadout(info, { machine: "mac", rel: "dev-tools/other", route: null })).toEqual({ name: "feature", from: "repo", key: "dev-tools/*" });
+    expect(defaultLoadout(info, { machine: "mac", rel: "games/x", route: null })).toEqual({ name: "feature", from: "machine", key: "mac" });
+    expect(defaultLoadout(info, { machine: null, rel: "games/x", route: null })).toEqual({ name: "quick", from: "default" });
+    expect(defaultLoadout(info, { machine: null, rel: null, route: null })).toEqual({ name: "quick", from: "default" });
   });
   test("none stops the walk with no loadout", () => {
-    expect(defaultLoadout(info, { machine: "mac", rel: "dev-stuff/x" })).toEqual({ name: null, from: "repo", key: "dev-*/*" });
+    expect(defaultLoadout(info, { machine: "mac", rel: "dev-stuff/x", route: null })).toEqual({ name: null, from: "repo", key: "dev-*/*" });
   });
   test("a loadout the start cannot run is passed over and named", () => {
     const fits = (l: Loadout) => (l.harness === "codex" ? "runs codex; plan, then build needs Claude Code" : null);
-    expect(defaultLoadout(info, { machine: "mac", rel: "dev-tools/canopy" }, fits)).toEqual({
+    expect(defaultLoadout(info, { machine: "mac", rel: "dev-tools/canopy", route: null }, fits)).toEqual({
       name: "feature", from: "repo", key: "dev-tools/*", skipped: ["repo dev-tools/canopy: cx runs codex; plan, then build needs Claude Code"],
     });
   });
   test("a loadout gone since the parse is passed over", () => {
     const gone = { defaults: { loadout: "quick", machines: {}, repos: { a: "feature" } }, loadouts: info.loadouts.filter((l) => l.name !== "feature") };
-    expect(defaultLoadout(gone, { machine: null, rel: "a" })).toEqual({ name: "quick", from: "default", skipped: ["repo a: no loadout feature in kit.json"] });
+    expect(defaultLoadout(gone, { machine: null, rel: "a", route: null })).toEqual({ name: "quick", from: "default", skipped: ["repo a: no loadout feature in kit.json"] });
+  });
+  test("a narrower route passes a default over and names it; at the same level the loadout wins (FR-083)", () => {
+    const at = (route: AgentLayer | null, rel = "games/x") => defaultLoadout(info, { machine: "mac", rel, route });
+    // the repo's own route beats the machine's default and kit.json's
+    expect(at("repo")).toEqual({
+      name: null, from: null,
+      skipped: ["machine mac: feature gives way to the repo's route", "default: quick gives way to the repo's route"],
+    });
+    // so do a route for the task, the workflow, the role and a pick for the start
+    for (const r of ["explicit", "repo-workflow", "workflow", "repo-task", "task", "repo-role", "role"] as const) expect(at(r).name).toBeNull();
+    // the backend's default profile stands level with the machine's default, which wins
+    expect(at("default")).toEqual({ name: "feature", from: "machine", key: "mac" });
+    // and beats kit.json's, which reaches every machine
+    expect(defaultLoadout(info, { machine: null, rel: "games/x", route: "default" })).toEqual({ name: null, from: null, skipped: ["default: quick gives way to the default profile"] });
+    expect(defaultLoadout(info, { machine: null, rel: "games/x", route: "builtin" })).toEqual({ name: "quick", from: "default" });
+    // a repo's default stands level with the repo's route and beats the role's
+    expect(at("repo", "web-apps/x")).toEqual({ name: "quick", from: "repo", key: "web-apps/*" });
+    expect(at("role", "web-apps/x")).toEqual({ name: "quick", from: "repo", key: "web-apps/*" });
+    expect(at("task", "web-apps/x")).toMatchObject({ name: null, skipped: ["repo web-apps/*: quick gives way to the route for this task", "machine mac: feature gives way to the route for this task", "default: quick gives way to the route for this task"] });
+  });
+  test("routeBeatsDefault follows the route order", () => {
+    expect(routeBeatsDefault(null, "default")).toBeNull();
+    expect(routeBeatsDefault("builtin", "default")).toBeNull();
+    expect(routeBeatsDefault("repo", "repo")).toBeNull();
+    expect(routeBeatsDefault("repo-role", "repo")).toBe("gives way to the repo's route for this role");
+    expect(routeBeatsDefault("explicit", "repo")).toBe("gives way to the agent picked for this start");
   });
   test("no defaults is no loadout", () => {
-    expect(defaultLoadout({ loadouts: info.loadouts }, { machine: "mac", rel: "a" })).toEqual({ name: null, from: null });
+    expect(defaultLoadout({ loadouts: info.loadouts }, { machine: "mac", rel: "a", route: null })).toEqual({ name: null, from: null });
   });
 });
 

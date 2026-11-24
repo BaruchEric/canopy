@@ -1026,6 +1026,38 @@ Check the thing.
     finish(second.ctx, "reviewed");
   }, 30_000);
 
+  test("a card in a repo with its own route takes no default loadout, and neither do its flow's steps (FR-083)", async () => {
+    const sonnet = { ...DEFAULT_AGENT, harness: "claude", model: "sonnet", effort: "low" };
+    try {
+      await writeKit(LOADOUTS, { defaults: { loadout: "probed" } });
+      expect((await postAs(s, "/api/kit/scan", {}, s.page)).status).toBe(200);
+      await until(async () => ((await (await call(s, "/api/loadouts", s.page)).json()) as LoadoutsInfo).defaults?.loadout === "probed", "the kit's default");
+      expect((await postAs(s, "/api/repos/agent?id=app", { all: sonnet }, s.page)).status).toBe(200);
+      const bare = await startCard({});
+      const id = bare.tasks[0]?.run ?? "";
+      live.push(id);
+      expect((await runs()).find((r) => r.id === id)?.equip).toBeUndefined();
+      expect((await ctxOf(id)).agent.model).toBe("sonnet");
+      for (const r of live.splice(0).reverse()) await postAs(s, "/api/runs/stop", { id: r }, s.page);
+      await until(async () => !(await runs()).some((r) => r.id === bare.coord && isRunActive(r)), "the first coordinator to end");
+
+      await userWorkflow("two-steps", TWO_STEPS);
+      const { tasks } = await startCard({ workflow: "two-steps" });
+      const flowId = tasks[0]?.flow ?? "";
+      liveFlows.push(flowId);
+      expect((await flowNamed(flowId))?.equip).toBeUndefined();
+      const first = await stepRun(flowId, 0);
+      expect(first.ctx.agent.model).toBe("sonnet");
+      expect((await runs()).find((r) => r.id === first.id)?.equip).toBeUndefined();
+      finish(first.ctx, "built");
+    } finally {
+      await postAs(s, "/api/repos/agent?id=app", { all: null }, s.page);
+      await writeKit(LOADOUTS);
+      expect((await postAs(s, "/api/kit/scan", {}, s.page)).status).toBe(200);
+      await until(async () => ((await (await call(s, "/api/loadouts", s.page)).json()) as LoadoutsInfo).defaults === undefined, "the defaults gone");
+    }
+  }, 30_000);
+
   test("a card whose workflow is one plain step starts a branch run with that step's spec", async () => {
     await userWorkflow("one-step", "---\nname: one-step\nverb: do one\nblurb: One step.\n---\n\n## do\n\nDo the one thing.\n");
     const { tasks } = await startCard({ workflow: "one-step", equip: { loadout: "quick" } });

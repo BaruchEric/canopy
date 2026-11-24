@@ -34,6 +34,7 @@ import {
   type AgentRoutes,
   type AgentSettings,
   type AgentScope,
+  type ResolvedAgent,
   type CanopyConfig,
   type LaunchPick,
   type RepoAgent,
@@ -399,7 +400,12 @@ export const agentRoutes = (cfg: CanopyConfig): AgentRoutes => ({
 /** The settings a repo path gets for a role (an interactive shell unless
  *  said), through every layer of core/route. */
 export const agentFor = (cfg: CanopyConfig, path: string, role: AgentRole = "shell", explicit?: LaunchPick, scope?: AgentScope): AgentSettings =>
-  resolveAgent(agentRoutes(cfg), path, role, explicit, scope).settings;
+  agentRouteFor(cfg, path, role, explicit, scope).settings;
+
+/** The same resolution with the layer it came from, which a default
+ *  loadout is weighed against (FR-083). */
+export const agentRouteFor = (cfg: CanopyConfig, path: string, role: AgentRole = "shell", explicit?: LaunchPick, scope?: AgentScope): ResolvedAgent =>
+  resolveAgent(agentRoutes(cfg), path, role, explicit, scope);
 
 /** A named workflow or agent task default, persisted on this backend. */
 export async function setAgentScope(scope: AgentScope, pick: AgentPick | null): Promise<AgentRoutes> {

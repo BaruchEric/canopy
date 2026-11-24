@@ -155,10 +155,22 @@ export function planProviders(o: {
         ...(why ? { why } : {}), ...(o.record.adopted.includes(p.id) ? { adopted: true } : {}),
       });
     };
-    if (!providerHere(p, o.machine)) { view("off"); continue; }
-    if (p.harness === "codex") { view("declared", "a model_providers entry in codex's own config.toml"); continue; }
     const have = o.files[p.id];
     const ours = o.record.written[p.id];
+    if (!providerHere(p, o.machine)) {
+      // This machine's own file (one the kit never wrote, or one changed
+      // since) beats kit.json's list of machines (FR-083). From here kit.json
+      // carries no settings for it, so its view is not central and offers no
+      // adopt. The kit's own file left from before is removed below.
+      if (p.harness === "claude" && have !== undefined && have !== ours) {
+        views.push({
+          id: p.id, note: p.note, harness: p.harness, machines: p.machines, central: false, envNames, keys, state: "hand",
+          why: `kit.json's ${p.id} is for ${(p.machines ?? []).join(", ")}; this machine keeps its own providers/${p.id}.json`,
+        });
+      } else view("off");
+      continue;
+    }
+    if (p.harness === "codex") { view("declared", "a model_providers entry in codex's own config.toml"); continue; }
     if (!p.settings) {
       // a file the kit wrote while kit.json held settings is removed below,
       // unless someone changed it, which makes it this machine's own

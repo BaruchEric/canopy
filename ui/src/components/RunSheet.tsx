@@ -1165,7 +1165,8 @@ const HOW_TITLE: Record<NonNullable<Run["forkOf"]>["how"], string> = {
 };
 
 /** The fork sheet (FR-043 plan 3): the step it forks at, the agent it will
- *  run on (a profile of this backend's, else the repo's own job route) and
+ *  run on (a profile of this backend's, else the original's loadout when it
+ *  had one, else the repo's own job route: FR-083) and
  *  how the fork will get the original's context, a note for it, and the
  *  fork itself, which opens the new run's sheet. */
 function ForkSheet({ run, repo, at, onClose }: { run: Run; repo: Repo; at: ForkAt; onClose: () => void }) {
@@ -1178,7 +1179,10 @@ function ForkSheet({ run, repo, at, onClose }: { run: Run; repo: Repo; at: ForkA
   const [error, setError] = useState<string | null>(null);
   const action: RunAction = run.action === "propose" ? "propose" : "ask";
   const agent = resolveAgent(routes, repo.path, "job", profile ? { profile } : undefined, { kind: "task", name: action }).settings;
-  const sameHarness = agent.harness === run.harness && run.harness !== "antigravity" && run.session !== undefined;
+  // with no profile picked the fork carries the original's loadout, which runs the original's harness
+  const kept = profile ? undefined : run.equip;
+  const harness = kept ? run.harness : agent.harness;
+  const sameHarness = harness === run.harness && run.harness !== "antigravity" && run.session !== undefined;
   const where = at.step ? `step ${at.at} of ${at.of}: ${stepWords(at.step)}` : `its end (${at.of} step${at.of === 1 ? "" : "s"})`;
   const how = sameHarness
     ? run.harness === "claude"
@@ -1186,7 +1190,7 @@ function ForkSheet({ run, repo, at, onClose }: { run: Run; repo: Repo; at: ForkA
         ? "Claude resumes a copy of the session's transcript cut after that step, so the fork knows nothing past it."
         : "Claude resumes the whole session under a new id."
       : "Codex forks the thread, whole; the first message says where the cut is."
-    : `${AGENT_NAME[agent.harness]} starts fresh from a brief of the steps up to there, as data in its note.`;
+    : `${AGENT_NAME[harness]} starts fresh from a brief of the steps up to there, as data in its note.`;
   const go = async () => {
     setBusy(true);
     setError(null);
@@ -1210,7 +1214,7 @@ function ForkSheet({ run, repo, at, onClose }: { run: Run; repo: Repo; at: ForkA
       <label className="fork-row">
         <span>agent</span>
         <select value={profile} onChange={(e) => setProfile(e.target.value)} aria-label="Agent profile">
-          <option value="">the repo's own ({describeAgent(agent)})</option>
+          <option value="">{run.equip ? `the run's loadout, ${run.equip.loadout}` : `the repo's own (${describeAgent(agent)})`}</option>
           {profiles.map((p) => (
             <option key={p} value={p}>
               {p}

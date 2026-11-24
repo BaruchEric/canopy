@@ -39,6 +39,7 @@ let scratch: string;
 let root: string;
 let config: string;
 let cli: string;
+let page: string;
 let server: Awaited<ReturnType<typeof startServer>>;
 /** the harnesses the server has, read on each start, so a test can take one away */
 const harnesses: Harness[] = ["claude", "codex"];
@@ -141,6 +142,7 @@ beforeAll(async () => {
   delete process.env["CANOPY_BIND"];
   const book = new CallerBook({ file: join(config, "callers.json") });
   cli = book.mint("cli", { label: "cli test" }).token;
+  page = book.mint("page", { label: "page test" }).token;
   await book.flush();
   server = await startServer({ root, port: 0, chan: null, harnesses, runner: { driver: (h: Harness) => new HeldDriver(h) } });
   // a test server's kit never scans on its own
@@ -457,6 +459,21 @@ describe("a restart keeps the run's loadout", () => {
     const ctx = await ctxOf(res.body.id ?? "");
     expect(ctx.agent).toMatchObject({ model: "haiku", effort: "low" });
     expect(existsSync(ctx.spec.settings ?? "")).toBe(true);
+  }, 30_000);
+
+  test("a profile named for the fork beats the original run's loadout (FR-083)", async () => {
+    // saving a profile takes the admin right a page holds
+    const deep = { harness: "claude", model: "opus", effort: "high", yolo: false, extra: "" };
+    const saved = await fetch(url("/api/agents/profile"), { method: "POST", headers: { "content-type": "application/json", "x-canopy-token": page }, body: JSON.stringify({ name: "deep", settings: deep }) });
+    expect(saved.status).toBe(200);
+    const original = await endedWith("docs", "fork-b.txt");
+    const res = await answer(await post("/api/runs/fork", { run: original.id, profile: "deep" }));
+    expect(res.status).toBe(201);
+    if (res.body.id) live.add(res.body.id);
+    expect(res.body.equip).toBeUndefined();
+    const ctx = await ctxOf(res.body.id ?? "");
+    expect(ctx.agent).toMatchObject({ harness: "claude", model: "opus", effort: "high" });
+    expect(ctx.spec.settings).toBeUndefined();
   }, 30_000);
 
   test("a run without equip restarts without a loadout", async () => {

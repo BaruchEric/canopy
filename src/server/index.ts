@@ -138,6 +138,7 @@ import {
 import {
   addSource,
   agentFor,
+  agentRouteFor,
   agentRoutes,
   configDir,
   launchFor,
@@ -187,6 +188,7 @@ import {
   isHarness,
   isRunAction,
   isWsColor,
+  type AgentLayer,
   type AgentSettings,
   type AgentTable,
   type BranchTreeState,
@@ -1302,17 +1304,18 @@ async function startRepoRun(
     const full = state.runner.checkoutRefusal(repo);
     if (full) throw new HttpError(409, full);
   }
-  const routed = agentFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job", undefined, { kind: "task", name: action });
+  const route = agentRouteFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job", undefined, { kind: "task", name: action });
+  const routed = route.settings;
   const base: StartExtras = {
     ...(priority === "interactive" ? {} : { priority }),
     ...(how.parent ? { parent: how.parent, child: true as const } : {}),
     ...(how.name ? { name: how.name } : {}),
   };
   // a start that names no loadout takes the repo's, the machine's or
-  // kit.json's default (FR-069); `none` takes none, and a workspace run
-  // never inherits one
+  // kit.json's default (FR-069) unless its route is narrower (FR-083);
+  // `none` takes none, and a workspace run never inherits one
   const inherited = how.loadout === undefined && !scope
-    ? await inheritedLoadout(state, repo, action === "propose" ? "plan, then build needs Claude Code" : null)
+    ? await inheritedLoadout(state, repo, action === "propose" ? "plan, then build needs Claude Code" : null, route.from)
     : null;
   const pick = how.loadout === NO_LOADOUT ? undefined : how.loadout ?? inherited?.name ?? undefined;
   // the start's word beats the loadout's, and the loadout's the settings'; a
@@ -1676,18 +1679,20 @@ function repoRelFor(state: ServerState, repo: Repo): string | null {
 }
 
 /** The loadout a start in this repo takes when it names none (FR-069): the
- *  repo's default, the machine's, then kit.json's. One whose harness this
- *  backend lacks or the start cannot run (`claudeOnly` says why), or whose
- *  provider cannot serve here, is passed over. A repo on another host or
- *  the forge and an incubator seed take none. */
-async function inheritedLoadout(state: ServerState, repo: Repo, claudeOnly: string | null): Promise<LoadoutDefault> {
+ *  repo's default, the machine's, then kit.json's. One the start's route is
+ *  narrower than (`route`, the layer the start's agent came from: FR-083),
+ *  one whose harness this backend lacks or the start cannot run
+ *  (`claudeOnly` says why), or one whose provider cannot serve here is
+ *  passed over. A repo on another host or the forge and an incubator seed
+ *  take none. */
+async function inheritedLoadout(state: ServerState, repo: Repo, claudeOnly: string | null, route: AgentLayer | null): Promise<LoadoutDefault> {
   const none: LoadoutDefault = { name: null, from: null };
   if (repo.host || repo.forge || isSeedPath(state.root, repo.path)) return none;
   const info = state.kit.loadouts();
   if (!info.defaults) return none;
   const lacks = new Map<Harness, string | null>();
   for (const h of new Set(info.loadouts.map((l) => l.harness))) lacks.set(h, await harnessRefusal(state, h, repo.path));
-  return defaultLoadout(info, { machine: state.kit.machineName(), rel: repoRelFor(state, repo) }, (l) => {
+  return defaultLoadout(info, { machine: state.kit.machineName(), rel: repoRelFor(state, repo), route }, (l) => {
     if (claudeOnly && l.harness !== "claude") return `runs ${l.harness}; ${claudeOnly}`;
     const lack = lacks.get(l.harness);
     if (lack) return lack;
@@ -1698,6 +1703,11 @@ async function inheritedLoadout(state: ServerState, repo: Repo, claudeOnly: stri
 /** What a run's equip says about where its inherited loadout came from. */
 const fromOf = (d: LoadoutDefault | null): RunEquip["from"] =>
   d?.name && d.from ? { from: d.from, ...(d.key ? { key: d.key } : {}) } : undefined;
+
+/** The route a card's work takes with no loadout: its flow's, as
+ *  `startCoordWorkflow` reads it, or its action's. */
+const cardRoute = (cfg: CanopyConfig, repo: Repo, task: Pick<CoordTask, "workflow" | "action">) =>
+  agentRouteFor(cfg, repo.path, "job", undefined, task.workflow ? { kind: "workflow", name: task.workflow } : { kind: "task", name: task.action });
 
 /** A coordinator's card's loadout: the one it names with Eric's overrides
  *  laid over (refused when kit.json can no longer give it), none for `none`,
@@ -1716,7 +1726,7 @@ async function cardLoadoutFor(
     return { loadout: lo };
   }
   if (noInherit) return { loadout: null };
-  const d = await inheritedLoadout(state, repo, claudeOnly);
+  const d = await inheritedLoadout(state, repo, claudeOnly, cardRoute(await loadConfig(), repo, task).from);
   const lo = d.name === null ? undefined : info.loadouts.find((l) => l.name === d.name);
   return lo ? { loadout: { ...lo, canopyTools: false }, from: fromOf(d) } : { loadout: null };
 }
@@ -2361,8 +2371,9 @@ async function startForkRun(state: ServerState, b: Record<string, unknown>, clie
   const action: RunAction = original.action === "propose" ? "propose" : "ask";
   const routed = agentFor(cfg, repo.path, "job", typeof profile === "string" ? { profile } : undefined, { kind: "task", name: action });
   // a fork of a loadout run starts with the loadout, rebuilt from the run's equip (so a kit.json
-  // that changed since does not matter); the plan is read now so its harness decides the context
-  const forkLoadout = original.equip ? loadoutOfEquip(original.equip, original.harness) : null;
+  // that changed since does not matter); the plan is read now so its harness decides the context.
+  // A profile named for the fork is this start's own pick and beats it (FR-083).
+  const forkLoadout = original.equip && typeof profile !== "string" ? loadoutOfEquip(original.equip, original.harness) : null;
   const agent = forkLoadout ? (await planLoadout(state, repo, forkLoadout, routed)).agent : routed;
   if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, "plan, then build needs Claude Code");
   await needHarness(state, agent.harness, repo.path);
@@ -5258,8 +5269,15 @@ async function handleApi(
     const repo = state.result.repos.find((r) => r.id === id);
     if (!repo) return json({ error: `no repo ${id}` }, 404);
     const action = url.searchParams.get("action");
+    const workflow = url.searchParams.get("workflow");
     const claudeOnly = action === "propose" ? "plan, then build needs Claude Code" : action === "workflow" ? "a card's flow needs Claude Code" : null;
-    return json(await inheritedLoadout(state, repo, claudeOnly));
+    // weighed against the route the start would take (FR-083): a card's
+    // flow, else the action's task route, as the starts read them
+    const cfg = await loadConfig();
+    const route = action === "workflow"
+      ? (workflow && isAgentScopeName(workflow) ? cardRoute(cfg, repo, { workflow, action: "ask" }) : agentRouteFor(cfg, repo.path, "job"))
+      : agentRouteFor(cfg, repo.path, action === "chat" ? "chat" : "job", undefined, action ? { kind: "task", name: action } : undefined);
+    return json(await inheritedLoadout(state, repo, claudeOnly, route.from));
   }
   if (path === "/api/coordinator/workflows" && method === "GET") return json(coordWorkflows(await loadWorkflows({ path: "", host: "none" })));
   // a goal from the top (FR-067), ahead of the hub, since it starts the coordinator

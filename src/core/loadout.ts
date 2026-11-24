@@ -6,10 +6,12 @@ import { takesEffort, takesModel } from "./harness";
 import { parseProviders } from "./providers";
 import { TREES_SOURCE } from "./treewords";
 import {
+  AGENT_LAYERS,
   isHarness,
   LAUNCH_SOURCE,
   NO_LOADOUT,
   DEFAULT_PROVIDER,
+  type AgentLayer,
   type AgentSettings,
   type CardEquip,
   type Harness,
@@ -220,14 +222,47 @@ export function repoKeysFor(repos: Readonly<Record<string, string>>, rel: string
   return [...exact, ...globs];
 }
 
+/** The route layer each default loadout stands level with (FR-083): a
+ *  repo's default with the repo's whole route, a machine's with the
+ *  backend's default profile, and kit.json's, which reaches every machine,
+ *  below both. */
+const DEFAULT_LEVEL: Record<LoadoutFrom, AgentLayer> = { repo: "repo", machine: "default", default: "builtin" };
+
+const ROUTE_WORD: Record<AgentLayer, string> = {
+  explicit: "agent picked for this start",
+  "repo-workflow": "repo's route for this workflow",
+  workflow: "route for this workflow",
+  "repo-task": "repo's route for this task",
+  task: "route for this task",
+  "repo-role": "repo's route for this role",
+  repo: "repo's route",
+  role: "route for this role",
+  default: "default profile",
+  builtin: "builtin agent",
+};
+
+/** Why a default loadout gives way to the route a start already has, or
+ *  null when it does not (FR-083). A narrower setting beats a broader one:
+ *  a route set for the repo, the task, the workflow or the role is
+ *  narrower than a default for the whole machine, and anything this
+ *  backend routes is narrower than kit.json's default for every machine.
+ *  At the same level the loadout wins, since it carries skills and
+ *  servers as well as the agent. */
+export function routeBeatsDefault(route: AgentLayer | null, from: LoadoutFrom): string | null {
+  if (route === null) return null;
+  return AGENT_LAYERS.indexOf(route) < AGENT_LAYERS.indexOf(DEFAULT_LEVEL[from]) ? `gives way to the ${ROUTE_WORD[route]}` : null;
+}
+
 /** The loadout a start that names none takes (FR-069): the repo's default,
  *  then the machine's, then kit.json's. `none` at any of them stops there
- *  with no loadout. A default naming a loadout kit.json does not hold, or
- *  one `fits` turns away (a harness the start cannot run), is passed over
- *  and named in `skipped`. */
+ *  with no loadout. A default the start's route is narrower than
+ *  (`at.route`, the layer its agent came from, or null to hear none:
+ *  FR-083), one naming a
+ *  loadout kit.json does not hold, or one `fits` turns away (a harness the
+ *  start cannot run) is passed over and named in `skipped`. */
 export function defaultLoadout(
   info: Pick<LoadoutsInfo, "defaults" | "loadouts">,
-  at: { machine: string | null; rel: string | null },
+  at: { machine: string | null; rel: string | null; route: AgentLayer | null },
   fits: (l: Loadout) => string | null = () => null,
 ): LoadoutDefault {
   const d = info.defaults;
@@ -242,6 +277,8 @@ export function defaultLoadout(
   for (const t of tries) {
     const where = t.key ? `${t.from} ${t.key}` : t.from;
     if (t.name === NO_LOADOUT) return done({ name: null, from: t.from, ...(t.key ? { key: t.key } : {}) });
+    const beaten = routeBeatsDefault(at.route, t.from);
+    if (beaten) { skipped.push(`${where}: ${t.name} ${beaten}`); continue; }
     const lo = info.loadouts.find((l) => l.name === t.name);
     if (!lo) { skipped.push(`${where}: no loadout ${t.name} in kit.json`); continue; }
     const why = fits(lo);

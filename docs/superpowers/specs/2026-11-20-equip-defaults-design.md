@@ -94,6 +94,19 @@ A start with no loadout of its own takes the first of: repo, machine,
 default. A start that names one keeps it. `none` (reserved; no loadout may
 take the name) says "no loadout" outright and stops the inheritance.
 
+2026-11-23, FR-083: a narrower setting beats a broader one, so a default
+also gives way to the start's route when the route is narrower. Each default
+stands level with a route layer: a repo's with the repo's whole route, a
+machine's with the backend's default profile, kit.json's below both. A
+route above that level passes the default over and names it in `skipped`.
+Against a repo's default that is a pick for the start, a route for the
+workflow or the task (the repo's or the system's) and the repo's route for
+the role; against a machine's, the repo's whole route and the system's role
+route too; against kit.json's, any route at all. At the same level the
+loadout wins. Every live backend has a
+default profile, so `defaults.loadout` applies only where nothing is routed
+at all.
+
 Defaults apply to plain runs and chats (on a branch or not), a card's run,
 tree run and workflow, and a child run. They do not apply to a best-of-N
 group (each member's profile is the point), a workspace run, a repo on

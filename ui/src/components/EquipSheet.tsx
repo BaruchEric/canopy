@@ -72,7 +72,7 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
   useEffect(() => {
     if (!hasDefaults || task.action === "project") return;
     let live = true;
-    api.loadoutResolve(task.repo, task.workflow ? "workflow" : task.action).then((d) => {
+    api.loadoutResolve(task.repo, task.workflow ? "workflow" : task.action, task.workflow).then((d) => {
       if (!live) return;
       setInherited(d);
       // a bare card's sheet opens on the loadout it would take, so cancel leaves what it showed
