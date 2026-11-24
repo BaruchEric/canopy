@@ -50,17 +50,25 @@ const run = async (request: string, extra: Record<string, string> = {}) => {
 /** what the fakes were asked to do, in order */
 const calls = async () => ((await readFile(join(home, "calls"), "utf8").catch(() => "")).trim().split("\n").filter(Boolean));
 const serve = (sha: string) => writeFile(join(home, "running"), sha);
+/** a page in `dir`'s dist/web built from its HEAD, as the build leaves it */
+const built = async (dir: string) => {
+  await mkdir(join(dir, "dist", "web", "assets"), { recursive: true });
+  await writeFile(join(dir, "dist", "web", "index.html"), "");
+  await writeFile(join(dir, "dist", "web", "assets", "index-a1.js"), `var b={commit:\`${await git(dir, "rev-parse", "HEAD")}\`};\n`);
+};
 
 // The fakes sit in ~/.bun/bin, the first place on the PATH the script sets,
 // so a real bun in /usr/local/bin never answers. curl answers /api/about
 // with the commit in ~/running; launchctl's restart makes the server run
-// the checkout's HEAD; bun's build writes dist/web/index.html.
+// the checkout's HEAD; bun's build writes dist/web/index.html and a bundle
+// that names the commit it was built from, as vite.config.ts stamps it.
 const FAKES: Record<string, string> = {
   bun: `#!/bin/sh
 echo "bun $*" >> "$HOME/calls"
 if [ "$1 $2" = "run build" ]; then
   [ ! -f "$HOME/fail-build" ] || { echo "the build broke"; exit 1; }
-  mkdir -p dist/web && : > dist/web/index.html
+  mkdir -p dist/web/assets && : > dist/web/index.html
+  printf 'var b={commit:\x60%s\x60};\n' "$(git rev-parse HEAD)" > dist/web/assets/index-a1.js
 fi
 `,
   curl: `#!/bin/sh
@@ -140,13 +148,32 @@ describe("scripts/mac-update", () => {
     await serve(first);
     await commitOnOrigin({ "src/server.ts": "two\n" });
     await git(checkout, "pull", "-q", "--ff-only");
-    await mkdir(join(checkout, "dist", "web"), { recursive: true });
-    await writeFile(join(checkout, "dist", "web", "index.html"), "");
+    await built(checkout);
     // the checkout moved past the server by hand and was built; nothing new on origin
     const r = await run("update");
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("already at");
     expect(await calls()).toEqual([expect.stringMatching(/^launchctl kickstart/)]);
+  });
+
+  test("a checkout something else moved past its build is built, though the update pulls nothing", async () => {
+    // peer sync fast-forwards the Mac's clone without building: on
+    // 2026-11-23 the Mac's checkout sat at a page-only commit while its
+    // server kept serving the page from the commit before
+    await built(checkout);
+    await serve(await git(checkout, "rev-parse", "HEAD"));
+    await commitOnOrigin({ "ui/page.tsx": "two\n" });
+    await git(checkout, "pull", "-q", "--ff-only");
+    const r = await run("update");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("already at");
+    expect(r.stdout).toContain("built     the page");
+    expect(r.stdout).toContain("no restart");
+    // what moved since the last build is not known, so it installs first
+    expect(await calls()).toEqual(["bun install --frozen-lockfile", "bun run build"]);
+    // and once built, a second update has nothing to do
+    expect((await run("update")).stdout).not.toContain("built");
+    expect(await calls()).toEqual(["bun install --frozen-lockfile", "bun run build"]);
   });
 
   test("a test file alone is no reason to restart", async () => {

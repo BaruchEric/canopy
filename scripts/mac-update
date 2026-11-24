@@ -8,7 +8,8 @@
 #   status         the checkout's commit and the one the server on :7850 runs
 #   update [SHA]   fetch origin, fast-forward main to origin/main (refused
 #                  unless origin/main is SHA, when one is given), install when
-#                  the lockfile moved, build the page, and restart the launchd
+#                  the lockfile moved, build the page when dist/web was not
+#                  built from the checkout's commit, and restart the launchd
 #                  server when the code it loads differs from the code it runs
 #
 # It never merges, never moves main backwards, and leaves alone a checkout
@@ -96,14 +97,24 @@ update)
     printf 'checkout  already at %s\n' "$(short "$new")"
   fi
 
-  if git diff --name-only "$old" "$new" -- | grep -qxE 'bun\.lock|package\.json'; then
+  # The page in dist/web names the commit it was built from (vite.config.ts
+  # stamps it into the bundle). It is behind whenever that is not the
+  # checkout's: peer sync fast-forwards this clone without building, so an
+  # update that pulls nothing can still find the page behind. The folder is
+  # searched whole, since globbing is off (set -f).
+  behind=no
+  if [ "$old" != "$new" ] || [ ! -f dist/web/index.html ] || ! grep -rqsF "$new" dist/web/assets; then behind=yes; fi
+  # Install when this pull moved the lockfile, and before building a commit
+  # this update did not pull, since what moved since the last build is not
+  # known then (an install with nothing to do is quick).
+  if git diff --name-only "$old" "$new" -- | grep -qxE 'bun\.lock|package\.json' || [ "$behind $old" = "yes $new" ]; then
     bun install --frozen-lockfile >"$CACHE/canopy-mac-update.log" 2>&1 || {
       tail -20 "$CACHE/canopy-mac-update.log" >&2
       die "bun install failed"
     }
     echo "installed dependencies"
   fi
-  if [ "$old" != "$new" ] || [ ! -f dist/web/index.html ]; then
+  if [ "$behind" = yes ]; then
     bun run build >"$CACHE/canopy-mac-update.log" 2>&1 || {
       tail -20 "$CACHE/canopy-mac-update.log" >&2
       die "the build failed; the server still runs what it ran"
