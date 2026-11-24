@@ -7809,7 +7809,10 @@ export async function startServer(opts: {
       },
       streams: () => state.streams.size,
       onHealth: (r) => state.health.report(PUSH_CHECK, r),
-      log: (line) => console.error(`canopy: ${line}`),
+      // quiet under `bun test`: every test server makes its own key pair, and
+      // the line landed between the reporter's ticks; the health check still
+      // carries a push error
+      log: (line) => process.env["NODE_ENV"] !== "test" && console.error(`canopy: ${line}`),
     }),
     refreshStageRouting: async () => {
       if (!stage) return;
@@ -8457,7 +8460,8 @@ export async function startServer(opts: {
   // restore rather than held
   const kept = await refreshKept(state);
   await state.tasks.start();
-  console.error(
+  // quiet under `bun test` for the same reason as push's log
+  if (process.env["NODE_ENV"] !== "test") console.error(
     state.tmux
       ? `shells on tmux (${state.tmux[0]}), ${state.terms.size} held from before${kept.length ? `, ${kept.length} to restore` : ""}`
       : "shells on plain ptys (no tmux found; they end with the server)",
