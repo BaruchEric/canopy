@@ -6,8 +6,10 @@
  * a submenu, the filter) is ui/src/ctxmenu.ts.
  *
  * How it behaves:
- * - It opens only where canopy has something to say; text boxes, shells,
- *   pictures, the Secrets view and Shift+right-click keep the browser's.
+ * - It opens only where canopy has something to say; text boxes,
+ *   pictures, the Secrets view and Shift+right-click keep the browser's,
+ *   and so does the menu key in a shell, whose keys are the shell's. A
+ *   pointer on a shell's screen gets the screen's menu (FR-086).
  * - A menu is a thunk, run again on every store change while it is open,
  *   so a run that starts or a star that lands shows in it at once.
  * - Typing filters every row, submenus' rows included, through a box that
@@ -227,7 +229,11 @@ export function ContextMenuHost({ build }: { build: CtxBuild }) {
       }
       const target = e.target;
       const chain = chainOf(target);
-      const skip = ctxSkip(chain, e.shiftKey);
+      // a keyboard's contextmenu event comes at 0,0 or with no pointer. One
+      // a script made as a plain Event has no point at all, and a menu
+      // placed at NaN never settles, so it opens under its target too.
+      const keyed = !Number.isFinite(e.clientX + e.clientY) || (e.clientX === 0 && e.clientY === 0) || (e instanceof PointerEvent && e.pointerId === -1);
+      const skip = ctxSkip(chain, e.shiftKey, keyed);
       if (skip === "menu") {
         e.preventDefault();
         return;
@@ -242,8 +248,6 @@ export function ContextMenuHost({ build }: { build: CtxBuild }) {
       // long-press's selection, and with it the handles and the phone's
       // own search bar it brings up
       if (madeByPress) getSelection()?.removeAllRanges();
-      // a keyboard's contextmenu event comes at 0,0 or with no pointer
-      const keyed = (e.clientX === 0 && e.clientY === 0) || (e instanceof PointerEvent && e.pointerId === -1);
       const r = target.getBoundingClientRect();
       openCtx(() => buildRef.current(target, chainOf(target), selection), keyed ? { under: r } : { at: { x: e.clientX, y: e.clientY } }, keyed, target);
     };
@@ -253,7 +257,7 @@ export function ContextMenuHost({ build }: { build: CtxBuild }) {
       const target = ringed ?? (document.activeElement instanceof Element ? document.activeElement : null);
       if (!target || target === document.body) return;
       const chain = chainOf(target);
-      if (ctxSkip(chain, false)) return;
+      if (ctxSkip(chain, false, true)) return;
       const selection = selectedText();
       if (!buildRef.current(target, chain, selection)) return;
       e.preventDefault();

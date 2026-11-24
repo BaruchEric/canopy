@@ -174,15 +174,34 @@ describe("ctxSkip", () => {
   test("Shift always leaves the browser's menu", () => {
     expect(ctxSkip(card, true)).toBe("shift");
   });
-  test("leaves text boxes, shells, pictures, the Secrets view and marked things alone", () => {
+  test("leaves text boxes, a shell's key bar, pictures, the Secrets view and marked things alone", () => {
     expect(ctxSkip([node("input"), ...card], false)).toBe("typing");
     expect(ctxSkip([node("div", [], { contenteditable: "true" })], false)).toBe("typing");
     expect(ctxSkip([node("div", [], { contenteditable: "false" })], false)).toBeNull();
+    // a shell's view off its screen: the touch bar's keys are held down
+    expect(ctxSkip([node("button", ["term-key"]), node("div", ["term-keys"]), node("div", ["term-view"])], false)).toBe("shell");
     expect(ctxSkip([node("canvas"), node("div", ["xterm"]), node("div", ["term-view"])], false)).toBe("media");
-    expect(ctxSkip([node("div", ["xterm-rows"]), node("div", ["term-view"])], false)).toBe("shell");
     expect(ctxSkip([node("img"), ...card], false)).toBe("media");
     expect(ctxSkip([node("td"), node("section", ["secrets-view"])], false)).toBe("secrets");
     expect(ctxSkip([node("div", [], { "data-native-menu": "" })], false)).toBe("native");
+  });
+  test("a pointer on a shell's screen gets the screen's menu, a key there stays the shell's (FR-086)", () => {
+    const screen = [node("div", ["xterm"]), node("div", ["term-screen"], { "data-term": "t1" }), node("div", ["term-view"])];
+    expect(ctxSkip([node("div", ["xterm-rows"]), ...screen], false)).toBeNull();
+    // xterm's canvas and its hidden textarea are the terminal's, not a picture or a box
+    expect(ctxSkip([node("canvas"), ...screen], false)).toBeNull();
+    expect(ctxSkip([node("textarea", ["xterm-helper-textarea"]), ...screen], false)).toBeNull();
+    // Shift still gives the browser's menu, and the menu key in a shell is the shell's
+    expect(ctxSkip([node("div", ["xterm-rows"]), ...screen], true)).toBe("shift");
+    expect(ctxSkip([node("textarea", ["xterm-helper-textarea"]), ...screen], false, true)).toBe("shell");
+    // a box around a screen is still a box, and a key elsewhere still opens the menu
+    expect(ctxSkip([...screen, node("div", [], { contenteditable: "true" })], false)).toBe("typing");
+    expect(ctxSkip(card, false, true)).toBeNull();
+    expect(ctxSubjects([node("div", ["xterm-rows"]), ...screen, node("div", [], { "data-section": "shell" }), node("section", ["panel"], { "data-repo": "r" })])).toEqual([
+      { kind: "screen", id: "t1" },
+      { kind: "section", key: "shell", repo: "r" },
+      { kind: "panel", id: "r", head: false },
+    ]);
   });
   test("swallows a right-click inside an open menu", () => {
     expect(ctxSkip([node("button", ["menu-item"]), node("div", ["menu"], { role: "menu" })], false)).toBe("menu");

@@ -59,6 +59,17 @@ export function sessionId(name: string): string | null {
 export const tmuxArgv = (bin: string, socket: string, conf: string): string[] => [bin, "-u", "-S", socket, "-f", conf];
 
 /**
+ * Leaves a session's mouse to the browser terminal. tmux 3.8 turns `mouse`
+ * on where every tmux before it left it off, and a tmux that has the mouse
+ * takes the drag, the wheel and the right button for its own selection,
+ * copy mode and menu: xterm then selects nothing, so the shell's copy
+ * (its key, and the row in the screen's menu, FR-086) has nothing to take.
+ * Set on each session, since `lib/tmux.conf` is read once when the tmux
+ * server starts and a server outlives many canopy versions.
+ */
+export const mouseOffArgs = (name: string): string[] => [";", "set-option", "-t", name, "mouse", "off"];
+
+/**
  * A detached session for a shell, sized for the terminal that will show it,
  * running what the pty would have run directly (`shellArgs`), then the
  * repo, place and path set on it in the same call. A local folder is the
@@ -101,6 +112,7 @@ export function newSessionArgs(base: string[], meta: TmuxMeta, size: TermSize, c
     name,
     "@canopy_path",
     meta.path,
+    ...mouseOffArgs(name),
     ...(meta.handle ? [";", "set-option", "-t", name, "@canopy_handle", meta.handle] : []),
     ...(meta.label ? [";", "set-option", "-t", name, "@canopy_label", meta.label] : []),
   ];
@@ -234,6 +246,7 @@ export function taskSessionArgs(base: string[], meta: TaskMeta, size: TermSize):
     ...opt("@canopy_path", meta.path),
     ...opt("@canopy_task", meta.task),
     ...(meta.tree ? opt("@canopy_worktree", meta.tree) : []),
+    ...mouseOffArgs(name),
     ";",
     "set-option",
     "-w",
@@ -337,6 +350,7 @@ export function rangerSessionArgs(base: string[], id: string, root: string, size
     ["sleep", "2147483647"].map(shellQuote).join(" "),
     ...opt("@canopy_ranger", "1"),
     ...opt("@canopy_path", root),
+    ...mouseOffArgs(name),
     ";",
     "set-option",
     "-w",

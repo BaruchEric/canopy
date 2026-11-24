@@ -22,8 +22,9 @@
 // own window, and a phone's copy. The same row on what stands for a thing
 // (FR-085): a chat's chip on a card, an agent's row in "waiting on you", the
 // board's tile, a chat's row in a window with no dock, a phone's long press on
-// a chip, and a shell's row in the shells list, with no menu over the shell's
-// own screen.
+// a chip, and a shell's row in the shells list. The shell's own screen
+// (FR-086): its menu on nothing selected, copy of a word, a paste that runs,
+// Shift and the menu key left alone, its window, and a phone's sheet.
 // It also drives the level (FR-079): at intermediate the quiet top bar in
 // one row with its menu, a turn's commands folded in a run's timeline and
 // the start box, which opens on a new worktree where the checkout is in
@@ -117,11 +118,27 @@ const ROW = "open in its own window";
  *  menu's rows as text; none when no menu opens. */
 async function rowsAt(p: Page, sel: string, at?: { x: number; y: number }): Promise<string[]> {
   await p.locator(sel).first().click({ button: "right", ...(at ? { position: at } : {}) });
+  return menuRows(p);
+}
+
+/** the open menu's rows as text; none when no menu opens */
+async function menuRows(p: Page): Promise<string[]> {
   const shown = await p.locator(".ctx-menu").first().waitFor({ timeout: 5000 }).then(() => true, () => false);
   // the menu settles in over 140ms
   await p.waitForTimeout(300);
   return shown ? (await p.locator('.ctx-menu [role="menuitem"]').allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim()) : [];
 }
+
+/** A contextmenu event as a browser sends one, at a point: a keyboard's at
+ *  0,0, a long press where the finger is. Playwright's own dispatchEvent
+ *  makes a plain Event with no point at all. */
+const menuEvent = (p: Page, sel: string, at: { x: number; y: number }) =>
+  p
+    .locator(sel)
+    .first()
+    .evaluate((el, at) => {
+      el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: at.x, clientY: at.y, button: 2 }));
+    }, at);
 
 /** Presses the open menu's first window row; the window it opens, if any. */
 async function pick(p: Page): Promise<Page | null> {
@@ -1525,7 +1542,7 @@ try {
     await phone.waitForSelector(".panel[data-repo]", { timeout: 20_000 });
     await phone.waitForTimeout(1200);
     // a finger's long press arrives as the same event a right-click sends
-    await phone.locator(".panel[data-repo] .panel-head").first().dispatchEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 80, button: 2 });
+    await menuEvent(phone, ".panel[data-repo] .panel-head", { x: 120, y: 80 });
     await phone.locator(".ctx-menu").first().waitFor({ timeout: 5000 }).catch(() => undefined);
     await phone.waitForTimeout(300);
     const copy = await pick(phone);
@@ -1646,7 +1663,7 @@ try {
     await phone.goto(`${base}/`, { waitUntil: "load" });
     await phone.waitForSelector(".run-chip[data-run]", { timeout: 20_000 }).catch(() => undefined);
     await phone.waitForTimeout(1200);
-    await phone.locator(".run-chip[data-run]").first().dispatchEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 200, button: 2 });
+    await menuEvent(phone, ".run-chip[data-run]", { x: 120, y: 200 });
     await phone.locator(".ctx-menu").first().waitFor({ timeout: 5000 }).catch(() => undefined);
     await phone.waitForTimeout(300);
     const sheet = await phone.evaluate(() => ({
@@ -1671,12 +1688,105 @@ try {
       .then(() => true, () => false);
     check(answered, "a new shell loads xterm and answers a command");
     await page.screenshot({ path: `${shots}/shell.png` });
-    // the shell's own screen keeps the browser's menu (SPEC, 2026-11-07)
-    await page.locator(".xterm:visible").first().click({ button: "right" });
+
+    // the shell's own screen has canopy's menu: the terminal's copy and a
+    // paste, then the shell's window (FR-086, SPEC 2026-11-24)
+    const SCREEN = ".term-screen[data-term]:visible";
+    const menuRow = (p: Page, word: RegExp) => p.locator('.ctx-menu [role="menuitem"]', { hasText: word }).first();
+    // WebKit has no clipboard permission to grant, and asks a person before a read
+    const clip = await page.context().grantPermissions(["clipboard-read", "clipboard-write"]).then(() => true, () => false);
+    const box = (await page.locator(SCREEN).first().boundingBox()) ?? { x: 0, y: 0, width: 0, height: 0 };
+    const blank = { x: box.width - 60, y: box.height - 12 };
+    const bare = await rowsAt(page, SCREEN, blank);
+    await page.screenshot({ path: `${shots}/shell-menu.png` });
+    check(
+      bare[0] === "copy nothing selected" && (bare[1] ?? "").startsWith("paste") && bare.includes(`${ROW} this shell`),
+      `a right-click in the shell's screen opens copy, paste and the shell's window ("${bare.join('", "') || "no menu"}")`,
+    );
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+
+    const word = await page.evaluate(() => {
+      const row = [...document.querySelectorAll<HTMLElement>(".xterm-rows > div")].filter((r) => r.getClientRects().length > 0).find((r) => (r.textContent ?? "").trim() === "canopy-42");
+      const b = row?.getBoundingClientRect();
+      return b ? { x: b.left + 20, y: b.top + b.height / 2 } : null;
+    });
+    if (word) {
+      await page.mouse.dblclick(word.x, word.y);
+      await page.waitForTimeout(300);
+      await page.mouse.click(word.x, word.y, { button: "right" });
+    }
+    const picked = word ? await menuRows(page) : [];
+    await menuRow(page, /^copy/).click({ timeout: 4000 }).catch(() => undefined);
     await page.waitForTimeout(500);
-    const over = await page.locator(".ctx-menu").count();
-    check(over === 0, `a right-click in the shell's screen opens no canopy menu (${over})`);
+    const said = await page.locator("p.said").first().innerText().catch(() => "");
+    const copied = clip ? await page.evaluate(() => navigator.clipboard.readText()).catch(() => "unreadable") : "";
+    check(
+      (picked[0] ?? "").startsWith("copy") && !(picked[0] ?? "").includes("nothing selected") && said.includes("copied the selection") && (!clip || copied === "canopy-42"),
+      `with a word selected the screen's copy takes it ("${picked[0] ?? "no menu"}", said "${said}"${clip ? `, the clipboard holds "${copied}"` : ", the clipboard not read here"})`,
+    );
+
+    if (clip) {
+      await page.evaluate(() => navigator.clipboard.writeText("echo pasted-$((20+3))"));
+      await rowsAt(page, SCREEN, blank);
+      await menuRow(page, /^paste/).click({ timeout: 4000 }).catch(() => undefined);
+      await page.waitForTimeout(500);
+      // the paste leaves Enter to the person
+      const waiting = await page.evaluate(() => [...document.querySelectorAll(".xterm-rows")].some((r) => r.textContent?.includes("pasted-23")));
+      await page.keyboard.press("Enter");
+      const ran = await page
+        .waitForFunction(() => [...document.querySelectorAll(".xterm-rows")].some((r) => r.textContent?.includes("pasted-23")), null, { timeout: 10_000 })
+        .then(() => true, () => false);
+      check(!waiting && ran, `the screen's paste types the clipboard into the shell and leaves Enter to the person (${waiting ? "ran by itself" : ran ? "ran on Enter" : "never ran"})`);
+    }
+
+    // Shift gives the browser's own menu, and the menu key in a shell is the shell's
+    await page.keyboard.down("Shift");
+    await page.locator(SCREEN).first().click({ button: "right", position: blank });
+    await page.keyboard.up("Shift");
+    await page.waitForTimeout(500);
+    const onShift = await page.locator(".ctx-menu").count();
+    await menuEvent(page, ".xterm:visible textarea", { x: 0, y: 0 });
+    await page.waitForTimeout(500);
+    const onKey = await page.locator(".ctx-menu").count();
+    check(onShift === 0 && onKey === 0, `Shift+right-click and the menu key in the shell's screen open no canopy menu (${onShift}, ${onKey})`);
+
+    await rowsAt(page, SCREEN, blank);
+    const own = await pick(page);
+    const ownAt = own ? new URL(own.url()).search : "";
+    const same = own
+      ? await own.waitForFunction(() => [...document.querySelectorAll(".xterm-rows")].some((r) => r.textContent?.includes("canopy-42")), null, { timeout: 15_000 }).then(() => true, () => false)
+      : false;
+    await own?.waitForTimeout(800);
+    const inOwn = own ? await rowsAt(own, SCREEN, { x: 200, y: 200 }) : [];
+    await own?.screenshot({ path: `${shots}/shell-menu-window.png` });
+    check(
+      ownAt.startsWith("?repo=demo&view=shell&term=") && same && (inOwn[0] ?? "").startsWith("copy") && inOwn.includes("open demo") && !inOwn.some((r) => r.startsWith(ROW)),
+      `the screen's window row opens the same shell in a window (${ownAt || "no window"}, ${same ? "its screen" : "no screen"}), whose own menu offers no window ("${inOwn.join('", "') || "no menu"}")`,
+    );
+    await own?.close();
     await page.close();
+
+    // a phone: a long press on the screen opens the sheet, and a held key of the bar stays the bar's
+    const phone = await fresh(undefined, false, true);
+    await phone.goto(`${base}/?repo=demo`, { waitUntil: "load" });
+    const onPhone = await phone.waitForSelector(SCREEN, { timeout: 20_000 }).then(() => true, () => false);
+    await phone.waitForTimeout(1200);
+    if (onPhone) await phone.locator(SCREEN).first().scrollIntoViewIfNeeded();
+    const pbox = (onPhone ? await phone.locator(SCREEN).first().boundingBox() : null) ?? { x: 0, y: 0, width: 0, height: 0 };
+    const keys = await phone.locator(".term-view .term-keys button:visible").count();
+    if (keys) await menuEvent(phone, ".term-view .term-keys button:visible", { x: pbox.x + 20, y: pbox.y + pbox.height + 20 });
+    await phone.waitForTimeout(400);
+    const onBar = await phone.locator(".ctx-menu").count();
+    if (onPhone) await menuEvent(phone, `${SCREEN} .xterm-rows`, { x: pbox.x + pbox.width / 2, y: pbox.y + pbox.height / 2 });
+    const pressed = onPhone ? await menuRows(phone) : [];
+    const wider = await phone.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    await phone.screenshot({ path: `${shots}/shell-menu-phone.png` });
+    check(
+      keys > 0 && onBar === 0 && (pressed[0] ?? "").startsWith("copy") && (pressed[1] ?? "").startsWith("paste") && pressed.includes(`${ROW} this shell`) && wider <= 0,
+      `on a phone a long press on the shell's screen opens the same rows ("${pressed.join('", "') || "no menu"}") with nothing off the screen, and a held key of the bar (${keys} keys) opens none (${onBar})`,
+    );
+    await phone.close();
 
     // the shell's row in the shells list opens it in a window of its own (FR-085)
     const lister = await fresh();

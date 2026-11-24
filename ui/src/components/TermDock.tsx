@@ -50,7 +50,7 @@ import { KEY_ONLY, freeToFocus, showKeyboard } from "../softkeys";
 import { takeSoftInput } from "../softinput";
 import { Wordmark } from "./TopBar";
 import { AgentButtons } from "./AgentButtons";
-import { LIVE, noteShellFocus } from "../liveTerms";
+import { LIVE, canPaste, noteScreen, noteShellFocus } from "../liveTerms";
 import { TERM_GONE, type Repo } from "../../../src/core/types";
 import { NewShellButton } from "./NewShell";
 import { NARROW, useMedia } from "../media";
@@ -266,6 +266,8 @@ export function TermView({
   // shell its "paste into the shell" names
   const nameRef = useRef(tab.label ?? tab.name);
   nameRef.current = tab.label ?? tab.name;
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
   // the touch key bar's sticky Ctrl/Alt, read by the phone keyboard's input
   // inside the effect below, so a ref beside the state the bar renders
   const [mods, setModsState] = useState<Mods>(NO_MODS);
@@ -310,6 +312,7 @@ export function TermView({
     termRef.current = term;
     fitRef.current = fit;
     LIVE.set(tab.id, term);
+    noteScreen(el, { term, tab: () => tabRef.current });
 
     const enc = new TextEncoder();
     let ws: WebSocket | null = null;
@@ -723,6 +726,7 @@ export function TermView({
         ws.close();
       }
       if (LIVE.get(tab.id) === term) LIVE.delete(tab.id);
+      noteScreen(el, null);
       term.textarea?.removeEventListener("focus", onFocus);
       term.dispose();
       termRef.current = null;
@@ -768,7 +772,8 @@ export function TermView({
   return (
     <div className="term-view" hidden={!active}>
       {typeof xterm === "string" && <p className="empty" role="alert">{xterm}</p>}
-      <div ref={host} className="term-screen" />
+      {/* data-term says whose screen this is to a right-click (FR-086) */}
+      <div ref={host} className="term-screen" data-term={tab.id} />
       {touch && (
         <KeyBar
           mods={mods}
@@ -808,10 +813,6 @@ function useCoarsePointer(): boolean {
   }, []);
   return coarse;
 }
-
-/** Whether a key can paste the clipboard: reading it needs a secure page
- *  (the tunnel, or localhost), not the tailnet's plain http. */
-const canPaste = (): boolean => isSecureContext && typeof navigator.clipboard?.readText === "function";
 
 /** keys that repeat while held */
 const REPEATS: readonly BarKey[] = ["up", "down", "left", "right", "pgup", "pgdn"];

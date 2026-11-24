@@ -18,12 +18,13 @@ import { RUN_CARD, agentName } from "../allagents";
 import { machineOf } from "../agentcards";
 import { AGENT_GLYPH } from "../agentpanel";
 import { CLI_GLYPH, CLI_NAME } from "../cli";
+import { myPlatform } from "../client";
 import { gearAround } from "../ctxgears";
 import { ctxLink, ctxPresent, ctxSubjects, factLabel, isFact, type CtxItem, type CtxNode, type CtxSubject } from "../ctxmenu";
 import { pickable } from "../flows";
 import { runRepoName } from "../goals";
 import { ITEM_GLYPH, isReservedPanel, itemOfPanel, panelOfItem, panelOfWindow } from "../itempanel";
-import { lastShell, typeInto } from "../liveTerms";
+import { canPaste, lastShell, screenAt, typeInto } from "../liveTerms";
 import { PHONE } from "../media";
 import { backendOf } from "../registry";
 import { lacks } from "../callerToken";
@@ -96,15 +97,19 @@ export function buildMenu(target: Element, chain: CtxNode[], selection: string):
   // what is under the pointer itself, most precise first
   const near: CtxItem[] = [];
   const repoHere = repoIdOf(subjects);
-  if (selection) near.push(...selectionRows(s, selection, repoHere));
-  const link = ctxLink(chain);
+  // a shell's screen is never read: no link, no "copy" of what is under
+  // the pointer, only the terminal's own copy in the screen's menu, which
+  // a selection elsewhere on the page would only double
+  const onScreen = first?.kind === "screen";
+  if (selection && !onScreen) near.push(...selectionRows(s, selection, repoHere));
+  const link = onScreen ? null : ctxLink(chain);
   if (link) {
     near.push(
       { kind: "link", id: "link:open", label: "open the link in a new tab", fact: linkLabel(link), href: link },
       { kind: "run", id: "link:copy", label: "copy the link", run: () => copyNamed("link", link) },
     );
   }
-  const factAt = chain.findIndex(isFact);
+  const factAt = onScreen ? -1 : chain.findIndex(isFact);
   const factEl = factAt >= 0 ? nth(target, factAt) : null;
   const fact = factEl instanceof HTMLElement ? (factEl.dataset["copy"] ?? factEl.textContent ?? "").trim() : "";
   if (fact && fact !== selection && !(link && fact === link) && fact.length <= 4000) {
@@ -118,6 +123,8 @@ export function buildMenu(target: Element, chain: CtxNode[], selection: string):
   let subjectBlocks: CtxBlock[] = [];
 
   const built = first ? subjectMenu(s, first, target) : null;
+  // a screen with no menu of its own keeps the browser's, not the page's rows
+  if (onScreen && !built) return null;
   if (built) {
     ({ head, quick, label } = built);
     subjectBlocks = built.blocks;
@@ -194,6 +201,8 @@ function subjectMenu(s: CanopyState, sub: CtxSubject, target: Element): Built | 
       return chatMenu(s, sub.id);
     case "shell":
       return shellMenu(s, sub.id);
+    case "screen":
+      return screenMenu(s, target);
   }
 }
 
@@ -353,6 +362,8 @@ const viewWord = (view: string): string => GO.find((g) => g.view === view)?.what
  * - A chat's chip, row or card: the chat's window. A shell's row: the
  *   shell's window, which joins it (FR-085). An inbox row a chat asked
  *   from offers the chat's window after the row's own moves.
+ * - A shell's own screen: that shell's window, after the screen's copy
+ *   and paste (FR-086).
  * - A popup, a sheet's chat or a tab beside shells: the item's window; the
  *   popover or the sheet closes once the window is open.
  *
@@ -435,6 +446,17 @@ function windowRows(s: CanopyState, subjects: readonly CtxSubject[], target: Ele
         // a shell window's own shell is here already
         if (info && s.repos.some((r) => r.id === info.repoId) && !(here.shell && here.term === info.id)) {
           made = put(`shell:${info.id}`, `the shell at ${shellName(s, info)}`, () => opened(popShell(info.repoId, info.id, "window")));
+        }
+        break;
+      }
+      case "screen": {
+        const tab = screenAt(target)?.tab();
+        // a shell window shows its own shells already, the ranger's
+        // session is no repo's to open in one, and a shell that has ended
+        // has nothing to join. Not `made`: the row follows the terminal's
+        // copy and paste, which are what a right-click in a shell is for.
+        if (tab && !tab.ranger && tab.exit === undefined && !here.shell && s.repos.some((r) => r.id === tab.repoId)) {
+          put(`shell:${tab.id}`, "this shell", () => opened(popShell(tab.repoId, tab.id, "window", tab.task)));
         }
         break;
       }
@@ -607,6 +629,60 @@ function shellMenu(s: CanopyState, id: string): Built | null {
   const facts: CtxHead["facts"] = [{ text: "shell" }, { text: info.place === "panel" ? "in a panel" : "in the strip" }];
   if (info.viewers.length > 0) facts.push({ text: `on ${info.viewers.join(", ")}` });
   return { label: `Menu for the shell at ${name}`, head: { glyph: "▸", title: name, facts }, blocks: items.length ? [{ kind: "items", key: "shell", items }] : [] };
+}
+
+/** A shell's own screen (FR-086): the terminal's copy and a paste, which
+ *  are what the browser's menu was kept there for until now, and the
+ *  shell's repo where the click is not in that repo's panel already. Its
+ *  window is the window row's, after these. The terminal is the one under
+ *  the pointer (`screenAt`). The menu never reads the screen: copy takes
+ *  the terminal's selection when it is pressed and says none of it, and a
+ *  selection there gets none of the page's selection rows. */
+function screenMenu(s: CanopyState, target: Element): Built | null {
+  const screen = screenAt(target);
+  if (!screen) return null;
+  // a touch screen on a page that may not read the clipboard (plain http on
+  // a tailnet address): the key bar has no paste there either, so the
+  // browser's long-press menu is the only paste and stays
+  if (!canPaste() && window.matchMedia("(pointer: coarse)").matches) return null;
+  const { term } = screen;
+  const tab = screen.tab();
+  const name = tab.label ?? tab.name;
+  const apple = ["mac", "ios"].includes(myPlatform());
+  const items: CtxItem[] = [
+    term.hasSelection()
+      ? {
+          kind: "run",
+          id: "sc:copy",
+          label: "copy",
+          keys: apple ? "⌘C" : "Ctrl+Shift+C",
+          run: async () => {
+            // the shell's own copy key takes the same road (FR-054)
+            await copyText(term.getSelection(), { source: "shell", from: name });
+            term.focus();
+            return "copied the selection";
+          },
+        }
+      : { kind: "run", id: "sc:copy", label: "copy", off: "nothing selected", run: () => undefined },
+    canPaste()
+      ? {
+          kind: "run",
+          id: "sc:paste",
+          label: "paste",
+          keys: apple ? "⌘V" : "Ctrl+Shift+V",
+          run: async () => {
+            const text = await navigator.clipboard.readText();
+            // Enter is left to the person, as with every paste into a shell
+            if (text) term.paste(text);
+            term.focus();
+          },
+        }
+      : { kind: "run", id: "sc:paste", label: "paste", off: apple ? "use ⌘V" : "use Ctrl+Shift+V", run: () => undefined },
+  ];
+  const repo = tab.ranger ? undefined : s.repos.find((r) => r.id === tab.repoId);
+  if (repo && !target.closest(".panel[data-repo]")) items.push({ kind: "run", id: "sc:repo", label: `open ${repo.name}`, run: () => s.openRepo(repo.id) });
+  const facts: CtxHead["facts"] = [{ text: tab.ranger ? "the ranger" : tab.task ? `task ${tab.task}` : "shell" }];
+  return { label: `Menu for the shell ${name}`, head: { glyph: "▸", title: name, facts }, blocks: [{ kind: "items", key: "screen", items }] };
 }
 
 /** Rows for selected text: copy it, and put it somewhere useful. */

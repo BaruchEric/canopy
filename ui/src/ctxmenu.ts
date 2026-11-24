@@ -209,7 +209,10 @@ export type CtxSkip =
   | "shift"
   /** a text box: the browser's menu has its spelling and paste */
   | "typing"
-  /** a shell: xterm's selection and canopy's shell rules (SPEC 2026-11-07) */
+  /** a shell's view off its screen (the touch key bar, whose keys are held
+   *  down), and its screen when the menu was asked for by a key, since keys
+   *  in a shell are the shell's. A pointer on the screen gets the screen's
+   *  own menu (FR-086). */
   | "shell"
   /** the Secrets view: nothing there is offered to copy */
   | "secrets"
@@ -223,17 +226,26 @@ export type CtxSkip =
 const TYPES = new Set(["input", "textarea", "select", "option"]);
 const MEDIA = new Set(["img", "video", "audio", "picture", "canvas"]);
 
-/** Whether canopy stays out of a right-click on `chain` (innermost first). */
-export function ctxSkip(chain: readonly CtxNode[], shift: boolean): CtxSkip | null {
+/** Whether canopy stays out of a right-click on `chain` (innermost first).
+ *  `keyed` is a menu asked for from the keyboard (the menu key, Shift+F10,
+ *  or the event a browser makes of them). */
+export function ctxSkip(chain: readonly CtxNode[], shift: boolean, keyed = false): CtxSkip | null {
   if (shift) return "shift";
+  // a shell's screen (`[data-term]`, TermView's host): xterm's canvas and
+  // its hidden textarea under it are the terminal's, not a picture or a box
+  const screen = chain.findIndex((n) => n.attrs["data-term"] !== undefined);
+  if (screen >= 0 && keyed) return "shell";
   const first = chain[0];
-  if (first && MEDIA.has(first.tag)) return "media";
-  for (const n of chain) {
+  if (first && MEDIA.has(first.tag) && screen < 0) return "media";
+  for (const [i, n] of chain.entries()) {
     if (n.attrs["role"] === "menu" || n.cls.includes("ctx-menu")) return "menu";
-    if (TYPES.has(n.tag)) return "typing";
-    const editable = n.attrs["contenteditable"];
-    if (editable !== undefined && editable !== "false") return "typing";
-    if (n.cls.includes("term-view") || n.cls.includes("xterm")) return "shell";
+    // inside the screen nothing is a box of the page's
+    if (i >= screen) {
+      if (TYPES.has(n.tag)) return "typing";
+      const editable = n.attrs["contenteditable"];
+      if (editable !== undefined && editable !== "false") return "typing";
+    }
+    if (screen < 0 && (n.cls.includes("term-view") || n.cls.includes("xterm"))) return "shell";
     if (n.cls.includes("secrets-view")) return "secrets";
     if (n.attrs["data-native-menu"] !== undefined) return "native";
   }
@@ -256,9 +268,10 @@ export type CtxSubject =
   | { kind: "agent"; id: string }
   /** a chat a chip, a row or a card stands for (`[data-run]`), by run id */
   | { kind: "chat"; id: string }
-  /** a running shell a row stands for (`[data-shell]`), by its id; the
-   *  shell's own screen keeps the browser's menu (`ctxSkip`) */
+  /** a running shell a row stands for (`[data-shell]`), by its id */
   | { kind: "shell"; id: string }
+  /** a shell's own screen (`[data-term]`), by its tab's id (FR-086) */
+  | { kind: "screen"; id: string }
   /** a dock panel that is no repo's (`.panel[data-panel]`): a chat's, an
    *  agent's, a popup's or the command line's, `head` over its head */
   | { kind: "dock"; id: string; head: boolean }
@@ -329,6 +342,8 @@ export function ctxSubjects(chain: readonly CtxNode[]): CtxSubject[] {
     if (run) put({ kind: "chat", id: run });
     const shell = n.attrs["data-shell"];
     if (shell) put({ kind: "shell", id: shell });
+    const screen = n.attrs["data-term"];
+    if (screen) put({ kind: "screen", id: screen });
     const row = n.attrs["data-repo-row"];
     if (row) put({ kind: "repo", id: row });
   });

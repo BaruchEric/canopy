@@ -117,6 +117,13 @@ describe("argv", () => {
       `canopy-${ID}`,
       "@canopy_path",
       "/Users/me/dev/web-apps/ripe",
+      // tmux 3.8 takes the mouse unless told not to; the browser terminal keeps it
+      ";",
+      "set-option",
+      "-t",
+      `canopy-${ID}`,
+      "mouse",
+      "off",
     ]);
   });
   test("a handle and the env go into the session's environment", () => {
@@ -254,6 +261,7 @@ describe("tasks on tmux", () => {
       ";", "set-option", "-t", name, "@canopy_place", "strip",
       ";", "set-option", "-t", name, "@canopy_path", "/r/app",
       ";", "set-option", "-t", name, "@canopy_task", "dev",
+      ";", "set-option", "-t", name, "mouse", "off",
       ";", "set-option", "-w", "-t", name, "remain-on-exit", "on",
     ]);
   });
@@ -360,6 +368,12 @@ describe("the ranger's session", () => {
       name,
       "@canopy_path",
       "/home/eric/dev",
+      ";",
+      "set-option",
+      "-t",
+      name,
+      "mouse",
+      "off",
       ";",
       "set-option",
       "-w",
