@@ -263,7 +263,7 @@ import { StallHub } from "./stalls";
 import { SweepHub } from "./sweep";
 import type { PlanInputs, ShellFacts } from "../core/sweep";
 import { HealthHub, rangerResult, streamResult } from "./health";
-import { CapacityHub, capacityFile } from "./capacity";
+import { antigravityUsageReader, CapacityHub, capacityFile } from "./capacity";
 import { CapacityHeldError, holdWords, parsePriority } from "../core/capacity";
 import { CollisionHub } from "./collisions";
 import { KitHub, kitPath } from "./kit";
@@ -7571,6 +7571,7 @@ export async function startServer(opts: {
     config: loadConfig,
     file: capacityFile(),
     reader: null,
+    ...(process.env["NODE_ENV"] === "test" ? {} : { cliReaders: { antigravity: antigravityUsageReader() } }),
     held: () => heldStarts(state),
     wake: () => wakeForCapacity(state),
     saveSettings: setCapacitySettings,

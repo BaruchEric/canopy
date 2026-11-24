@@ -82,6 +82,21 @@ test("a run's count: its windows, when it was read, and the chip falls back to t
   expect([high[0]?.tone, rowsTone(high)]).toEqual(["lichen", "lichen"]);
 });
 
+test("cli source and capacityWord: a healthy 5h window never hides another harness's weekly hold", () => {
+  const claudeHigh = cap({ weekly: { used: 0.93, resetsAt: THU_3PM, readAt: NOW - min(10) }, source: "run" });
+  const agyLow: Capacity = { ...emptyCapacity("antigravity"), fiveHour: { used: 0.04, resetsAt: NOW + min(65), readAt: NOW - min(3) }, weekly: { used: 0.02, resetsAt: THU_3PM, readAt: NOW - min(3) }, source: "cli" };
+  const rows = capacityRows({ mac: info([claudeHigh, agyLow]) }, ["mac"], NOW);
+  expect(rows[1]?.source).toBe("read from the CLI, 3m ago");
+  expect(rowsTone(rows)).toBe("lichen");
+  expect(capacityWord(rows)).toBe("week 93%");
+  // when a single row is lichen due to its weekly window while 5h is low, weekly leads
+  const agyWeekHigh: Capacity = { ...emptyCapacity("antigravity"), fiveHour: { used: 0.04, resetsAt: NOW + min(65), readAt: NOW }, weekly: { used: 0.9, resetsAt: THU_3PM, readAt: NOW }, source: "cli" };
+  expect(capacityWord(capacityRows({ mac: info([agyWeekHigh]) }, ["mac"], NOW))).toBe("week 90%");
+  // when 5h itself trips the low hold, 5h leads
+  const agyFiveHigh: Capacity = { ...emptyCapacity("antigravity"), fiveHour: { used: 0.75, resetsAt: NOW + min(65), readAt: NOW }, weekly: { used: 0.8, resetsAt: THU_3PM, readAt: NOW }, source: "cli" };
+  expect(capacityWord(capacityRows({ mac: info([agyFiveHigh]) }, ["mac"], NOW))).toBe("5h 75%");
+});
+
 test("heldRows: every backend's held starts in order, oldest first within each (FR-036 plan 2)", () => {
   const held = (id: string, since: number) => ({ id, what: id, repoId: "a", priority: "low" as const, why: "waiting for capacity", since });
   const mac = { capacity: [], held: [held("flow:b", 2), held("trigger:a", 1)], settings: DEFAULT_CAPACITY };

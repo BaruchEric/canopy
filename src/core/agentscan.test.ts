@@ -82,6 +82,8 @@ describe("/proc", () => {
       [50, "codex"],
     ]);
     expect(hits[0]?.startedAt).toBe(1790000000_000 + 3_600_000);
+    expect(classify("agy", ["agy", "-p", "/usage", "--output-format", "json"])).toBeNull();
+    expect(classify("agy", ["agy", "--model", "gemini-4-neon"])).toBe("antigravity");
   });
 });
 

@@ -8,6 +8,7 @@
  */
 
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   DEFAULT_CAPACITY,
@@ -23,6 +24,7 @@ import {
   hitStands,
   observe,
   patchCapacity,
+  readAntigravityUsage,
   readUsage,
   type Capacity,
   type CapacityHit,
@@ -33,6 +35,8 @@ import {
   type Window,
 } from "../core/capacity";
 import type { CostEntry } from "../core/costs";
+import { workEnv } from "../core/envnames";
+import { findBinary } from "../core/openers";
 import { configDir } from "../core/store";
 import {
   HARNESSES,
@@ -51,6 +55,81 @@ export const capacityFile = (): string => join(configDir(), "capacity.json");
 /** P2's endpoint for one harness; wired to nothing until the usage read is approved. */
 export type UsageReader = (harness: Harness) => Promise<unknown>;
 
+/** Reads one harness's usage windows directly from its own CLI. Returns null
+ *  when the binary is not installed; throws on a read/auth/parse failure. */
+export type CliUsageReader = (now: number) => Promise<{ fiveHour: Window | null; weekly: Window | null } | null>;
+
+export const ANTIGRAVITY_USAGE_TIMEOUT = 15_000;
+
+/** Reads Antigravity's plan windows through `agy -p /usage --output-format json`
+ *  using this backend's own `agy` install and Google login (0 turns, 0 tokens,
+ *  no conversation created). Kills promptly if `agy` asks for interactive login. */
+export function antigravityUsageReader(opts: { command?: readonly string[]; timeoutMs?: number; find?: (bin: string) => string | null } = {}): CliUsageReader {
+  const timeoutMs = opts.timeoutMs ?? ANTIGRAVITY_USAGE_TIMEOUT;
+  return async (now: number) => {
+    const argv = opts.command?.length
+      ? [...opts.command, "-p", "/usage", "--output-format", "json"]
+      : (() => {
+          const bin = (opts.find ?? findBinary)("agy");
+          return bin ? [bin, "-p", "/usage", "--output-format", "json"] : null;
+        })();
+    if (!argv) return null;
+    const proc = Bun.spawn(argv, {
+      cwd: tmpdir(),
+      env: workEnv(process.env),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    let timedOut = false;
+    let authRequired = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill();
+    }, timeoutMs);
+    (timer as { unref?: () => void }).unref?.();
+    const readStderr = async (): Promise<string> => {
+      const reader = proc.stderr.getReader();
+      const decoder = new TextDecoder();
+      let text = "";
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          text += decoder.decode(value, { stream: true });
+          if (!authRequired && /authentication required/i.test(text)) {
+            authRequired = true;
+            proc.kill();
+          }
+        }
+      } catch {
+        // stream closed on kill
+      } finally {
+        reader.releaseLock();
+      }
+      return text;
+    };
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text().catch(() => ""),
+      readStderr(),
+      proc.exited,
+    ]);
+    clearTimeout(timer);
+    if (authRequired) throw new Error("Antigravity authentication required; run `agy acp --login` first");
+    if (timedOut) throw new Error(`agy /usage timed out after ${timeoutMs}ms`);
+    if (code !== 0) throw new Error(stderr.trim().split("\n").pop() || `agy /usage exited with ${code}`);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      throw new Error("agy /usage returned invalid JSON");
+    }
+    const windows = readAntigravityUsage(parsed, now);
+    if (!windows) throw new Error("agy /usage returned no readable quota windows");
+    return windows;
+  };
+}
+
 export interface CapacityHubDeps {
   broadcast: (event: ServerEvent) => void;
   /** the ledger's rows since `since` (readCosts) */
@@ -59,6 +138,8 @@ export interface CapacityHubDeps {
   /** where the hits live across restarts: capacityFile() */
   file: string;
   reader?: UsageReader | null;
+  /** per-harness CLI usage readers, used when `reader` is not set */
+  cliReaders?: Partial<Record<Harness, CliUsageReader>>;
   now?: () => number;
   /** ms between a change and its event, so a burst sends one; 250 */
   debounce?: number;
@@ -96,25 +177,30 @@ const isCapacityHit = (value: unknown): value is CapacityHit => {
   );
 };
 
-/** a window as `capacity.json` keeps a run's count; null for anything else */
-const keptWindow = (value: unknown): Window | null =>
-  isRecord(value) && finite(value["used"]) && value["used"] >= 0 && finite(value["resetsAt"]) && finite(value["readAt"])
-    ? { used: value["used"], resetsAt: value["resetsAt"], readAt: value["readAt"] }
-    : null;
+/** a window as `capacity.json` keeps a run's or CLI's count; null for anything else */
+const keptWindow = (value: unknown, allowNullReset = false): Window | null => {
+  if (!isRecord(value) || !finite(value["used"]) || value["used"] < 0 || !finite(value["readAt"])) return null;
+  const reset = value["resetsAt"];
+  if (reset === null) return allowNullReset ? { used: value["used"], resetsAt: null, readAt: value["readAt"] } : null;
+  return finite(reset) ? { used: value["used"], resetsAt: reset, readAt: value["readAt"] } : null;
+};
 
-/** A hit's source: an endpoint's or a run's reading stays what it is, and
+/** A hit's source: an endpoint's, run's or CLI's reading stays what it is, and
  *  anything else is observed from the hit. */
 const hitSource = (source: CapacitySource): CapacitySource =>
-  source === "endpoint" || source === "run" ? source : "observed";
+  source === "endpoint" || source === "run" || source === "cli" ? source : "observed";
 
 export class CapacityHub {
   private readonly readings = new Map<Harness, Capacity>();
   private readonly seenRuns = new Map<string, number>();
+  private readonly seenCliRuns = new Map<string, string>();
+  private readonly cliInFlight = new Map<Harness, Promise<void>>();
   private readonly readerFailures = new Set<Harness>();
   private readonly now: () => number;
   private readonly every: number;
   private readonly idle: number;
   private readonly reader: UsageReader | null;
+  private readonly cliReaders: Partial<Record<Harness, CliUsageReader>>;
   private settings: CapacitySettings = { ...DEFAULT_CAPACITY };
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pending: ReturnType<typeof setTimeout> | null = null;
@@ -131,6 +217,7 @@ export class CapacityHub {
     this.every = deps.timings?.every ?? READ_EVERY;
     this.idle = deps.timings?.idle ?? READ_IDLE;
     this.reader = deps.reader ?? null;
+    this.cliReaders = deps.cliReaders ?? {};
     for (const harness of HARNESSES) this.readings.set(harness, emptyCapacity(harness));
   }
 
@@ -152,18 +239,29 @@ export class CapacityHub {
   }
 
   /** A run change: a new limited mark becomes its harness's hit, at the
-   *  CLI's own reset when its rate-limit event named one. */
+   *  CLI's own reset when its rate-limit event named one. A finished run or
+   *  chat turn on a harness with a CLI reader refreshes that harness's count. */
   onRun(run: Run): void {
     const limited = run.limited;
-    if (!limited || this.seenRuns.get(run.id) === limited.at) return;
-    const hit = hitOfLimited(limited);
-    if (!hit) return;
-    this.seenRuns.set(run.id, limited.at);
-    const current = this.get(run.harness);
-    this.readings.set(run.harness, { ...current, hit, source: hitSource(current.source) });
-    this.keep();
-    this.changed();
-    this.schedule(true);
+    if (limited && this.seenRuns.get(run.id) !== limited.at) {
+      const hit = hitOfLimited(limited);
+      if (hit) {
+        this.seenRuns.set(run.id, limited.at);
+        const current = this.get(run.harness);
+        this.readings.set(run.harness, { ...current, hit, source: hitSource(current.source) });
+        this.keep();
+        this.changed();
+        this.schedule(true);
+      }
+    }
+    if (!this.reader && this.cliReaders[run.harness] && (run.status === "done" || run.status === "limited" || (run.status === "idle" && (run.result?.turns ?? 0) > 0))) {
+      const mark = `${run.status}:${run.result?.turns ?? 0}:${run.endedAt ?? 0}`;
+      if (this.seenCliRuns.get(run.id) !== mark) {
+        if (this.seenCliRuns.size >= 200) this.seenCliRuns.clear();
+        this.seenCliRuns.set(run.id, mark);
+        void this.readCli(run.harness, true);
+      }
+    }
   }
 
   /** A harness's own count of its windows, heard on the stream of a run
@@ -212,12 +310,13 @@ export class CapacityHub {
     this.changed();
   }
 
-  /** Read each endpoint (when present) or estimate from the ledger. */
+  /** Read each endpoint (when present), CLI reader, or estimate from the ledger. */
   async refresh(): Promise<void> {
     const now = this.now();
     this.settings = (await this.deps.config()).capacity;
     const rows = await this.deps.ledger(now - FIVE_HOURS);
     const expired = this.dropExpired(now);
+    const cliTasks: Promise<void>[] = [];
     for (const harness of HARNESSES) {
       const current = this.get(harness);
       if (this.reader) {
@@ -232,11 +331,45 @@ export class CapacityHub {
         }
       } else {
         this.readings.set(harness, observe(current, rows, this.settings, now));
+        if (this.cliReaders[harness]) cliTasks.push(this.readCli(harness, false));
       }
     }
+    if (cliTasks.length > 0) await Promise.all(cliTasks);
     if (expired) await this.persist();
     this.changed();
     this.schedule();
+  }
+
+  /** Reads one harness via its CLI reader, coalescing overlapping calls. */
+  private readCli(harness: Harness, standalone: boolean): Promise<void> {
+    const existing = this.cliInFlight.get(harness);
+    if (existing) return existing;
+    const reader = this.cliReaders[harness];
+    if (!reader || this.stopped) return Promise.resolve();
+    const task = (async () => {
+      try {
+        const windows = await reader(this.now());
+        if (this.stopped || !windows) return;
+        const current = this.get(harness);
+        if (current.source === "endpoint") return;
+        this.readings.set(harness, { ...current, ...windows, source: "cli" });
+        this.readerFailures.delete(harness);
+        this.keep();
+        if (standalone) {
+          this.changed();
+          this.schedule();
+        }
+      } catch (error) {
+        if (!this.readerFailures.has(harness)) {
+          this.readerFailures.add(harness);
+          console.error(`capacity: ${harness} usage read failed`, error);
+        }
+      } finally {
+        this.cliInFlight.delete(harness);
+      }
+    })();
+    this.cliInFlight.set(harness, task);
+    return task;
   }
 
   /** null for a path outside /api/capacity. GET reads; a POST there is a
@@ -288,9 +421,10 @@ export class CapacityHub {
       if (!isHarness(name) || !isRecord(value)) continue;
       const current = this.get(name);
       if (current.source !== "unknown") continue;
-      const fiveHour = keptWindow(value["fiveHour"]);
-      const weekly = keptWindow(value["weekly"]);
-      if (fiveHour || weekly) this.readings.set(name, { ...current, fiveHour, weekly, source: "run" });
+      const source: CapacitySource = value["source"] === "cli" ? "cli" : "run";
+      const fiveHour = keptWindow(value["fiveHour"], source === "cli");
+      const weekly = keptWindow(value["weekly"], source === "cli");
+      if (fiveHour || weekly) this.readings.set(name, { ...current, fiveHour, weekly, source });
     }
     for (const [name, value] of Object.entries(isRecord(parsed["hits"]) ? parsed["hits"] : {})) {
       if (!isHarness(name) || !isCapacityHit(value)) continue;
@@ -307,7 +441,7 @@ export class CapacityHub {
       const current = this.get(harness);
       let next = current;
       if (next.hit && !hitStands(next.hit, now)) {
-        next = { ...next, hit: null, source: harness === "codex" && next.source === "observed" ? "unknown" : next.source };
+        next = { ...next, hit: null, source: harness !== "claude" && next.source === "observed" ? "unknown" : next.source };
       }
       next = fade(next, now);
       if (next === current) continue;
@@ -326,11 +460,12 @@ export class CapacityHub {
 
   private persist(): Promise<void> {
     const hits: Partial<Record<Harness, CapacityHit>> = {};
-    const windows: Partial<Record<Harness, Pick<Capacity, "fiveHour" | "weekly">>> = {};
+    const windows: Partial<Record<Harness, Pick<Capacity, "fiveHour" | "weekly"> & { source?: "cli" }>> = {};
     for (const harness of HARNESSES) {
       const current = this.get(harness);
       if (current.hit) hits[harness] = current.hit;
       if (current.source === "run") windows[harness] = { fiveHour: current.fiveHour, weekly: current.weekly };
+      else if (current.source === "cli") windows[harness] = { fiveHour: current.fiveHour, weekly: current.weekly, source: "cli" };
     }
     const content = JSON.stringify(Object.keys(windows).length > 0 ? { hits, windows } : { hits });
     const write = async (): Promise<void> => {
@@ -355,8 +490,8 @@ export class CapacityHub {
       const current = this.get(harness);
       const hit = current.hit;
       if (hit && hitStands(hit, now)) wait = Math.min(wait, Math.max(0, hit.resetsAt + HIT_GRACE - now) + 250);
-      // a run's window ends at its reset, and what is held on it goes then
-      if (current.source !== "run") continue;
+      // a run's or CLI's window ends at its reset, and what is held on it goes then
+      if (current.source !== "run" && current.source !== "cli") continue;
       for (const window of [current.fiveHour, current.weekly]) {
         if (window !== null && window.resetsAt !== null) wait = Math.min(wait, Math.max(0, window.resetsAt - now) + 250);
       }

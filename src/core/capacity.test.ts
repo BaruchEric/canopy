@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CostEntry } from "./costs";
-import { CapacityHeldError, DEFAULT_CAPACITY, HIT_GRACE, HIT_HOLD, READ_EVERY, decide, emptyCapacity, fade, hear, hitOfLimited, hitStands, holdWords, isCapacityWords, isLimitText, laterPriority, limitHit, limitedWords, normalizeCapacity, observe, parsePriority, patchCapacity, readCodexLimits, readRateLimit, readUsage, resetWord, stale, type Capacity } from "./capacity";
+import { CapacityHeldError, DEFAULT_CAPACITY, HIT_GRACE, HIT_HOLD, READ_EVERY, decide, emptyCapacity, fade, hear, hitOfLimited, hitStands, holdWords, isCapacityWords, isLimitText, laterPriority, limitHit, limitedWords, normalizeCapacity, observe, parsePriority, patchCapacity, readAntigravityUsage, readCodexLimits, readRateLimit, readUsage, resetWord, stale, type Capacity } from "./capacity";
 
 // These are synthetic fixtures for the documented response/text shapes, not
 // captured output from a live endpoint or credential.
@@ -309,5 +309,88 @@ describe("the harness's own count, heard on a run's stream", () => {
     const heard = cap({ weekly: win(0.56, THU_3PM), source: "run" });
     expect(observe(heard, [row(NOW - 1, 20)], { observedFiveHourUsd: 40 }, NOW)).toBe(heard);
     expect(observe(heard, [], { observedFiveHourUsd: null }, NOW)).toBe(heard);
+  });
+});
+
+describe("readAntigravityUsage and cli source", () => {
+  const agyJson = (groups: unknown[], status = "SUCCESS") => ({
+    conversation_id: "",
+    status,
+    response: "",
+    duration_seconds: 0,
+    num_turns: 0,
+    command: { name: "usage", data: { groups } },
+  });
+
+  test("reads agy /usage JSON: converts remaining_fraction, drops epoch-0 resets, picks tightest group", () => {
+    const sample = agyJson([
+      {
+        name: "Gemini Models",
+        buckets: [
+          { id: "gemini-weekly", window: "weekly", remaining_fraction: 0.98, reset_time: "2026-10-29T15:00:00Z" },
+          { id: "gemini-5h", window: "5h", remaining_fraction: 0.95, reset_time: "2026-10-26T15:00:00Z" },
+        ],
+      },
+      {
+        name: "Claude and GPT models",
+        buckets: [
+          { id: "3p-weekly", window: "weekly", remaining_fraction: 1, reset_time: "1970-01-01T00:00:00Z" },
+          { id: "3p-5h", window: "5h", remaining_fraction: 1, reset_time: "1970-01-01T00:00:00Z" },
+        ],
+      },
+    ]);
+    const got = readAntigravityUsage(sample, NOW);
+    expect(got?.fiveHour?.resetsAt).toBe(AT_3PM);
+    expect(got?.fiveHour?.readAt).toBe(NOW);
+    expect(got?.fiveHour?.used).toBeCloseTo(0.05, 6);
+    expect(got?.weekly?.resetsAt).toBe(THU_3PM);
+    expect(got?.weekly?.used).toBeCloseTo(0.02, 6);
+
+    // 3p group tighter than Gemini wins
+    const tighter3p = agyJson([
+      { name: "Gemini Models", buckets: [{ window: "5h", remaining_fraction: 0.9, reset_time: "2026-10-26T15:00:00Z" }] },
+      { name: "Claude and GPT models", buckets: [{ window: "5h", remaining_fraction: 0.2, reset_time: "2026-10-26T14:00:00Z" }] },
+    ]);
+    const got3p = readAntigravityUsage(tighter3p, NOW);
+    expect(got3p?.fiveHour?.used).toBeCloseTo(0.8, 6);
+    expect(got3p?.fiveHour?.resetsAt).toBe(Date.UTC(2026, 9, 26, 14));
+    expect(got3p?.weekly).toBeNull();
+
+    // both unused (epoch-0 reset) produce used: 0, resetsAt: null
+    const unused = agyJson([
+      {
+        name: "Gemini Models",
+        buckets: [
+          { window: "weekly", remaining_fraction: 1, reset_time: "1970-01-01T00:00:00Z" },
+          { window: "5h", remaining_fraction: 1, reset_time: "1970-01-01T00:00:00Z" },
+        ],
+      },
+    ]);
+    expect(readAntigravityUsage(unused, NOW)).toEqual({
+      fiveHour: { used: 0, resetsAt: null, readAt: NOW },
+      weekly: { used: 0, resetsAt: null, readAt: NOW },
+    });
+
+    // error, wrong command, empty or garbage
+    expect(readAntigravityUsage(agyJson([], "ERROR"), NOW)).toBeNull();
+    expect(readAntigravityUsage({ status: "SUCCESS", command: { name: "models", data: { groups: [] } } }, NOW)).toBeNull();
+    expect(readAntigravityUsage(agyJson([]), NOW)).toBeNull();
+    expect(readAntigravityUsage("nope", NOW)).toBeNull();
+  });
+
+  test("cli source: fade drops expired resets while keeping unused windows, and decide holds until reset", () => {
+    const agy = (over: Partial<Capacity>): Capacity => ({ ...emptyCapacity("antigravity"), source: "cli", ...over });
+    const both = agy({ fiveHour: win(0.95, AT_3PM), weekly: win(0.2, THU_3PM) });
+    expect(fade(both, AT_3PM - 1)).toBe(both);
+    expect(fade(both, AT_3PM)).toEqual(agy({ fiveHour: null, weekly: win(0.2, THU_3PM) }));
+    expect(fade(both, THU_3PM)).toEqual(emptyCapacity("antigravity"));
+    // unused bucket with resetsAt: null is kept by fade
+    const idle = agy({ fiveHour: win(0, null), weekly: win(0, null) });
+    expect(fade(idle, THU_3PM)).toBe(idle);
+    // decide holds past thresholds until reset, even past READ_EVERY
+    const old = NOW - 2 * 60 * 60_000;
+    const high = agy({ fiveHour: win(0.95, AT_3PM, old) });
+    expect(decide(high, "normal", DEFAULT_CAPACITY, NOW)).toEqual({ hold: "window", until: AT_3PM, why: "the 5-hour window is at 95% (resets 15:00)" });
+    expect(decide(high, "normal", DEFAULT_CAPACITY, AT_3PM)).toBe("go");
   });
 });

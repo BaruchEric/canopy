@@ -15,10 +15,11 @@ import { ageWord, CAPACITY_GLYPH, capacityRows, capacityWord, heldRows, holdPerc
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** What gives a harness with no reading one: its next run on that backend,
- *  whose stream carries the harness's own count of its windows. The costs
- *  view adds Claude's stopgap, the dollar figure in the form below it. */
+ *  whose stream carries the harness's own count of its windows, or signing
+ *  in to agy for Antigravity. The costs view adds Claude's stopgap, the
+ *  dollar figure in the form below it. */
 const readingHint = (row: CapacityRow, where: "chip" | "costs"): string => {
-  if (row.cap.harness === "antigravity") return "Antigravity does not report account usage windows through ACP";
+  if (row.cap.harness === "antigravity") return `install and sign in to agy ${row.backend ? `on ${row.backend}` : "here"} to read it`;
   const next = `the next ${AGENT_NAME[row.cap.harness]} run ${row.backend ? `on ${row.backend}` : "here"} reports it`;
   return where === "costs" && row.cap.harness === "claude" ? `${next}; until then a 5-hour window in Claude $ below estimates it from the ledger` : next;
 };
@@ -226,7 +227,7 @@ export function CapacityBlock() {
       <details className="capacity-holds">
         <summary>the governor's holds</summary>
         <p className="cost-note">
-          Interactive work (a run, chat or ask you start) is never held. Normal work (a PR's auto-fix, a coordinator's cards, a flow's later steps) waits past the normal hold or on a limit hit; low work (triggers, best-of-N groups) waits past the low holds too. Each window is the harness's own count, read from the stream of its runs on that backend and good until the window resets. Before a run has reported one, the 5-hour share is the ledger's Claude dollars over the last five hours against the figure below; with neither, nothing is held until a limit is hit.
+          Interactive work (a run, chat or ask you start) is never held. Normal work (a PR's auto-fix, a coordinator's cards, a flow's later steps) waits past the normal hold or on a limit hit; low work (triggers, best-of-N groups) waits past the low holds too. Each window is the harness's own count, read from the stream of its runs or its CLI on that backend and good until the window resets. Before a run has reported one, the 5-hour share is the ledger's Claude dollars over the last five hours against the figure below; with neither, nothing is held until a limit is hit.
         </p>
         {order.filter((b) => capacity[b]).map((b) => (
           <SettingsForm key={b} backend={b} info={capacity[b]!} />

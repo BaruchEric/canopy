@@ -56,11 +56,22 @@ export interface CapacityRow {
   backend: string;
   cap: Capacity;
   tone: "moss" | "lichen" | "rust";
+  /** Which window tripped the row's warning/hold tone, when no limit hit stands. */
+  holdWindow?: CapacityWindow;
   /** The two lines, or none for `unknown` with no hit. */
   lines: string[];
-  /** "endpoint, read 3m ago", "read from a run, 3m ago", "observed from
-   *  the ledger", or "no reading". */
+  /** "endpoint, read 3m ago", "read from a run, 3m ago", "read from the CLI, 3m ago",
+   *  "observed from the ledger", or "no reading". */
   source: string;
+}
+
+/** Which window caused a non-moss tone when no hit stands. */
+function rowHoldWindow(cap: Capacity, settings: CapacitySettings, tone: "moss" | "lichen" | "rust", now: number): CapacityWindow | undefined {
+  if (tone === "moss" || hitStands(cap.hit, now)) return undefined;
+  if (tone === "rust") return "fiveHour";
+  const low = decide(cap, "low", settings, now);
+  if (low === "go" || low.hold !== "window") return undefined;
+  return low.why.startsWith("the 5-hour") ? "fiveHour" : "weekly";
 }
 
 /** Every backend that answered, in the given order, one row per harness. */
@@ -72,6 +83,7 @@ export function capacityRows(info: Readonly<Record<string, CapacityInfo>>, order
     for (const original of answer.capacity) {
       const cap = hitStands(original.hit, now) || original.hit === null ? original : { ...original, hit: null };
       const tone = capacityTone(original, answer.settings, now);
+      const holdWindow = rowHoldWindow(original, answer.settings, tone, now);
       const lines = [
         ...(original.fiveHour === null ? [] : [capacityLine(original.fiveHour, "fiveHour", now)]),
         ...(original.weekly === null ? [] : [capacityLine(original.weekly, "weekly", now)]),
@@ -82,25 +94,37 @@ export function capacityRows(info: Readonly<Record<string, CapacityInfo>>, order
       const source = original.source === "endpoint"
         ? newestRead === null ? "endpoint, no reading" : `endpoint, read ${ageWord(now - newestRead)}`
         : original.source === "run" && newestRead !== null ? `read from a run, ${ageWord(now - newestRead)}`
+        : original.source === "cli" && newestRead !== null ? `read from the CLI, ${ageWord(now - newestRead)}`
         : original.source === "observed" ? "observed from the ledger" : "no reading";
-      rows.push({ backend, cap, tone, lines, source });
+      rows.push({ backend, cap, tone, ...(holdWindow ? { holdWindow } : {}), lines, source });
     }
   }
   return rows;
 }
 
-/** The chip's word: a standing hit, else the highest 5-hour share, else the
- *  highest weekly one when no row has a 5-hour window (a plan with the
- *  week alone). */
+/** The chip's word: a standing hit, else the window driving the most urgent
+ *  tone (so a healthy 5-hour window on one harness never hides a weekly hold
+ *  on another), else the highest 5-hour share, else the highest weekly one. */
 export function capacityWord(rows: readonly CapacityRow[]): string {
   if (rows.some((row) => row.cap.hit !== null)) return "limit";
-  const highest = (kind: CapacityWindow): number | null => rows.reduce<number | null>((share, row) => {
+  const highest = (pool: readonly CapacityRow[], kind: CapacityWindow): number | null => pool.reduce<number | null>((share, row) => {
     const used = row.cap[kind]?.used;
     return used === undefined ? share : share === null ? used : Math.max(share, used);
   }, null);
-  const five = highest("fiveHour");
+  const tone = rowsTone(rows);
+  const pool = tone === "moss" ? rows : rows.filter((row) => row.tone === tone);
+  if (tone === "lichen") {
+    const fiveRows = pool.filter((row) => row.holdWindow === "fiveHour");
+    if (fiveRows.length > 0) {
+      const five = highest(fiveRows, "fiveHour");
+      if (five !== null) return `5h ${Math.round(five * 100)}%`;
+    }
+    const week = highest(pool, "weekly");
+    if (week !== null) return `week ${Math.round(week * 100)}%`;
+  }
+  const five = highest(pool, "fiveHour");
   if (five !== null) return `5h ${Math.round(five * 100)}%`;
-  const week = highest("weekly");
+  const week = highest(pool, "weekly");
   return week === null ? "no reading" : `week ${Math.round(week * 100)}%`;
 }
 

@@ -125,7 +125,10 @@ const HELPER_VERB = new Set(["daemon", "app-server", "plugin", "mcp"]);
 /** the subcommand: the word after the program, or after the script when an
  *  interpreter runs one (the npm codex is `node …/codex app-server`) */
 const verbOf = (argv: readonly string[]): string => argv[INTERPRETER.test(base(argv[0] ?? "").toLowerCase()) ? 2 : 1] ?? "";
-const isHelper = (argv: readonly string[]): boolean => HELPER_VERB.has(verbOf(argv)) || argv.some((w) => HELPER.has(w));
+const isUsageProbe = (argv: readonly string[]): boolean =>
+  argv.some((w, i) => (w === "-p" || w === "--print" || w === "--prompt") && argv[i + 1] === "/usage");
+const isHelper = (argv: readonly string[]): boolean =>
+  HELPER_VERB.has(verbOf(argv)) || argv.some((w) => HELPER.has(w)) || isUsageProbe(argv);
 
 /**
  * The harness a process is, or null. Measured, not assumed: Claude Code's

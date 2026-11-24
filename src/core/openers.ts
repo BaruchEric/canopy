@@ -573,12 +573,23 @@ export const hostOpeners = (): boolean =>
 const HARNESS_DIRS = [".local/bin", ".bun/bin", ".npm-global/bin"];
 const SYSTEM_DIRS = ["/opt/homebrew/bin", "/usr/local/bin"];
 
+/** Where an agent harness's binary is: on PATH, or where its installers put
+ *  it; null when not found. */
+export function findBinary(binary: string): string | null {
+  const onPath = Bun.which(binary);
+  if (onPath) return onPath;
+  const home = homedir();
+  for (const dir of [...HARNESS_DIRS.map((d) => join(home, d)), ...SYSTEM_DIRS]) {
+    const full = join(dir, binary);
+    if (existsSync(full)) return full;
+  }
+  return null;
+}
+
 /** Whether an agent harness's binary is here: on PATH, or where its
  *  installers put it. */
 export function hasBinary(binary: string): boolean {
-  if (Bun.which(binary)) return true;
-  const home = homedir();
-  return [...HARNESS_DIRS.map((d) => join(home, d)), ...SYSTEM_DIRS].some((d) => existsSync(join(d, binary)));
+  return findBinary(binary) !== null;
 }
 
 /** The harnesses this backend can start, by what this process can see. */

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DEFAULT_CAPACITY, HIT_GRACE, type CapacitySettings } from "../core/capacity";
 import type { CostEntry } from "../core/costs";
 import { HARNESSES, type CapacityInfo, type Harness, type HeldStart, type Run, type ServerEvent } from "../core/types";
-import { CapacityHub, type CapacityHubDeps } from "./capacity";
+import { antigravityUsageReader, CapacityHub, type CapacityHubDeps } from "./capacity";
 
 let dir = "";
 beforeAll(async () => {
@@ -366,4 +366,87 @@ test("kept windows that are not windows are left out, and the rest of the file i
   await h.start();
   expect(h.get("claude")).toMatchObject({ fiveHour: null, weekly: { used: 0.5 }, source: "run", hit: { text: LIMIT } });
   expect(h.get("codex")).toMatchObject({ weekly: null, source: "unknown" });
+});
+
+/* ---------- CLI usage reader (Antigravity `agy -p /usage`) ---------- */
+
+test("a CLI reader populates antigravity at start, persists across restart, and refreshes after a run", async () => {
+  const file = join(dir, "cli-antigravity.json");
+  let used = 0.04;
+  let calls = 0;
+  const agyReader = async (now: number) => {
+    calls += 1;
+    return {
+      fiveHour: { used, resetsAt: AT_3PM, readAt: now },
+      weekly: { used: 0.02, resetsAt: null, readAt: now },
+    };
+  };
+  const first = hub({ file, extra: { cliReaders: { antigravity: agyReader } } });
+  await first.h.start();
+  expect(calls).toBe(1);
+  expect(first.h.get("antigravity")).toEqual({
+    harness: "antigravity",
+    fiveHour: { used: 0.04, resetsAt: AT_3PM, readAt: NOW },
+    weekly: { used: 0.02, resetsAt: null, readAt: NOW },
+    source: "cli",
+    hit: null,
+  });
+  await sleep(20);
+  // persisted with source: "cli" and null reset preserved
+  const saved = JSON.parse(await readFile(file, "utf8")) as { windows?: { antigravity?: Record<string, unknown> } };
+  expect(saved.windows?.antigravity).toEqual({
+    fiveHour: { used: 0.04, resetsAt: AT_3PM, readAt: NOW },
+    weekly: { used: 0.02, resetsAt: null, readAt: NOW },
+    source: "cli",
+  });
+
+  // finished Antigravity run triggers a background CLI refresh
+  used = 0.12;
+  first.h.onRun({
+    ...limited({ id: "agy-1", harness: "antigravity", status: "done", endedAt: NOW + 1000, limited: undefined, error: undefined }),
+    result: { text: "ok", durationMs: 100, turns: 1 },
+  });
+  await sleep(30);
+  expect(calls).toBe(2);
+  expect(first.h.get("antigravity").fiveHour?.used).toBe(0.12);
+  first.h.stop();
+
+  // restart restores cli reading even without a reader
+  const restarted = hub({ file });
+  await restarted.h.start();
+  expect(restarted.h.get("antigravity")).toMatchObject({
+    fiveHour: { used: 0.12, resetsAt: AT_3PM },
+    weekly: { used: 0.02, resetsAt: null },
+    source: "cli",
+  });
+});
+
+test("antigravityUsageReader spawns agy, parses /usage JSON, fast-fails on auth prompt, and returns null if missing", async () => {
+  // missing binary returns null silently
+  const missing = antigravityUsageReader({ find: () => null });
+  expect(await missing(NOW)).toBeNull();
+
+  // fake agy script returning valid /usage JSON
+  const okScript = join(dir, "fake-agy-ok.ts");
+  await writeFile(
+    okScript,
+    `console.log(JSON.stringify({ status: "SUCCESS", command: { name: "usage", data: { groups: [{ name: "Gemini Models", buckets: [{ window: "5h", remaining_fraction: 0.9, reset_time: "2026-10-26T15:00:00Z" }, { window: "weekly", remaining_fraction: 0.96, reset_time: "2026-10-29T15:00:00Z" }] }] } } }));`,
+  );
+  const ok = antigravityUsageReader({ command: [process.execPath, okScript], timeoutMs: 5_000 });
+  const got = await ok(NOW);
+  expect(got?.fiveHour?.used).toBeCloseTo(0.1, 6);
+  expect(got?.fiveHour?.resetsAt).toBe(AT_3PM);
+  expect(got?.weekly?.used).toBeCloseTo(0.04, 6);
+  expect(got?.weekly?.resetsAt).toBe(THU_3PM);
+
+  // fake agy script prompting for authentication hangs unless killed promptly
+  const authScript = join(dir, "fake-agy-auth.ts");
+  await writeFile(
+    authScript,
+    `console.error("Authentication required. Please visit the URL to log in:"); await new Promise((r) => setTimeout(r, 30_000));`,
+  );
+  const auth = antigravityUsageReader({ command: [process.execPath, authScript], timeoutMs: 10_000 });
+  const t0 = Date.now();
+  await expect(auth(NOW)).rejects.toThrow("authentication required");
+  expect(Date.now() - t0).toBeLessThan(3_000);
 });

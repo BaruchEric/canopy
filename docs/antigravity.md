@@ -86,9 +86,11 @@ rather than started without them.
   disk. agy keeps its conversations elsewhere, so neither lists them.
 - A side question cannot fork an Antigravity session. A finished run can start
   a new run from canopy's brief of its steps.
-- ACP reports no plan usage windows, so the capacity chip has no reading for
-  Antigravity. Each run's tokens come from agy's own count and show on the
-  run, a chat's summed over its turns; agy reports no dollar cost.
+- Each run's tokens come from agy's own count and show on the run, a chat's
+  summed over its turns; agy reports no dollar cost. Plan usage windows (5-hour
+  and weekly) are read via `agy -p /usage --output-format json` (0 turns, 0
+  tokens) at backend start, on the capacity schedule, on `canopy capacity read`,
+  and after Antigravity runs finish, and feed the capacity chip and governor.
 
 ## How it was checked
 

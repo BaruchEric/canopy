@@ -34,6 +34,29 @@ test("a harness with a run's count shows its windows and when they were read, an
   expect(html).not.toContain("no reading");
 });
 
+test("Antigravity shows CLI readings without a hint, or the agy sign-in hint when unread", () => {
+  const unread = capacityRows({ mac: { capacity: [emptyCapacity("antigravity")], held: [], settings: DEFAULT_CAPACITY } }, ["mac"], NOW);
+  const unreadHtml = renderToStaticMarkup(<ReadingRows rows={unread} now={NOW} where="chip" />);
+  expect(unreadHtml).toContain("install and sign in to agy on mac to read it");
+  const read = capacityRows({
+    mac: {
+      capacity: [{
+        ...emptyCapacity("antigravity"),
+        fiveHour: { used: 0.04, resetsAt: NOW + 65 * 60_000, readAt: NOW - 2 * 60_000 },
+        weekly: { used: 0.02, resetsAt: Date.UTC(2026, 9, 29, 15), readAt: NOW - 2 * 60_000 },
+        source: "cli",
+      }],
+      held: [],
+      settings: DEFAULT_CAPACITY,
+    },
+  }, ["mac"], NOW);
+  const readHtml = renderToStaticMarkup(<ReadingRows rows={read} now={NOW} where="chip" />);
+  expect(readHtml).toContain("5h 4% · 1h05");
+  expect(readHtml).toContain("week 2% · Thu");
+  expect(readHtml).toContain("read from the CLI, 2m ago");
+  expect(readHtml).not.toContain("capacity-hint");
+});
+
 const pristine = useStore.getState();
 afterEach(() => {
   setRegistry("", [""]);

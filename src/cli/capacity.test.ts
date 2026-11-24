@@ -52,6 +52,12 @@ describe("canopy capacity's lines", () => {
       "  claude  5h no reading   week 56% · resets Thu  (read from a run)",
       "  codex   5h 40% · resets 15:00   week 3% · resets Thu  (read from a run)",
     ]);
+    const cliInfo: CapacityInfo = {
+      capacity: [{ ...emptyCapacity("antigravity"), fiveHour: { used: 0.04, resetsAt: AT_3PM, readAt: NOW }, weekly: { used: 0.02, resetsAt: THU_3PM, readAt: NOW }, source: "cli" }],
+      held: [],
+      settings: DEFAULT_CAPACITY,
+    };
+    expect(plain(capacityLines("mac", cliInfo, NOW))[1]).toBe("  antigravity 5h 4% · resets 15:00   week 2% · resets Thu  (read from the CLI)");
   });
 
   test("the tone follows the holds", () => {

@@ -29,7 +29,7 @@ export interface Window {
 }
 
 export type CapacityWindow = "fiveHour" | "weekly";
-export type CapacitySource = "endpoint" | "run" | "observed" | "unknown";
+export type CapacitySource = "endpoint" | "run" | "cli" | "observed" | "unknown";
 
 /** A window as a harness counted it on a run's own stream. */
 export interface HeardWindow {
@@ -54,8 +54,10 @@ export interface Capacity {
   fiveHour: Window | null;
   weekly: Window | null;
   /** endpoint: read from the usage endpoint; run: the harness's own count,
-   *  heard on a run's stream, good until each window's reset; observed:
-   *  inferred from a limit hit and the ledger; unknown: never read */
+   *  heard on a run's stream, good until each window's reset; cli: read
+   *  from the harness's own CLI (e.g. `agy -p /usage`), good until each
+   *  window's reset; observed: inferred from a limit hit and the ledger;
+   *  unknown: never read */
   source: CapacitySource;
   /** a limit hit the harness reported, until its reset passes */
   hit: CapacityHit | null;
@@ -273,13 +275,19 @@ export const hitStands = (hit: CapacityHit | null, now: number): boolean =>
 const open = (window: Window | null, now: number): Window | null =>
   window !== null && window.resetsAt !== null && window.resetsAt > now ? window : null;
 
-/** A run's reading past its reset says nothing: that window is dropped, and
- *  with none left the reading is unknown again, or observed while a hit
- *  stands. Any other source is left as it is. */
+/** A CLI-reported window that is still open: an unused bucket has no reset
+ *  yet (`resetsAt: null`) and stays readable; one with a reset expires at it. */
+const openCli = (window: Window | null, now: number): Window | null =>
+  window === null ? null : window.resetsAt !== null && window.resetsAt <= now ? null : window;
+
+/** A run's or CLI's reading past its reset says nothing: that window is
+ *  dropped, and with none left the reading is unknown again, or observed
+ *  while a hit stands. Any other source is left as it is. */
 export function fade(capacity: Capacity, now: number): Capacity {
-  if (capacity.source !== "run") return capacity;
-  const fiveHour = open(capacity.fiveHour, now);
-  const weekly = open(capacity.weekly, now);
+  if (capacity.source !== "run" && capacity.source !== "cli") return capacity;
+  const keep = capacity.source === "cli" ? openCli : open;
+  const fiveHour = keep(capacity.fiveHour, now);
+  const weekly = keep(capacity.weekly, now);
   if (fiveHour === null && weekly === null) {
     return { ...capacity, fiveHour: null, weekly: null, source: hitStands(capacity.hit, now) ? "observed" : "unknown" };
   }
@@ -312,7 +320,7 @@ export function observe(
   settings: Pick<CapacitySettings, "observedFiveHourUsd">,
   now: number,
 ): Capacity {
-  if (capacity.harness !== "claude" || capacity.source === "endpoint" || capacity.source === "run") return capacity;
+  if (capacity.harness !== "claude" || capacity.source === "endpoint" || capacity.source === "run" || capacity.source === "cli") return capacity;
   const figure = settings.observedFiveHourUsd;
   if (figure === null || !Number.isFinite(figure) || figure <= 0) {
     return {
@@ -375,10 +383,16 @@ export function decide(capacity: Capacity, priority: Priority, settings: Capacit
       why: `the ${windowName} window is spent (resets ${resetWord(hit.resetsAt, now)})`,
     };
   }
-  // an endpoint's window must be fresh; a run's stands until its reset,
-  // since a share only grows inside its window
+  // an endpoint's window must be fresh; a run's or CLI's stands until its
+  // reset, since a share only grows inside its window
   const usable = (window: Window | null): Window | null =>
-    capacity.source === "endpoint" ? (stale(window, now) ? null : window) : capacity.source === "run" ? open(window, now) : window;
+    capacity.source === "endpoint"
+      ? (stale(window, now) ? null : window)
+      : capacity.source === "run"
+        ? open(window, now)
+        : capacity.source === "cli"
+          ? openCli(window, now)
+          : window;
   const fiveHour = usable(capacity.fiveHour);
   const weekly = usable(capacity.weekly);
   if (priority === "normal") {
@@ -512,6 +526,54 @@ export function readCodexLimits(params: unknown): Heard | null {
     return null;
   };
   return heardOf(counted(CODEX_FIVE_HOURS), counted(CODEX_WEEK));
+}
+
+/** Antigravity's `agy -p /usage --output-format json`: `command.name` is
+ *  `"usage"`, and `command.data.groups` lists model groups (Gemini Models,
+ *  Claude and GPT models), each with `5h` and `weekly` buckets carrying
+ *  `remaining_fraction` (0 to 1) and an ISO `reset_time` (epoch 0 when the
+ *  window is unused). Picks the tightest (highest `used`) bucket per window
+ *  across groups, breaking ties by an active reset time. Null when the output
+ *  is an error or names no readable bucket. */
+export function readAntigravityUsage(json: unknown, now: number): { fiveHour: Window | null; weekly: Window | null } | null {
+  if (!isRecord(json)) return null;
+  if (typeof json["status"] === "string" && json["status"] !== "SUCCESS") return null;
+  const cmd = json["command"];
+  if (!isRecord(cmd) || cmd["name"] !== "usage") return null;
+  const data = cmd["data"];
+  if (!isRecord(data) || !Array.isArray(data["groups"])) return null;
+  let fiveHour: Window | null = null;
+  let weekly: Window | null = null;
+  const pick = (current: Window | null, next: Window): Window => {
+    if (current === null) return next;
+    if (next.used !== current.used) return next.used > current.used ? next : current;
+    if (current.resetsAt === null && next.resetsAt !== null) return next;
+    if (current.resetsAt !== null && next.resetsAt !== null && next.resetsAt < current.resetsAt) return next;
+    return current;
+  };
+  for (const group of data["groups"]) {
+    if (!isRecord(group) || !Array.isArray(group["buckets"])) continue;
+    for (const bucket of group["buckets"]) {
+      if (!isRecord(bucket)) continue;
+      const rawWindow = bucket["window"];
+      const kind: CapacityWindow | null = rawWindow === "5h" || rawWindow === "five_hour"
+        ? "fiveHour"
+        : rawWindow === "weekly" || rawWindow === "seven_day"
+          ? "weekly"
+          : null;
+      if (kind === null) continue;
+      const remaining = bucket["remaining_fraction"];
+      if (!isFiniteNumber(remaining) || remaining > 1) continue;
+      const used = Math.max(0, 1 - remaining);
+      const parsedReset = resetTimestamp(bucket["reset_time"]);
+      // agy reports 1970-01-01T00:00:00Z (0) for an unused window
+      const resetsAt = parsedReset !== null && parsedReset > 0 ? parsedReset : null;
+      const window: Window = { used, resetsAt, readAt: now };
+      if (kind === "fiveHour") fiveHour = pick(fiveHour, window);
+      else weekly = pick(weekly, window);
+    }
+  }
+  return fiveHour === null && weekly === null ? null : { fiveHour, weekly };
 }
 
 /** A run's limited mark as a hit: the text read as `limitHit` reads it,
