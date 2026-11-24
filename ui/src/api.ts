@@ -285,9 +285,9 @@ async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<
   // Parse defensively: a dead API or a proxy error page is not JSON, and
   // letting that SyntaxError escape would hide the real status.
   const text = await r.text();
-  let body: (T & { error?: string; login?: unknown; need?: unknown }) | undefined;
+  let body: (T & { error?: string; login?: unknown; need?: unknown; offline?: unknown }) | undefined;
   try {
-    body = JSON.parse(text) as T & { error?: string; login?: unknown; need?: unknown };
+    body = JSON.parse(text) as T & { error?: string; login?: unknown; need?: unknown; offline?: unknown };
   } catch {
     signal(b, { kind: "answered" });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
@@ -296,6 +296,12 @@ async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<
   if (r.status === 401 && typeof body.login === "string") {
     signal(b, { kind: "signin", login: body.login });
     throw new Error(body.error ?? `${r.status} ${r.statusText}`);
+  }
+  // the gate in front of a public URL answered for a box that is down (a
+  // dead tunnel, a sleeping Mac) and said why: canopy itself never answered
+  if (r.status === 503 && typeof body.offline === "string") {
+    signal(b, { kind: "unreachable", reason: body.offline });
+    throw new Error(body.offline);
   }
   // canopy's own caller check: never the gate's sign-in, which carries a login
   if ((r.status === 401 || r.status === 403) && typeof body.need === "string") signal(b, { kind: "refused", status: r.status, need: body.need, token: sent });

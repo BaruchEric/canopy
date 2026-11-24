@@ -418,6 +418,21 @@ describe("a page with two backends", () => {
     ]);
   });
 
+  test("the gate's word that a backend's machine is down reads as offline, with the gate's reason", async () => {
+    // beric-gate's edge answers a canopy page's call this way when the box
+    // behind a public URL is gone (a dead tunnel, a sleeping Mac)
+    const offline = "canopy on the Mac is offline because Eric's MacBook Pro is asleep or offline.";
+    reply = () => json({ error: "origin unavailable", offline }, 503);
+    await expect(api.log("b|x")).rejects.toThrow(offline);
+    // canopy's own 503 (a stage runner away, no broker) is still an answer
+    reply = () => json({ error: "no broker here" }, 503);
+    await expect(api.log("b|x")).rejects.toThrow("no broker here");
+    expect(signals).toEqual([
+      ["b", { kind: "unreachable", reason: offline }],
+      ["b", { kind: "answered" }],
+    ]);
+  });
+
   test("an upload the page calls off is stopped, and is no backend that failed to answer (FR-062)", async () => {
     // a fetch that stays out until its signal says stop, as a browser's does
     reply = (c) =>
