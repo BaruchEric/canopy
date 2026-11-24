@@ -12,6 +12,7 @@ import {
   pickRefusal,
   repoAgentRefusal,
   resolveAgent,
+  resolveClaude,
   ROLE_HARNESSES,
   withDefaultProfile,
 } from "./route";
@@ -316,4 +317,45 @@ test("Antigravity profiles route normal work and fall through for unsupported ro
     expect(pick.settings.harness).toBe("claude");
     expect(pick.skipped?.[0]?.profile).toBe("google");
   }
+});
+
+describe("work only Claude Code can do", () => {
+  const google = { ...DEFAULT_AGENT, harness: "antigravity", model: "gemini-pro" } satisfies AgentSettings;
+  const propose = { kind: "task", name: "propose" } as const;
+  const ask = { kind: "task", name: "ask" } as const;
+
+  test("plan, then build passes a default of another harness over for Claude's builtin", () => {
+    const routes: AgentRoutes = { profiles: { default: google, review }, roles: {}, repos: {} };
+    const r = resolveAgent(routes, P, "job", undefined, propose);
+    expect(r.settings).toBe(DEFAULT_AGENT);
+    expect(r.from).toBe("builtin");
+    expect(r.skipped).toEqual([{ from: "default", why: "runs antigravity; plan, then build needs Claude Code", profile: "default" }]);
+    // any other task keeps the route as it is
+    expect(resolveAgent(routes, P, "job", undefined, ask)).toEqual({ settings: google, from: "default", profile: "default" });
+    expect(resolveAgent(routes, P, "job").settings).toEqual(google);
+  });
+
+  test("the first layer of Claude settings answers, keeping where it came from", () => {
+    const routes: AgentRoutes = { profiles: { default: google, deep, review }, roles: { job: { profile: "deep" } }, repos: { [P]: { all: { profile: "review" } } } };
+    const r = resolveAgent(routes, P, "job", undefined, propose);
+    expect(r.settings).toEqual(deep);
+    expect(r.from).toBe("role");
+    expect(r.skipped?.map((s) => s.from)).toEqual(["repo"]);
+    // a route that names Claude already is the answer as it is
+    const plain: AgentRoutes = { profiles: withDefaultProfile({ deep }), roles: {}, repos: { [P]: { all: { profile: "deep" } } } };
+    expect(resolveAgent(plain, P, "job", undefined, propose)).toEqual({ settings: deep, from: "repo", profile: "deep" });
+  });
+
+  test("a pick made at launch is kept, so the start can refuse it in words", () => {
+    const routes: AgentRoutes = { profiles: { default: google, review }, roles: {}, repos: {} };
+    expect(resolveAgent(routes, P, "job", { profile: "review" }, propose)).toEqual({ settings: review, from: "explicit", profile: "review" });
+  });
+
+  test("resolveClaude does the same for any start that says why", () => {
+    const routes: AgentRoutes = { profiles: { default: review }, roles: {}, repos: {} };
+    const r = resolveClaude(routes, P, "job", "workspace runs need Claude Code", ask);
+    expect(r.settings).toBe(DEFAULT_AGENT);
+    expect(r.skipped?.[0]?.why).toBe("runs codex; workspace runs need Claude Code");
+    expect(resolveClaude(full(), P, "chat", "x")).toEqual({ settings: deep, from: "repo", profile: "deep" });
+  });
 });

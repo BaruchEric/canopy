@@ -139,6 +139,7 @@ import {
   addSource,
   agentFor,
   agentRouteFor,
+  claudeRouteFor,
   agentRoutes,
   configDir,
   launchFor,
@@ -1304,11 +1305,15 @@ async function startRepoRun(
     const full = state.runner.checkoutRefusal(repo);
     if (full) throw new HttpError(409, full);
   }
-  // A run only Claude Code can do (the map, a diagram, the graph) has no
-  // harness picker, so it takes the repo's first Claude settings in place
-  // of a route to another harness, as a "new claude shell" does.
-  const claudeOnly = how.custom?.claudeOnly ? { harness: "claude" as const } : undefined;
-  const route = agentRouteFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job", claudeOnly, { kind: "task", name: action });
+  // A run only Claude Code can do (the map, a diagram, the graph, a
+  // workspace run) passes a route to another harness over for the repo's
+  // first Claude settings, else Claude's defaults; plan, then build's task
+  // route does the same by itself (core/route `claudeOnlyTask`).
+  const role = action === "chat" ? "chat" : "job";
+  const claudeOnly = how.custom?.claudeOnly ?? (scope ? "workspace runs need Claude Code" : null);
+  const route = claudeOnly
+    ? claudeRouteFor(await loadConfig(), repo.path, role, claudeOnly, { kind: "task", name: action })
+    : agentRouteFor(await loadConfig(), repo.path, role, undefined, { kind: "task", name: action });
   const routed = route.settings;
   const base: StartExtras = {
     ...(priority === "interactive" ? {} : { priority }),

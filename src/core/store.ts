@@ -11,6 +11,7 @@ import {
   normalizeRoles,
   normalizeNamedPicks,
   resolveAgent,
+  resolveClaude,
   withDefaultProfile,
 } from "./route";
 import { isDefaultLaunch, normalizeLaunch } from "./launch";
@@ -406,6 +407,11 @@ export const agentFor = (cfg: CanopyConfig, path: string, role: AgentRole = "she
  *  loadout is weighed against (FR-083). */
 export const agentRouteFor = (cfg: CanopyConfig, path: string, role: AgentRole = "shell", explicit?: LaunchPick, scope?: AgentScope): ResolvedAgent =>
   resolveAgent(agentRoutes(cfg), path, role, explicit, scope);
+
+/** The route for work only Claude Code can do (`why` says what), which
+ *  passes a layer naming another harness over for Claude settings. */
+export const claudeRouteFor = (cfg: CanopyConfig, path: string, role: AgentRole, why: string, scope?: AgentScope): ResolvedAgent =>
+  resolveClaude(agentRoutes(cfg), path, role, why, scope);
 
 /** A named workflow or agent task default, persisted on this backend. */
 export async function setAgentScope(scope: AgentScope, pick: AgentPick | null): Promise<AgentRoutes> {

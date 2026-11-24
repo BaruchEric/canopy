@@ -174,13 +174,15 @@ test("a primary missing from the scan, an empty workspace and an unknown one are
   expect((await call("POST", "/api/workspaces/run", null)).status).toBe(400);
 });
 
-test("a workspace run on a Codex route is refused", async () => {
+test("a workspace run on a Codex route runs on Claude Code", async () => {
   const codex = { harness: "codex", model: "gpt-5.5", effort: "high", yolo: false, extra: "" };
   expect((await call("POST", "/api/agents/role", { role: "job", pick: codex })).status).toBe(200);
   try {
     const r = await call("POST", "/api/workspaces/run", { name: "bike", action: "ask", note: "x" });
-    expect(r.status).toBe(400);
-    expect(await errorOf(r)).toBe("workspace runs need Claude Code");
+    expect(r.status).toBe(201);
+    const run = (await r.json()) as Run;
+    expect(run.harness).toBe("claude");
+    await stopRun(run.id);
   } finally {
     expect((await call("POST", "/api/agents/role", { role: "job", pick: null })).status).toBe(200);
   }
@@ -198,17 +200,18 @@ test("a workspace propose run starts in plan mode on the primary with the others
   await stopRun(run.id);
 });
 
-test("a propose run on a Codex route is refused, in a repo and in a workspace", async () => {
+test("a propose run on a Codex route runs on Claude Code, in a repo and in a workspace", async () => {
   const codex = { harness: "codex", model: "gpt-5.5", effort: "high", yolo: false, extra: "" };
   expect((await call("POST", "/api/agents/role", { role: "job", pick: codex })).status).toBe(200);
   try {
-    const repo = await call("POST", "/api/repos/run?id=api", { action: "propose", note: "x" });
-    expect(repo.status).toBe(400);
-    expect(await errorOf(repo)).toBe("plan, then build needs Claude Code");
-    // the action is checked before the workspace, so a workspace propose hears the same words
-    const ws = await call("POST", "/api/workspaces/run", { name: "bike", action: "propose", note: "x" });
-    expect(ws.status).toBe(400);
-    expect(await errorOf(ws)).toBe("plan, then build needs Claude Code");
+    for (const [path, body] of [["/api/repos/run?id=api", { action: "propose", note: "x" }], ["/api/workspaces/run", { name: "bike", action: "propose", note: "x" }]] as const) {
+      const r = await call("POST", path, body);
+      expect(r.status).toBe(201);
+      const run = (await r.json()) as Run;
+      expect(run.harness).toBe("claude");
+      expect(lastSpec()?.permissionMode).toBe("plan");
+      await stopRun(run.id);
+    }
   } finally {
     expect((await call("POST", "/api/agents/role", { role: "job", pick: null })).status).toBe(200);
   }

@@ -62,7 +62,6 @@ export function AgentScopes({ backend, routes, has }: { backend: string; routes:
       <p className="settings-hint">Effective{preview ? ` for ${preview.name}` : ""}: {effective.settings.harness} · {describeAgent(effective.settings, false)} · {fromWord(effective)}</p>
       {(effective.skipped ?? []).map((s, i) => <p key={i} className="settings-hint warn">{s.why}; using the next route.</p>)}
       {!has.includes(effective.settings.harness) && <p className="settings-hint warn">{effective.settings.harness} is not installed on {backend}.</p>}
-      {propose && effective.settings.harness !== "claude" && <p role="alert" className="settings-hint warn">Plan, then build requires Claude Code. Set this task to a Claude profile or custom Claude settings before launching it.</p>}
     </li>;
   };
   return <section className="agents-section" aria-label="Workflow and task routing">

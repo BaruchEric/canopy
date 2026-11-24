@@ -11,7 +11,7 @@ Canopy can open an interactive agent in a shell or drive a job through its own r
 | An ordinary interactive Claude Code or Codex terminal | An agent shell |
 | A conversation in Canopy with messages and tool output | Chat |
 | A bounded request with a result to inspect | A job |
-| A proposed implementation plan followed by building | Plan, then build, which requires Claude Code |
+| A proposed implementation plan followed by building | Plan, then build, which always runs on Claude Code |
 | A repeatable sequence such as checks, commit, and push | A workflow |
 
 ## Check the agent settings

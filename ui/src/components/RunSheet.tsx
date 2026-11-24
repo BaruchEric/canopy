@@ -6,7 +6,7 @@ import { ACTIONS, planWords, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
 import { parseIssueRef } from "../../../src/core/issue";
-import { activeFlowFor, agentFor, connOf, idText, landingAll, launchFor, memberFlowNotes, ownBranchBeside, prsAll, routesOf, tasksOf, treeTasksOf, useStore, type Sheet } from "../store";
+import { activeFlowFor, agentFor, claudeAgentFor, connOf, idText, landingAll, launchFor, memberFlowNotes, ownBranchBeside, prsAll, routesOf, tasksOf, treeTasksOf, useStore, type Sheet } from "../store";
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
 import { branchByDefault, freeBranchSlots, runLanding, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
@@ -299,7 +299,13 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const spec = ACTIONS[action];
   const words = planWords(action, workspace);
   const coordinate = action === "coordinate";
-  const agent = useStore((s) => agentFor(s, repo, coordinate ? "coordinate" : spec.mode === "chat" ? "chat" : "job", { kind: "task", name: action }));
+  // a workspace run takes Claude Code over a route to another harness, as
+  // the server starts it; plan, then build's task route does by itself
+  const agent = useStore((s) => {
+    const role = coordinate ? "coordinate" : spec.mode === "chat" ? "chat" : "job";
+    const scope = { kind: "task" as const, name: action };
+    return workspace ? claudeAgentFor(s, repo, role, "workspace runs need Claude Code", scope) : agentFor(s, repo, role, scope);
+  });
   // FR-065: a named loadout from kit.json, for one plain run only
   const loadouts = loadoutsFor(action, useStore((s) => s.kit[backendOf(repo.id)]?.loadouts?.loadouts));
   const [loadoutPick, setLoadoutPick] = useState("");

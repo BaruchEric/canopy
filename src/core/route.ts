@@ -269,18 +269,30 @@ function layers(routes: AgentRoutes, path: string, role: AgentRole, scope?: Agen
   return out;
 }
 
-/** The layers' resolution with no launch pick. */
-function routed(routes: AgentRoutes, path: string, role: AgentRole, skipped: AgentSkip[], scope?: AgentScope): ResolvedAgent {
+/** The layers' resolution with no launch pick. With `onlyClaude` (the
+ *  words saying why), a layer naming another harness is passed over like
+ *  one the role cannot run, so the first layer of Claude settings answers,
+ *  else the builtin, which is Claude Code's. */
+function routed(routes: AgentRoutes, path: string, role: AgentRole, skipped: AgentSkip[], scope?: AgentScope, onlyClaude?: string): ResolvedAgent {
   for (const [from, pick] of layers(routes, path, role, scope)) {
     const got = settle(routes, role, pick);
-    if ("why" in got) {
-      skipped.push({ from, why: got.why, ...(got.profile ? { profile: got.profile } : {}) });
+    if ("why" in got || (onlyClaude && got.settings.harness !== "claude")) {
+      const why = "why" in got ? got.why : `runs ${HARNESS[got.settings.harness].label}; ${onlyClaude}`;
+      skipped.push({ from, why, ...(got.profile ? { profile: got.profile } : {}) });
       continue;
     }
     return { settings: got.settings, from, ...(got.profile ? { profile: got.profile } : {}) };
   }
   return { settings: DEFAULT_AGENT, from: "builtin" };
 }
+
+/** Work only Claude Code can do, by task, and why: plan, then build stops
+ *  at a plan for approval through Claude's own plan mode. */
+const CLAUDE_TASKS: Readonly<Record<string, string>> = { propose: "plan, then build needs Claude Code" };
+
+/** Why a task's job runs on Claude Code whatever its route says, or null. */
+export const claudeOnlyTask = (role: AgentRole, scope?: AgentScope): string | null =>
+  role === "job" && scope?.kind === "task" && Object.hasOwn(CLAUDE_TASKS, scope.name) ? (CLAUDE_TASKS[scope.name] ?? null) : null;
 
 /** The profiles of one harness in the order a harness pick tries them:
  *  `default`, then the rest by name. */
@@ -324,7 +336,22 @@ export function resolveAgent(routes: AgentRoutes, path: string, role: AgentRole,
       return done({ settings: { ...DEFAULT_AGENT, harness: h }, from: "explicit" });
     }
   }
-  return done(routed(routes, path, role, skipped, scope));
+  return done(routed(routes, path, role, skipped, scope, claudeOnlyTask(role, scope) ?? undefined));
+}
+
+/**
+ * The settings for work only Claude Code can do (a workspace run, the map,
+ * a diagram, the graph; plan, then build gets this from `resolveAgent` by
+ * its task) with no launch pick: the route as `resolveAgent` reads it, but
+ * a layer naming another harness is passed over and listed in `skipped`
+ * with `why`, so the first layer of Claude settings answers, else Claude
+ * Code's builtin defaults. A route to another harness is a preference for
+ * work any agent can do, and these starts have no harness to pick.
+ */
+export function resolveClaude(routes: AgentRoutes, path: string, role: AgentRole, why: string, scope?: AgentScope): ResolvedAgent {
+  const skipped: AgentSkip[] = [];
+  const r = routed(routes, path, role, skipped, scope, why);
+  return skipped.length ? { ...r, skipped } : r;
 }
 
 /** The layers that choose settings for the commit message itself. */

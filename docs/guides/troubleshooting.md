@@ -36,7 +36,7 @@ Use your actual backend address. Approve the login request in the inbox of an al
 
 Check the effective harness in the repo's settings and pre-flight. It must be installed, configured, and signed in on the selected backend. A working CLI on your laptop does not establish that the shared backend has it.
 
-Read any refusal for an unsupported action. For example, **Plan, then build** requires Claude Code. Also inspect open chats, active runs, and any capacity message before starting another job.
+Read any refusal for an unsupported action. For example, **Plan, then build**, a workspace run, the map, diagrams and the knowledge graph run only on Claude Code: they take the repo's Claude settings even when its route names another harness, but a profile or loadout of another harness picked for that start is refused. Also inspect open chats, active runs, and any capacity message before starting another job.
 
 If **Set up run**, **Save my work**, or a fix button seemed to do nothing, inspect the agent shell. These actions paste into an existing session without pressing Enter. Complete the shell's current question, then submit the intended request.
 

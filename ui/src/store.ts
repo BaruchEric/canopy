@@ -87,7 +87,7 @@ import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } 
 import { factsFrom, mergePulses, statusFrom, type FactsOf, type StatusOf } from "./agentstatus";
 import { headingRuns, type Ids } from "./allagents";
 import { clientCaps } from "../../src/core/client";
-import { normalizeRoutes, resolveAgent } from "../../src/core/route";
+import { normalizeRoutes, resolveAgent, resolveClaude } from "../../src/core/route";
 import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
 import { loadNotes, noteId, notesPrompt, updateNotes, withNote, withoutNotes, type Note, REVIEW_NOTES_STORE } from "./reviewnotes";
@@ -6235,6 +6235,11 @@ export const routesOf = (s: CanopyState, backend: string): AgentRoutes => s.agen
  *  the routing's own, so a selector over it settles. */
 export const agentFor = (s: CanopyState, repo: Repo, role: AgentRole = "shell", scope?: AgentScope): AgentSettings =>
   resolveAgent(routesOf(s, backendOf(repo.id)), repo.path, role, undefined, scope).settings;
+
+/** The same for work only Claude Code can do (`why` says what), which
+ *  passes a route to another harness over, as the server's start does. */
+export const claudeAgentFor = (s: CanopyState, repo: Repo, role: AgentRole, why: string, scope?: AgentScope): AgentSettings =>
+  resolveClaude(routesOf(s, backendOf(repo.id)), repo.path, role, why, scope).settings;
 
 /** What a launch pick puts on a tab: the harness it names, or the
  *  profile. */

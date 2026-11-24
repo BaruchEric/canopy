@@ -214,7 +214,10 @@ export function RepoMenuItems({
   const agent = useStore((s) => agentFor(s, repo));
   // a chat and a job start on whatever the repo's routes say for them
   const chatAgent = useStore((s) => agentFor(s, repo, "chat"));
-  const jobAgent = useStore((s) => agentFor(s, repo, "job"));
+  // each job by its task's route, as the server starts it: plan, then
+  // build's passes another harness over for Claude Code (core/route)
+  const askAgent = useStore((s) => agentFor(s, repo, "job", { kind: "task", name: "ask" }));
+  const proposeAgent = useStore((s) => agentFor(s, repo, "job", { kind: "task", name: "propose" }));
   // a coordinator (FR-010) only where a backend has its isolated runner; it
   // holds no repo, so a card led by a checkout without one (the Mac's)
   // starts it at another checkout of the card that has one (the mini's)
@@ -520,14 +523,13 @@ export function RepoMenuItems({
           );
         })()}
         {JOBS.map((action) => {
+          const jobAgent = action === "propose" ? proposeAgent : askAgent;
           // a job starts beside the runs and the workflow going here (FR-073)
           const check = seedBusy
             ? { ok: false as const, why: "wait for the current run" }
-            : action === "propose" && jobAgent.harness !== "claude"
-              ? { ok: false as const, why: "plan, then build needs Claude Code" }
-              : !has.includes(jobAgent.harness)
-                ? { ok: false as const, why: `${HARNESS[jobAgent.harness].label} not installed` }
-                : checkWhen(repo, "any");
+            : !has.includes(jobAgent.harness)
+              ? { ok: false as const, why: `${HARNESS[jobAgent.harness].label} not installed` }
+              : checkWhen(repo, "any");
           return (
             <button
               key={action}
@@ -535,7 +537,7 @@ export function RepoMenuItems({
               role="menuitem"
               className="menu-item"
               aria-disabled={!check.ok}
-              title={check.ok ? `A job on ${AGENT_NAME[jobAgent.harness]} (the repo's job route)` : check.why}
+              title={check.ok ? (action === "propose" ? "A job on Claude Code, which plan, then build needs" : `A job on ${AGENT_NAME[jobAgent.harness]} (the repo's job route)`) : check.why}
               tabIndex={check.ok ? 0 : -1}
               onClick={() => {
                 if (check.ok) choose(action);
