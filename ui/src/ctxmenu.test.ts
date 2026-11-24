@@ -3,6 +3,7 @@ import {
   EDGE,
   ctxLink,
   ctxSkip,
+  ctxPresent,
   ctxSubjects,
   factLabel,
   fuzzy,
@@ -213,6 +214,40 @@ describe("ctxSubjects", () => {
     expect(ctxSubjects([node("li", ["inbox-item"], { "data-kb": "inbox:run:a|1" })])).toEqual([{ kind: "inbox", key: "run:a|1" }]);
     expect(ctxSubjects([node("li", [], { "data-kb": "trigger:mac:e1" })])).toEqual([{ kind: "trigger", id: "mac:e1" }]);
     expect(ctxSubjects([node("article", ["bt"], { "data-card": "c1" })])).toEqual([{ kind: "agent", id: "c1" }]);
+  });
+  test("a row that stands for an agent, a chat, a shell or a repo is that thing, then what it sits in (FR-085)", () => {
+    // an agent's row in a repo panel's agents section
+    const agent = [node("button", ["agents-name"]), node("li", ["agents-row"], { "data-card": "claude:a" }), node("div", [], { "data-section": "agents" }), node("section", ["panel"], { "data-repo": "r" })];
+    expect(ctxSubjects(agent)).toEqual([
+      { kind: "agent", id: "claude:a" },
+      { kind: "section", key: "agents", repo: "r" },
+      { kind: "panel", id: "r", head: false },
+    ]);
+    // a chat's chip on a card: the chat, then the card's repo
+    expect(ctxSubjects([node("button", ["run-chip"], { "data-run": "b|run1" }), node("article", ["card"], { "data-kb": "repo:b|r" })])).toEqual([
+      { kind: "chat", id: "b|run1" },
+      { kind: "repo", id: "b|r" },
+    ]);
+    // a shell's row in the shells list, which is a popup's
+    expect(ctxSubjects([node("li", ["shell-row"], { "data-shell": "t1" }), node("div", ["settings-pop"], { "data-item": "popup:shells" })])).toEqual([
+      { kind: "shell", id: "t1" },
+      { kind: "item", item: "popup", ref: "shells" },
+    ]);
+    // a repo's row in "waiting on you" is the repo, as its card is
+    expect(ctxSubjects([node("li", [], { "data-repo-row": "r" }), node("section", ["panel"], { "data-panel": "/waiting" })])).toEqual([
+      { kind: "repo", id: "r" },
+      { kind: "dock", id: "/waiting", head: false },
+    ]);
+  });
+  test("a row whose chat or shell has gone leaves the click to what it sits in", () => {
+    const has = { chat: (id: string) => id === "live", shell: (id: string) => id === "t1" };
+    const card = { kind: "repo" as const, id: "r" };
+    expect(ctxPresent([{ kind: "chat", id: "gone" }, card], has)).toEqual([card]);
+    expect(ctxPresent([{ kind: "chat", id: "live" }, card], has)).toEqual([{ kind: "chat", id: "live" }, card]);
+    expect(ctxPresent([{ kind: "shell", id: "t9" }, { kind: "item", item: "popup", ref: "shells" }], has)).toEqual([{ kind: "item", item: "popup", ref: "shells" }]);
+    expect(ctxPresent([{ kind: "shell", id: "t1" }], has)).toEqual([{ kind: "shell", id: "t1" }]);
+    // an agent's row is the registry's to answer for, as before
+    expect(ctxPresent([{ kind: "agent", id: "c1" }], has)).toEqual([{ kind: "agent", id: "c1" }]);
   });
   test("an inbox row in the dock's waiting panel is the row, then the panel it is in, which is no repo's", () => {
     const chain = [node("li", ["inbox-item"], { "data-kb": "inbox:ask:9" }), node("section", ["panel", "waiting-panel"], { "data-panel": "/waiting" })];

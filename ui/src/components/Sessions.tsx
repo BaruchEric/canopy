@@ -361,7 +361,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
         {rows.length === 0 && <p className="ss-empty">no agents running</p>}
         <ul className="ss-list">
           {rows.map((c) => (
-            <li key={c.id}>
+            <li key={c.id} data-card={c.id}>
               <button type="button" className={`ss-agent${c.id === currentAgent ? " on" : ""}`} title={stateWord(c, facts(c))} onClick={() => pickAgent(c)}>
                 <span className={`dot ${STATE_DOT[status(c)]}`} aria-hidden="true" />
                 <span className="ss-lines">
@@ -459,6 +459,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
                       key={t.id}
                       type="button"
                       className="term-tab ss-held"
+                      data-shell={t.id}
                       title={`A shell at ${name} running with no tab here${t.viewers.length > 0 ? ` (open on ${t.viewers.join(", ")})` : ""}. Press to bring it back`}
                       onClick={() => {
                         setPicked(null);
@@ -805,7 +806,7 @@ function Machines({
               <ul className="ss-list">
                 {m.repos.length === 0 && <li className="ss-empty">{state === "online" ? "no shells or agents" : state}</li>}
                 {m.repos.map((r) => (
-                  <li key={r.id}>
+                  <li key={r.id} data-repo-row={r.id}>
                     <button
                       type="button"
                       className={`ss-repo${scope && "repo" in scope && scope.repo === r.id ? " on" : ""}`}

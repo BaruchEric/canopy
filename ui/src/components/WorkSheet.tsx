@@ -75,7 +75,7 @@ export function Links({ backend, item }: { backend: string; item: WorkItem }) {
   return (
     <span className="work-links">
       {newest && (
-        <button type="button" className="work-link" title={`Open the newest run, ${item.runs.length === 1 ? "its only one" : `one of ${item.runs.length}`}`} onClick={() => showRun(qual(backend, newest))}>
+        <button type="button" className="work-link" title={`Open the newest run, ${item.runs.length === 1 ? "its only one" : `one of ${item.runs.length}`}`} data-run={qual(backend, newest)} onClick={() => showRun(qual(backend, newest))}>
           {item.runs.length === 1 ? "run" : `${item.runs.length} runs`}
         </button>
       )}

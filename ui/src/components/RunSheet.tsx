@@ -1157,7 +1157,7 @@ function ForkLine({ run }: { run: Run }) {
     <div className="run-fork">
       <span className="run-parent-text" title={HOW_TITLE[f.how]}>{words}</span>
       <span className="spacer" />
-      <button type="button" className="mini" title="Open the run it was forked from" onClick={() => showRun(f.run)}>
+      <button type="button" className="mini" title="Open the run it was forked from" data-run={f.run} onClick={() => showRun(f.run)}>
         open the original
       </button>
     </div>

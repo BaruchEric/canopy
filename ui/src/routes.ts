@@ -375,8 +375,8 @@ export function openSectionElsewhere(id: string, section: SectionKey, target: "t
 /** A shell that is already running, in a tab or window of its own: the new
  *  window joins it rather than starting another. A task's shell says which
  *  task, so its window only ever joins. */
-export function popShell(id: string, term: string, target: "tab" | "window", task?: string) {
-  openNamed(`canopy:shell:${term}`, task ? taskShellUrl(id, term, task) : heldShellUrl(id, term), target);
+export function popShell(id: string, term: string, target: "tab" | "window", task?: string): Window | null {
+  return openNamed(`canopy:shell:${term}`, task ? taskShellUrl(id, term, task) : heldShellUrl(id, term), target);
 }
 
 function openNamed(name: string, url: string, target: "tab" | "window", slim = false): Window | null {

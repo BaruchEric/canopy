@@ -19,7 +19,7 @@ import { machineOf } from "../agentcards";
 import { AGENT_GLYPH } from "../agentpanel";
 import { CLI_GLYPH, CLI_NAME } from "../cli";
 import { gearAround } from "../ctxgears";
-import { ctxLink, ctxSubjects, factLabel, isFact, type CtxItem, type CtxNode, type CtxSubject } from "../ctxmenu";
+import { ctxLink, ctxPresent, ctxSubjects, factLabel, isFact, type CtxItem, type CtxNode, type CtxSubject } from "../ctxmenu";
 import { pickable } from "../flows";
 import { runRepoName } from "../goals";
 import { ITEM_GLYPH, isReservedPanel, itemOfPanel, panelOfItem, panelOfWindow } from "../itempanel";
@@ -27,7 +27,7 @@ import { lastShell, typeInto } from "../liveTerms";
 import { PHONE } from "../media";
 import { backendOf } from "../registry";
 import { lacks } from "../callerToken";
-import { isOwnWindow, openElsewhere, openItemWindow, openSectionElsewhere, openViewWindow, parseRoute, type ItemRef } from "../routes";
+import { isOwnWindow, openElsewhere, openItemWindow, openSectionElsewhere, openViewWindow, parseRoute, popShell, type ItemRef } from "../routes";
 import { runPanelLabel } from "../runs";
 import { say } from "../said";
 import { POPUP_WORD, isPopupName } from "../sectiontabs";
@@ -40,7 +40,7 @@ import { WAITING_GLYPH, WAITING_PANEL } from "../waiting";
 import { closedIn, dockless, idText, inboxItems, isFavorite, multi, useStore, type CanopyState } from "../store";
 import { openView } from "../clirun";
 import { isGoalAnchor } from "../../../src/core/coordinator";
-import type { Repo } from "../../../src/core/types";
+import type { Repo, TermInfo } from "../../../src/core/types";
 import { ContextMenuHost, GearBlock, type CtxBlock, type CtxHead, type CtxQuick, type CtxSpec } from "./ContextMenu";
 import { Icon } from "./Icon";
 import { KIND_GLYPH } from "./Inbox";
@@ -89,7 +89,7 @@ function nth(target: Element, i: number): Element | null {
 /** Builds the menu for a right-click, or null to leave it to the browser. */
 export function buildMenu(target: Element, chain: CtxNode[], selection: string): CtxSpec | null {
   const s = useStore.getState();
-  const subjects = ctxSubjects(chain);
+  const subjects = ctxPresent(ctxSubjects(chain), { chat: (id) => id in s.runs, shell: (id) => s.shells.some((t) => t.id === id) });
   const first = subjects[0];
   const blocks: CtxBlock[] = [];
 
@@ -190,6 +190,10 @@ function subjectMenu(s: CanopyState, sub: CtxSubject, target: Element): Built | 
       return triggerMenu(s, sub.id);
     case "agent":
       return agentMenu(s, sub.id, target);
+    case "chat":
+      return chatMenu(s, sub.id);
+    case "shell":
+      return shellMenu(s, sub.id);
   }
 }
 
@@ -344,8 +348,11 @@ const viewWord = (view: string): string => GO.find((g) => g.view === view)?.what
  *   dock and comes back to its slot when the window goes. On a phone, and
  *   in a window with no dock, it is a copy: a phone's window is a tab the
  *   dock would never hear go.
- * - A section: the section's window. A board card: its chat's window, else
- *   the agent's.
+ * - A section: the section's window. An agent's tile or row: its chat's
+ *   window when it is a chat's card, else the agent's.
+ * - A chat's chip, row or card: the chat's window. A shell's row: the
+ *   shell's window, which joins it (FR-085). An inbox row a chat asked
+ *   from offers the chat's window after the row's own moves.
  * - A popup, a sheet's chat or a tab beside shells: the item's window; the
  *   popover or the sheet closes once the window is open.
  *
@@ -420,7 +427,23 @@ function windowRows(s: CanopyState, subjects: readonly CtxSubject[], target: Ele
           else if (target.closest(".sheet-back")?.isConnected) s.leaveSheet();
         });
         break;
-      case "inbox":
+      case "chat":
+        if (s.runs[sub.id]) made = item({ kind: "run", ref: sub.id });
+        break;
+      case "shell": {
+        const info = s.shells.find((t) => t.id === sub.id);
+        // a shell window's own shell is here already
+        if (info && s.repos.some((r) => r.id === info.repoId) && !(here.shell && here.term === info.id)) {
+          made = put(`shell:${info.id}`, `the shell at ${shellName(s, info)}`, () => opened(popShell(info.repoId, info.id, "window")));
+        }
+        break;
+      }
+      case "inbox": {
+        // a chat's ask: the chat's window, after the row's own moves
+        const asked = inboxItems(s).find((x) => x.key === sub.key);
+        if (asked?.source === "run" && s.runs[asked.id]) item({ kind: "run", ref: asked.id });
+        break;
+      }
       case "trigger":
         break;
     }
@@ -508,20 +531,24 @@ function agentMenu(s: CanopyState, id: string, target: Element): Built | null {
   const card = s.registry[id];
   if (!card && !run) return null;
   const name = card ? agentName(card) : (run?.verb ?? "run");
-  const tile = target.closest("[data-card]");
-  const items: CtxItem[] = [
-    { kind: "run", id: "a:focus", label: "focus it", run: () => tile?.querySelector<HTMLElement>(".bt-name")?.click() },
-    {
+  // the board's tile takes the focus; a row that stands for the agent
+  // anywhere else (a list, a repo's agents, "waiting on you") has none
+  const focus = target.closest("[data-card]")?.querySelector<HTMLElement>(".bt-name");
+  const items: CtxItem[] = [];
+  if (focus) items.push({ kind: "run", id: "a:focus", label: "focus it", run: () => focus.click() });
+  // a window of one thing has no dock to put a card in
+  if (!dockless()) {
+    items.push({
       kind: "run",
       id: "a:dock",
       label: "a card in the dock",
-      title: "Out of the board into a panel of its own, on the git view",
+      title: "Into a panel of its own, on the git view",
       run: () => {
         s.dockItem({ kind: "agent", ref: id, label: name });
         openView("git");
       },
-    },
-  ];
+    });
+  }
   if (run) items.push({ kind: "run", id: "a:run", label: "open the run", run: () => s.showRun(run.id) });
   const repoId = run?.repoId;
   if (repoId && !isGoalAnchor(repoId)) items.push({ kind: "run", id: "a:repo", label: `open ${s.repos.find((r) => r.id === repoId)?.name ?? idText(repoId)}`, run: () => s.openRepo(repoId) });
@@ -532,6 +559,54 @@ function agentMenu(s: CanopyState, id: string, target: Element): Built | null {
   if (branch) facts.push({ text: branch, mono: true });
   if (card) facts.push({ text: machineOf(card) });
   return { label: `Menu for ${name}`, head: { title: name, facts }, blocks: [{ kind: "items", key: "agent", items }] };
+}
+
+/** A chat a chip, a row or a card stands for (FR-085): its sheet, a card
+ *  in the dock, its repo and what to copy. Its window is the window row's. */
+function chatMenu(s: CanopyState, id: string): Built | null {
+  const run = s.runs[id];
+  if (!run) return null;
+  const ref: ItemRef = { kind: "run", ref: id };
+  const name = itemName(s, ref);
+  const items: CtxItem[] = [{ kind: "run", id: "c:open", label: "open it", run: () => s.showRun(id) }];
+  if (!dockless()) {
+    items.push({
+      kind: "run",
+      id: "c:dock",
+      label: "a card in the dock",
+      title: "Into a panel of its own, on the git view",
+      run: () => {
+        s.dockItem({ kind: "run", ref: id, label: name });
+        openView("git");
+      },
+    });
+  }
+  const repoId = run.repoId;
+  if (!isGoalAnchor(repoId)) items.push({ kind: "run", id: "c:repo", label: `open ${s.repos.find((r) => r.id === repoId)?.name ?? idText(repoId)}`, run: () => s.openRepo(repoId) });
+  items.push({ kind: "sub", id: "copy", label: "copy", sub: [copyRow("copy:branch", "branch", run.branch?.name), copyRow("copy:id", "id", id)] });
+  return { label: `Menu for ${name}`, head: itemHead(s, ref), blocks: [{ kind: "items", key: "chat", items }] };
+}
+
+/** what a shell is called: the name its tab was given, else its repo's */
+const shellName = (s: CanopyState, t: TermInfo): string => t.label ?? s.repos.find((r) => r.id === t.repoId)?.name ?? idText(t.repoId);
+
+/** A running shell a row stands for (FR-085): its tab here, and its repo.
+ *  Its window is the window row's. The store's list holds repos' shells
+ *  only, never a task's session or the ranger's. */
+function shellMenu(s: CanopyState, id: string): Built | null {
+  const info = s.shells.find((t) => t.id === id);
+  if (!info) return null;
+  const name = shellName(s, info);
+  const repo = s.repos.find((r) => r.id === info.repoId);
+  const here = s.terms.some((t) => t.id === id);
+  const items: CtxItem[] = [];
+  if (repo) {
+    items.push({ kind: "run", id: "sh:show", label: here ? "show it" : "join it", title: here ? "Bring its tab forward" : "A tab on it here; the shell keeps running where it is", run: () => s.joinTerm(id) });
+    items.push({ kind: "run", id: "sh:repo", label: `open ${repo.name}`, run: () => s.openRepo(repo.id) });
+  }
+  const facts: CtxHead["facts"] = [{ text: "shell" }, { text: info.place === "panel" ? "in a panel" : "in the strip" }];
+  if (info.viewers.length > 0) facts.push({ text: `on ${info.viewers.join(", ")}` });
+  return { label: `Menu for the shell at ${name}`, head: { glyph: "▸", title: name, facts }, blocks: items.length ? [{ kind: "items", key: "shell", items }] : [] };
 }
 
 /** Rows for selected text: copy it, and put it somewhere useful. */

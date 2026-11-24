@@ -74,7 +74,7 @@ export function GroupSheet({ groupId }: { groupId: string }) {
           {entry?.reason && <p className="rust">{entry.reason}</p>}
           {runOverlaps(info, record?.runId ?? member.run).map(c => <OverlapChip key={c.id} name={c.name} paths={c.paths} />)}
           {watch && <a href={watch.url} target="_blank" rel="noreferrer">PR #{watch.number}</a>}
-          {run && <button type="button" className="mini" onClick={() => showRun(run.id)}>open member run</button>}
+          {run && <button type="button" className="mini" data-run={run.id} onClick={() => showRun(run.id)}>open member run</button>}
           <div className="landing-tools">
             {canPickMember(group, member.origin, info) && <button type="button" className="mini" disabled={busy} onClick={() => act(() => pick(group.id, member.origin))}>pick this one</button>}
             {actions.land && <button type="button" className="mini strong" disabled={busy} onClick={() => actions.approve ? approve(member.origin) : act(() => land(member.origin))}>{actions.approve ? "look and land" : "land the winner"}</button>}
@@ -88,7 +88,7 @@ export function GroupSheet({ groupId }: { groupId: string }) {
       {reviews.map((review, i) => {
         const reviewer = runs[review.run];
         const reviewCost = ledger.some(r => r.group === group.id && r.run === review.run) ? costOfGroup(ledger, group.id, review.run) : { usd: reviewer?.result?.costUsd ?? 0, tokens: reviewer?.result?.tokens?.total ?? 0 };
-        return <section key={review.run}><h3>{reviews.length > 1 || group.reviewers === 2 ? `Reviewer ${i + 1}` : "Reviewer"}</h3>{reviewer && <button type="button" className="mini" onClick={() => showRun(reviewer.id)}>open reviewer run</button>}<p>{usd(reviewCost.usd)} · {fmtTokens(reviewCost.tokens)} tokens</p>{"error" in review && <p className="rust">{review.error}</p>}{"ranking" in review && review.ranking.length > 0 && <p>ranked {review.ranking.join(", ")}</p>}{reviewer?.result?.text && <pre className="ask-detail">{reviewer.result.text}</pre>}</section>;
+        return <section key={review.run}><h3>{reviews.length > 1 || group.reviewers === 2 ? `Reviewer ${i + 1}` : "Reviewer"}</h3>{reviewer && <button type="button" className="mini" data-run={reviewer.id} onClick={() => showRun(reviewer.id)}>open reviewer run</button>}<p>{usd(reviewCost.usd)} · {fmtTokens(reviewCost.tokens)} tokens</p>{"error" in review && <p className="rust">{review.error}</p>}{"ranking" in review && review.ranking.length > 0 && <p>ranked {review.ranking.join(", ")}</p>}{reviewer?.result?.text && <pre className="ask-detail">{reviewer.result.text}</pre>}</section>;
       })}
       {costError && <p className="note">Cost ledger unavailable: {costError}</p>}
       {error && <p className="note err" role="alert">{error}</p>}

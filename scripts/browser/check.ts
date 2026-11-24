@@ -19,7 +19,11 @@
 // It drives a right-click's "open in its own window" (FR-084): a repo's panel
 // popped out and back, "waiting on you" in a window of its list, a window
 // that offers none of itself, a repo's row opened from that list, the view's
-// own window, and a phone's copy.
+// own window, and a phone's copy. The same row on what stands for a thing
+// (FR-085): a chat's chip on a card, an agent's row in "waiting on you", the
+// board's tile, a chat's row in a window with no dock, a phone's long press on
+// a chip, and a shell's row in the shells list, with no menu over the shell's
+// own screen.
 // It also drives the level (FR-079): at intermediate the quiet top bar in
 // one row with its menu, a turn's commands folded in a run's timeline and
 // the start box, which opens on a new worktree where the checkout is in
@@ -105,6 +109,29 @@ const shortButtons = (page: Page, sel: string) =>
       .map((el) => `${el.className || "button"} '${(el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 24)}' ${Math.round(el.getBoundingClientRect().height)}px`);
     return { seen: shown.length, short };
   }, sel);
+
+/** the right-click menu's row that opens a thing in a window of its own */
+const ROW = "open in its own window";
+
+/** A real right-click on `sel` (at `at` inside it, else its middle), and the
+ *  menu's rows as text; none when no menu opens. */
+async function rowsAt(p: Page, sel: string, at?: { x: number; y: number }): Promise<string[]> {
+  await p.locator(sel).first().click({ button: "right", ...(at ? { position: at } : {}) });
+  const shown = await p.locator(".ctx-menu").first().waitFor({ timeout: 5000 }).then(() => true, () => false);
+  // the menu settles in over 140ms
+  await p.waitForTimeout(300);
+  return shown ? (await p.locator('.ctx-menu [role="menuitem"]').allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim()) : [];
+}
+
+/** Presses the open menu's first window row; the window it opens, if any. */
+async function pick(p: Page): Promise<Page | null> {
+  const [win] = await Promise.all([
+    p.context().waitForEvent("page", { timeout: 8000 }).catch(() => null),
+    p.locator('.ctx-menu [role="menuitem"]', { hasText: ROW }).first().click({ timeout: 4000 }).catch(() => undefined),
+  ]);
+  await win?.waitForLoadState("load");
+  return win;
+}
 
 async function openShell(page: Page) {
   await page.goto(`${base}/`, { waitUntil: "load" });
@@ -1420,22 +1447,6 @@ try {
     // dock"; "waiting on you" goes to a window of its list and comes back
     // when that window closes; a window of one thing never offers itself;
     // and a phone gets a copy, with the panel left in the dock.
-    const rowsAt = async (p: Page, sel: string, at: { x: number; y: number }) => {
-      await p.locator(sel).first().click({ button: "right", position: at });
-      const shown = await p.locator(".ctx-menu").first().waitFor({ timeout: 5000 }).then(() => true, () => false);
-      // the menu settles in over 140ms
-      await p.waitForTimeout(300);
-      return shown ? (await p.locator('.ctx-menu [role="menuitem"]').allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim()) : [];
-    };
-    const pick = async (p: Page) => {
-      const [win] = await Promise.all([
-        p.context().waitForEvent("page", { timeout: 8000 }).catch(() => null),
-        p.locator('.ctx-menu [role="menuitem"]', { hasText: "open in its own window" }).first().click({ timeout: 4000 }).catch(() => undefined),
-      ]);
-      await win?.waitForLoadState("load");
-      return win;
-    };
-    const ROW = "open in its own window";
     const page = await fresh();
     await page.addInitScript(() => localStorage.setItem("canopy.settings", JSON.stringify({ level: "advanced", onboarded: true })));
     await page.goto(`${base}/`, { waitUntil: "load" });
@@ -1526,6 +1537,129 @@ try {
   }
 
   {
+    // A right-click on a row that stands for a chat or an agent (FR-085).
+    // A chat's chip on a repo's card and an agent's row in "waiting on you"
+    // each lead with the thing's own window; only the board's tile offers
+    // "focus it"; a window with no dock offers no card in one; and a phone's
+    // long press on a chip opens the chat's window too.
+    const asker = await fresh();
+    const tree = (await (await asker.request.get(`${base}/api/tree`)).json()) as { repos: { id: string; name: string; path: string }[] };
+    await asker.close();
+    const demo = tree.repos.find((r) => r.name === "demo");
+    const at = Date.now() - 60_000;
+    const chat = {
+      id: "check-row",
+      repoId: demo?.id ?? "demo",
+      action: "chat",
+      verb: "chat",
+      progress: "",
+      expectsChange: false,
+      chat: true,
+      harness: "claude",
+      note: "",
+      status: "idle",
+      startedAt: at,
+      steps: [
+        { id: "u1", at, kind: "user", text: "What does this repo do?" },
+        { id: "a1", at: at + 5000, kind: "text", text: "It is a demo." },
+      ],
+      prompt: null,
+    };
+    // an agent the broker would list, started outside canopy and waiting
+    const card = {
+      id: "claude:check",
+      handle: "claude-demo",
+      node: "scratch",
+      harness: "claude",
+      session: "check",
+      origin: "elsewhere",
+      cwd: demo?.path ?? "",
+      repo: "demo",
+      branch: "main",
+      model: null,
+      mode: null,
+      state: "waiting",
+      waiting: "a question",
+      caps: [],
+      offers: [],
+      notifyIdle: false,
+      where: { os: "linux", container: false, pid: 4242, term: null, canopy: null },
+      transcript: null,
+      startedAt: at,
+      seenAt: Date.now(),
+      endedAt: null,
+    };
+    const seeded = async (phone = false) => {
+      const p = await fresh(undefined, true, phone);
+      await p.addInitScript(() => localStorage.setItem("canopy.settings", JSON.stringify({ level: "advanced", onboarded: true })));
+      await p.route("**/api/runs", (r) => (r.request().method() === "GET" ? r.fulfill({ json: [chat] }) : r.continue()));
+      await p.route("**/api/registry", (r) => (r.request().method() === "GET" ? r.fulfill({ json: { ready: true, cards: [card] } }) : r.continue()));
+      return p;
+    };
+    const search = (p: Page | null) => (p ? decodeURIComponent(new URL(p.url()).search) : "");
+
+    const page = await seeded();
+    await page.goto(`${base}/`, { waitUntil: "load" });
+    const chipped = await page.waitForSelector(".run-chip[data-run]", { timeout: 20_000 }).then(() => true, () => false);
+    await page.waitForTimeout(800);
+    const chip = chipped ? await rowsAt(page, ".run-chip[data-run]") : [];
+    check(chip[0] === `${ROW} chat · demo` && chip[1] === `${ROW} demo`, `a right-click on a chat's chip leads with the chat's window, then its card's ("${chip.slice(0, 2).join('", "') || "no menu"}")`);
+    await page.screenshot({ path: `${shots}/row-chat.png` });
+    const chatWin = chip.length ? await pick(page) : null;
+    check(search(chatWin) === "?view=run&run=check-row", `the row opens the chat in its own window (${search(chatWin) || "no window"})`);
+    await chatWin?.close();
+
+    await page.locator(".topbar").first().click({ position: { x: 300, y: 5 } });
+    await page.keyboard.press("w");
+    const listed = await page.waitForSelector('.panel[data-panel="/waiting"] li[data-card]', { timeout: 6000 }).then(() => true, () => false);
+    await page.waitForTimeout(1200);
+    const agent = listed ? await rowsAt(page, '.panel[data-panel="/waiting"] li[data-card]') : [];
+    check(
+      agent[0] === `${ROW} claude-demo` && agent[1] === `${ROW} waiting on you` && !agent.includes("focus it"),
+      `an agent's row in "waiting on you" leads with the agent's window, then the list's, with no "focus it" off the board ("${agent.slice(0, 3).join('", "') || "no menu"}")`,
+    );
+    await page.screenshot({ path: `${shots}/row-agent.png` });
+    const agentWin = agent.length ? await pick(page) : null;
+    check(search(agentWin) === "?view=agent&card=claude:check", `the row opens the agent in its own window (${search(agentWin) || "no window"})`);
+    await agentWin?.close();
+
+    await page.goto(`${base}/?view=agents`, { waitUntil: "load" });
+    const tiled = await page.waitForSelector(".bt[data-card]", { timeout: 15_000 }).then(() => true, () => false);
+    await page.waitForTimeout(1200);
+    const tile = tiled ? await rowsAt(page, ".bt[data-card]", { x: 30, y: 8 }) : [];
+    check(tile.includes("focus it"), `the board's tile keeps "focus it" ("${tile.slice(0, 3).join('", "') || "no menu"}")`);
+    await page.close();
+
+    // the list in its own window has no dock, so a chat's row offers no card in one
+    const list = await seeded();
+    await list.goto(`${base}/?view=popup&popup=waiting`, { waitUntil: "load" });
+    const rowed = await list.waitForSelector("li[data-run]", { timeout: 15_000 }).then(() => true, () => false);
+    await list.waitForTimeout(1200);
+    const lone = rowed ? await rowsAt(list, "li[data-run]") : [];
+    check(lone[0] === `${ROW} chat · demo` && lone.includes("open it") && !lone.includes("a card in the dock"), `in a window with no dock a chat's row offers its window and no card in a dock ("${lone.join('", "') || "no menu"}")`);
+    const loneWin = lone.length ? await pick(list) : null;
+    check(search(loneWin) === "?view=run&run=check-row", `and the row opens the chat's window from there (${search(loneWin) || "no window"})`);
+    await loneWin?.close();
+    await list.close();
+
+    const phone = await seeded(true);
+    await phone.goto(`${base}/`, { waitUntil: "load" });
+    await phone.waitForSelector(".run-chip[data-run]", { timeout: 20_000 }).catch(() => undefined);
+    await phone.waitForTimeout(1200);
+    await phone.locator(".run-chip[data-run]").first().dispatchEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 200, button: 2 });
+    await phone.locator(".ctx-menu").first().waitFor({ timeout: 5000 }).catch(() => undefined);
+    await phone.waitForTimeout(300);
+    const sheet = await phone.evaluate(() => ({
+      rows: [...document.querySelectorAll('.ctx-menu [role="menuitem"]')].length,
+      wider: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    }));
+    await phone.screenshot({ path: `${shots}/row-chat-phone.png` });
+    const phoneWin = await pick(phone);
+    check(search(phoneWin) === "?view=run&run=check-row" && sheet.wider <= 0, `on a phone a long press on the chip opens the chat's window (${search(phoneWin) || "no window"}) from a menu of ${sheet.rows} rows with nothing off the side (${sheet.wider}px)`);
+    await phone.close();
+  }
+
+  {
     const page = await fresh();
     await openShell(page);
     await page.waitForSelector(".xterm >> visible=true", { timeout: 20_000 });
@@ -1537,7 +1671,32 @@ try {
       .then(() => true, () => false);
     check(answered, "a new shell loads xterm and answers a command");
     await page.screenshot({ path: `${shots}/shell.png` });
+    // the shell's own screen keeps the browser's menu (SPEC, 2026-11-07)
+    await page.locator(".xterm:visible").first().click({ button: "right" });
+    await page.waitForTimeout(500);
+    const over = await page.locator(".ctx-menu").count();
+    check(over === 0, `a right-click in the shell's screen opens no canopy menu (${over})`);
     await page.close();
+
+    // the shell's row in the shells list opens it in a window of its own (FR-085)
+    const lister = await fresh();
+    await lister.addInitScript(() => localStorage.setItem("canopy.settings", JSON.stringify({ level: "advanced", onboarded: true })));
+    await lister.goto(`${base}/`, { waitUntil: "load" });
+    await lister.waitForSelector(".app", { timeout: 20_000 });
+    await lister.getByRole("button", { name: /Shells on this backend/ }).first().click({ timeout: 10_000 }).catch(() => undefined);
+    const listed = await lister.waitForSelector("li[data-shell]", { timeout: 6000 }).then(() => true, () => false);
+    await lister.waitForTimeout(600);
+    const shellRows = listed ? await rowsAt(lister, "li[data-shell] .kept-where") : [];
+    await lister.screenshot({ path: `${shots}/row-shell.png` });
+    const shellWin = shellRows.length ? await pick(lister) : null;
+    const shellAt = shellWin ? new URL(shellWin.url()).search : "";
+    const joined = shellWin ? await shellWin.waitForSelector(".xterm >> visible=true", { timeout: 15_000 }).then(() => true, () => false) : false;
+    check(
+      shellRows[0] === `${ROW} the shell at demo` && shellRows.includes("join it") && shellAt.startsWith("?repo=demo&view=shell&term=") && joined,
+      `a shell's row in the shells list leads with its window ("${shellRows.slice(0, 2).join('", "') || "no menu"}"), which joins the shell (${shellAt || "no window"}, ${joined ? "a screen" : "no screen"})`,
+    );
+    await shellWin?.close();
+    await lister.close();
   }
 
   {

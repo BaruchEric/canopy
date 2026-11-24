@@ -806,7 +806,7 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
     if (lane.groupId) useStore.getState().showGroup(lane.groupId);
   };
   return (
-    <article className={`mgr-lane${on ? " on" : ""}`} id={laneDom(lane.id)} aria-label={`${lane.id}: ${lane.title}`}>
+    <article className={`mgr-lane${on ? " on" : ""}`} id={laneDom(lane.id)} aria-label={`${lane.id}: ${lane.title}`} {...(runId && !flowId ? { "data-run": runId } : {})}>
       <div className="mgr-lane-head">
         <span className={`mgr-dot ${lane.tone}`} aria-hidden="true" />
         <span className="mgr-lane-id">{lane.id}</span>

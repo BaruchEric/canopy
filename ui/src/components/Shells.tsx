@@ -319,7 +319,7 @@ export function ShellsPopBody({ onDone }: { onDone?: () => void }) {
                 const others = t.viewers.filter((v) => v !== me);
                 const rowClass = ["shell-row", "picks", shown && "here", picked.has(t.id) && "on"].filter(Boolean).join(" ");
                 return (
-                  <li key={t.id} className={rowClass}>
+                  <li key={t.id} className={rowClass} data-shell={t.id}>
                     <input
                       type="checkbox"
                       className="kept-pick"

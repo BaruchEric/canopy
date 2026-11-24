@@ -118,7 +118,7 @@ function RunsPill() {
   );
   if (runs.length === 1) {
     return (
-      <button type="button" className={waiting ? "pill runs on" : "pill runs"} title="Show the run" onClick={() => showRun(first.id)}>
+      <button type="button" className={waiting ? "pill runs on" : "pill runs"} title="Show the run" data-run={first.id} onClick={() => showRun(first.id)}>
         {face}
       </button>
     );
@@ -136,6 +136,7 @@ function RunsPill() {
       ),
       what: pillLine(r, now),
       title: r.note || undefined,
+      mark: { "data-run": r.id },
     }),
   );
   return (

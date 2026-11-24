@@ -251,8 +251,14 @@ export type CtxSubject =
   | { kind: "panel"; id: string; head: boolean }
   /** a section of a repo panel, by key; `repo` from the panel around it */
   | { kind: "section"; key: string; repo: string | null }
-  /** an agent's card on the board */
+  /** an agent, by its card's id: its tile on the board, or a row that
+   *  stands for it anywhere else (`[data-card]`) */
   | { kind: "agent"; id: string }
+  /** a chat a chip, a row or a card stands for (`[data-run]`), by run id */
+  | { kind: "chat"; id: string }
+  /** a running shell a row stands for (`[data-shell]`), by its id; the
+   *  shell's own screen keeps the browser's menu (`ctxSkip`) */
+  | { kind: "shell"; id: string }
   /** a dock panel that is no repo's (`.panel[data-panel]`): a chat's, an
    *  agent's, a popup's or the command line's, `head` over its head */
   | { kind: "dock"; id: string; head: boolean }
@@ -271,6 +277,13 @@ export function itemOf(v: string | undefined): { item: ItemKind; ref: string } |
 
 /** what marks an item for a right-click: `data-item`'s value */
 export const itemMark = (t: { kind: ItemKind; ref: string }): string => `${t.kind}:${t.ref}`;
+
+/** The subjects whose thing is still there. A chat's or a shell's row can
+ *  outlive it (a fork's ended original, a shell ended on another device), and
+ *  then what the row sits in speaks for the click. */
+export function ctxPresent(subjects: CtxSubject[], has: { chat: (id: string) => boolean; shell: (id: string) => boolean }): CtxSubject[] {
+  return subjects.filter((x) => (x.kind === "chat" ? has.chat(x.id) : x.kind === "shell" ? has.shell(x.id) : true));
+}
 
 /** Every subject on the way up, innermost first, each kind once. */
 export function ctxSubjects(chain: readonly CtxNode[]): CtxSubject[] {
@@ -311,6 +324,13 @@ export function ctxSubjects(chain: readonly CtxNode[]): CtxSubject[] {
     if (item && !chain.slice(i + 1).some((m) => m.attrs["data-panel"] !== undefined)) put({ kind: "item", ...item });
     const card = n.attrs["data-card"];
     if (card) put({ kind: "agent", id: card });
+    // rows that stand for a thing outside the cards and the board (FR-085)
+    const run = n.attrs["data-run"];
+    if (run) put({ kind: "chat", id: run });
+    const shell = n.attrs["data-shell"];
+    if (shell) put({ kind: "shell", id: shell });
+    const row = n.attrs["data-repo-row"];
+    if (row) put({ kind: "repo", id: row });
   });
   return out;
 }

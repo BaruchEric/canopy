@@ -409,6 +409,7 @@ export function RepoMenuItems({
               type="button"
               role="menuitem"
               className="menu-item live"
+              data-run={r.id}
               title={`Show this run${r.note ? `\n${r.note}` : ""}`}
               onClick={() => {
                 onDone();

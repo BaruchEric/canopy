@@ -103,7 +103,8 @@ export function AgentRow({
   const started = new Date(card.startedAt).toLocaleString();
   const classes = ["agents-row", "reg-row", isLiveAgent(card) ? "" : "reg-gone", open ? "open" : ""].filter(Boolean).join(" ");
   return (
-    <li id={rowId(card.id)} className={classes}>
+    // data-card says whose row this is to a right-click (FR-085)
+    <li id={rowId(card.id)} className={classes} data-card={card.id}>
       <div className="agents-row-head">
         <span className={`harness-glyph h-${card.harness}`} title={harnessWord(card)}>
           {glyphOf(card)}

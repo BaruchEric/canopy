@@ -10,6 +10,8 @@ export interface PickOption {
   label: ReactNode;
   what?: ReactNode;
   title?: string;
+  /** `data-*` attributes for the row: what it stands for, to a right-click */
+  mark?: Record<`data-${string}`, string>;
 }
 
 /** A run of choices under a heading; one group can go without one. */
@@ -136,6 +138,7 @@ export function PickMenu({
                     role="radio"
                     aria-checked={o.value === value}
                     title={o.title}
+                    {...o.mark}
                     onClick={() => {
                       onPick(o.value);
                       setOpen(false);

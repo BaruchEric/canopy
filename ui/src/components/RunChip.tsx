@@ -28,6 +28,9 @@ export function RunChip({ run, long = false, named = false, more }: { run: Run; 
       type="button"
       className={`run-chip st-${group ? group.state === "needs-you" || group.state === "picked" ? "waiting" : ["working", "scoring", "reviewing"].includes(group.state) ? "working" : "done" : run.status}${noChange ? " no-change" : ""}`}
       title={group ? "Show the branch group" : `Show the run (${AGENT_NAME[harness]})${run.equip ? `\nloadout ${run.equip.loadout}${run.equip.from ? `, ${fromWord(run.equip.from)}` : ""}${run.equip.provider ? `\nprovider ${run.equip.provider}` : ""}` : ""}${run.name ? `\n${run.name}` : ""}${others ? `\n${moreTitle(others)}` : ""}`}
+      // the chat the chip stands for, said to a right-click (FR-085); a
+      // group's chip is its group's, which has no window
+      {...(group ? {} : { "data-run": run.id })}
       onClick={(e) => {
         e.stopPropagation();
         if (group) showGroup(group.id);

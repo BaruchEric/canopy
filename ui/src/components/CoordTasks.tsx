@@ -272,7 +272,7 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
             </>
           )}
           {child && (
-            <button type="button" className="mini" title="Open the branch run this card started" onClick={() => showRun(child.id)}>
+            <button type="button" className="mini" title="Open the branch run this card started" data-run={child.id} onClick={() => showRun(child.id)}>
               open its run
             </button>
           )}
@@ -494,7 +494,7 @@ export function ParentLine({ run }: { run: Run }) {
         <span className="run-parent-text">{chainWords(run, parent)}</span>
         <span className="spacer" />
         {parent && (
-          <button type="button" className="mini" title="Open the run that started this one" onClick={() => showRun(parent.id)}>
+          <button type="button" className="mini" title="Open the run that started this one" data-run={parent.id} onClick={() => showRun(parent.id)}>
             open the parent
           </button>
         )}
@@ -509,7 +509,7 @@ export function ParentLine({ run }: { run: Run }) {
       </span>
       <span className="spacer" />
       {parent && (
-        <button type="button" className="mini" title="Open the coordinator's chat and cards" onClick={() => showRun(parent.id)}>
+        <button type="button" className="mini" title="Open the coordinator's chat and cards" data-run={parent.id} onClick={() => showRun(parent.id)}>
           open the coordinator
         </button>
       )}

@@ -99,7 +99,7 @@ function RepoRow({ repo, state, word, detail, act: given }: { repo: Repo; state:
   const commits = (n: number) => `${n} commit${n === 1 ? "" : "s"}`;
   const upstream = repo.status?.upstream ?? "the remote";
   return (
-    <li className="waiting-item">
+    <li className="waiting-item" data-repo-row={repo.id}>
       <button type="button" className={`waiting-row s-${state}`} title={`Open ${repo.name}'s panel`} onClick={() => openPanel(repo.id)}>
         <span className="glyph" aria-hidden="true">
           {GLYPH[state]}
@@ -256,7 +256,8 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
               const go = t.kind === "group" ? () => showGroup(t.id) : t.kind === "chat" ? () => showRun(t.id) : term ? () => useStore.getState().bringTerm(term) : agents;
               const title = t.kind === "group" ? "Open the group comparison" : t.kind === "chat" ? "Open the chat" : term ? "Jump into its shell to answer it" : "Open its repo's agents";
               return (
-                <li key={`${t.kind}:${t.id}`} className="waiting-item">
+                // what the row stands for, said to a right-click (FR-085)
+                <li key={`${t.kind}:${t.id}`} className="waiting-item" {...(t.kind === "chat" ? { "data-run": t.id } : t.kind === "agent" ? { "data-card": t.id } : {})}>
                   {go ? (
                     <button type="button" className="waiting-row s-turn" title={title} onClick={go}>
                       {words}
@@ -302,7 +303,7 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
         <Group k="failed" count={failed.length}>
           <ul className="waiting-list">
             {failed.map((f) => (
-              <li key={`${f.kind}:${f.id}`}>
+              <li key={`${f.kind}:${f.id}`} {...(f.kind === "run" ? { "data-run": f.id } : {})}>
                 <button
                   type="button"
                   className="waiting-row s-error"

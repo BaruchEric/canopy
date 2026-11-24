@@ -131,7 +131,7 @@ export function AgentFix({ repoId, short, wait, onDone, ...what }: { repoId: str
     <>
       {run && <span className="note-why">{FIX_WATCH[run.status]}</span>}
       {run && (
-        <button type="button" className="mini note-act" title="Open the chat the failure went to" onClick={() => showRun(run.id)}>
+        <button type="button" className="mini note-act" title="Open the chat the failure went to" data-run={run.id} onClick={() => showRun(run.id)}>
           open chat
         </button>
       )}
