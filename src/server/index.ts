@@ -1304,7 +1304,11 @@ async function startRepoRun(
     const full = state.runner.checkoutRefusal(repo);
     if (full) throw new HttpError(409, full);
   }
-  const route = agentRouteFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job", undefined, { kind: "task", name: action });
+  // A run only Claude Code can do (the map, a diagram, the graph) has no
+  // harness picker, so it takes the repo's first Claude settings in place
+  // of a route to another harness, as a "new claude shell" does.
+  const claudeOnly = how.custom?.claudeOnly ? { harness: "claude" as const } : undefined;
+  const route = agentRouteFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job", claudeOnly, { kind: "task", name: action });
   const routed = route.settings;
   const base: StartExtras = {
     ...(priority === "interactive" ? {} : { priority }),
@@ -1573,8 +1577,10 @@ interface RunStartHow {
   /** the run's name, in place of one cut from its first message (FR-073) */
   name?: string;
   /** a run that is none of the built-in actions, in the checkout: its own
-   *  action name and spec, extras laid over the start's, and the refusal a
-   *  harness other than Claude Code gets (a map run, FR-070) */
+   *  action name and spec, extras laid over the start's, and, for a run only
+   *  Claude Code can do (a map run, FR-070), why no other harness can run
+   *  it. Such a start takes the repo's first Claude settings over a route
+   *  to another harness. */
   custom?: { action: string; spec: ActionSpec; extras: StartExtras; claudeOnly?: string };
 }
 

@@ -155,6 +155,20 @@ test("a page comes back as sandboxed text; a revise needs its note; a remove tak
   expect((await post({ act: "remove" })).status).toBe(400);
 }, 60_000);
 
+test("a backend whose default runs another harness still draws on Claude Code", async () => {
+  const profile = (settings: unknown) => fetch(url("/api/agents/profile"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "default", settings }) });
+  expect((await profile({ harness: "antigravity", model: "default", effort: "default", yolo: true, extra: "" })).ok).toBe(true);
+  try {
+    const res = await post({ act: "make", note: "the run loop" });
+    expect(res.status).toBe(201);
+    const run = (await res.json()) as Run;
+    expect(run.harness).toBe("claude");
+    await stop(run.id);
+  } finally {
+    expect((await profile(null)).ok).toBe(true);
+  }
+}, 60_000);
+
 test("a repo the backend does not scan is a 404", async () => {
   expect((await fetch(url("/api/repos/archify?id=nope"))).status).toBe(404);
 });
