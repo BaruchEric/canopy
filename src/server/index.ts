@@ -1715,10 +1715,16 @@ async function inheritedLoadout(state: ServerState, repo: Repo, claudeOnly: stri
 const fromOf = (d: LoadoutDefault | null): RunEquip["from"] =>
   d?.name && d.from ? { from: d.from, ...(d.key ? { key: d.key } : {}) } : undefined;
 
+/** Why a card's flow is Claude Code's, listed with a route layer it passes over. */
+const CARD_FLOW_CLAUDE = "a card's flow needs Claude Code";
+
 /** The route a card's work takes with no loadout: its flow's, as
- *  `startCoordWorkflow` reads it, or its action's. */
+ *  `startCoordWorkflow` reads it (Claude settings over a route to another
+ *  harness), or its action's. */
 const cardRoute = (cfg: CanopyConfig, repo: Repo, task: Pick<CoordTask, "workflow" | "action">) =>
-  agentRouteFor(cfg, repo.path, "job", undefined, task.workflow ? { kind: "workflow", name: task.workflow } : { kind: "task", name: task.action });
+  task.workflow
+    ? claudeRouteFor(cfg, repo.path, "job", CARD_FLOW_CLAUDE, { kind: "workflow", name: task.workflow })
+    : agentRouteFor(cfg, repo.path, "job", undefined, { kind: "task", name: task.action });
 
 /** A coordinator's card's loadout: the one it names with Eric's overrides
  *  laid over (refused when kit.json can no longer give it), none for `none`,
@@ -2750,10 +2756,10 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
   for (const profile of profiles) {
     if (profile && !hasProfile(agentRoutes(cfg).profiles, profile)) throw new Error(`unknown agent profile ${profile}`);
   }
-  const select = (profile: string | undefined) => agentFor(cfg, repo.path, "job", profile ? { profile } : undefined, { kind: "workflow", name: event.workflow });
+  const select = (profile: string | undefined) => claudeStepAgent(cfg, repo.path, profile, event.workflow, "a trigger run needs Claude Code");
   for (const profile of profiles) {
     const agent = select(profile);
-    if (agent.harness !== "claude") throw new Error(`${repo.name}'s trigger route starts ${agent.harness}; a trigger run needs Claude Code`);
+    if (agent.harness !== "claude") throw new Error(`${repo.name}'s trigger names profile ${profile ?? ""}, which runs ${agent.harness}; a trigger run needs Claude Code`);
     await needHarness(state, agent.harness, repo.path);
     current();
   }
@@ -3147,7 +3153,7 @@ async function startCoordWorkflow(
   const refused = stepProfileRefusal(cfg, wf);
   if (refused) throw new Error(refused);
   if (loadout && loadout.harness !== "claude") throw new Error(`loadout ${loadout.name} runs ${loadout.harness}; a card's flow needs Claude Code`);
-  const routed = agentFor(cfg, repo.path, "job", undefined, { kind: "workflow", name: wf.name });
+  const routed = claudeStepAgent(cfg, repo.path, undefined, wf.name, CARD_FLOW_CLAUDE);
   // planned before anything is written; its files come once nothing refuses
   const planned = loadout ? await planLoadout(state, repo, loadout, routed) : null;
   if (planned && from) planned.equip = { ...planned.equip, from };
@@ -3270,12 +3276,26 @@ async function listedModes(repo: Repo): Promise<ModesRead> {
 }
 
 /** The settings a workflow step's run starts with on a repo: the step's own
- *  `agent:` profile as the explicit pick, else the repo's flow route. */
+ *  `agent:` profile as the explicit pick, else the repo's flow route. A
+ *  trigger's or a card's flow (role `job`) is Claude Code's: a step naming
+ *  no profile takes Claude settings over a route to another harness, and
+ *  one naming a profile of another harness is refused. */
 const stepAgentFor = (cfg: CanopyConfig, path: string, profile: string | undefined, workflow?: string, role: "flow" | "job" = "flow"): AgentSettings => {
-  const agent = agentFor(cfg, path, role, profile ? { profile } : undefined, workflow ? { kind: "workflow", name: workflow } : undefined);
-  if (role === "job" && agent.harness !== "claude") throw new Error("a trigger workflow needs Claude Code");
+  if (role === "flow") return agentFor(cfg, path, role, profile ? { profile } : undefined, workflow ? { kind: "workflow", name: workflow } : undefined);
+  const agent = claudeStepAgent(cfg, path, profile, workflow, "a trigger workflow needs Claude Code");
+  if (agent.harness !== "claude") throw new Error(`profile ${profile ?? ""} runs ${agent.harness}; a trigger workflow needs Claude Code`);
   return agent;
 };
+
+/** A job-route step of a flow only Claude Code runs (a trigger's, a card's):
+ *  a profile the step names is its explicit pick, kept whatever it runs so
+ *  the caller can refuse it in words; with none, the workflow's job route
+ *  passes a layer naming another harness over for Claude settings, else
+ *  Claude's builtin defaults (`why` is listed with the skipped layer). */
+function claudeStepAgent(cfg: CanopyConfig, path: string, profile: string | undefined, workflow: string | undefined, why: string): AgentSettings {
+  const scope = workflow ? { kind: "workflow" as const, name: workflow } : undefined;
+  return profile ? agentFor(cfg, path, "job", { profile }, scope) : claudeRouteFor(cfg, path, "job", why, scope).settings;
+}
 
 /** No incubator stage runs with permissions bypassed, whatever the routes
  *  say: a seed may be a stranger's clone, and the stage is unattended. Yolo
@@ -5286,7 +5306,7 @@ async function handleApi(
     // flow, else the action's task route, as the starts read them
     const cfg = await loadConfig();
     const route = action === "workflow"
-      ? (workflow && isAgentScopeName(workflow) ? cardRoute(cfg, repo, { workflow, action: "ask" }) : agentRouteFor(cfg, repo.path, "job"))
+      ? (workflow && isAgentScopeName(workflow) ? cardRoute(cfg, repo, { workflow, action: "ask" }) : claudeRouteFor(cfg, repo.path, "job", CARD_FLOW_CLAUDE))
       : agentRouteFor(cfg, repo.path, action === "chat" ? "chat" : "job", undefined, action ? { kind: "task", name: action } : undefined);
     return json(await inheritedLoadout(state, repo, claudeOnly, route.from));
   }
@@ -8985,7 +9005,7 @@ export async function startServer(opts: {
       // one; a card's flow takes its loadout's model back for a step that names no profile
       (repo, flow) => (profile, workflow, role) => {
         if (isSeedPath(root, repo.path)) return stageAgent(stepAgentFor(restoreCfg, repo.path, profile, workflow, role));
-        if (flow.equip && !profile) return equipAgent(agentFor(restoreCfg, repo.path, role ?? "flow", undefined, workflow ? { kind: "workflow", name: workflow } : undefined), flow.equip);
+        if (flow.equip && !profile) return equipAgent(role === "job" ? claudeStepAgent(restoreCfg, repo.path, undefined, workflow, CARD_FLOW_CLAUDE) : agentFor(restoreCfg, repo.path, role ?? "flow", undefined, workflow ? { kind: "workflow", name: workflow } : undefined), flow.equip);
         return stepAgentFor(restoreCfg, repo.path, profile, workflow, role);
       },
     );

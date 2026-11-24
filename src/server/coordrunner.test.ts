@@ -1058,6 +1058,24 @@ Check the thing.
     }
   }, 30_000);
 
+  test("a card's flow under a default profile of another harness runs its steps on Claude Code", async () => {
+    const codex = { ...DEFAULT_AGENT, harness: "codex", model: "gpt-5.5", effort: "high" };
+    try {
+      expect((await postAs(s, "/api/agents/profile", { name: "default", settings: codex }, s.page)).status).toBe(200);
+      await userWorkflow("two-steps", TWO_STEPS);
+      const { tasks } = await startCard({ workflow: "two-steps" });
+      expect(tasks[0]?.state).toBe("running");
+      const flowId = tasks[0]?.flow ?? "";
+      liveFlows.push(flowId);
+      const first = await stepRun(flowId, 0);
+      expect(s.made.find((d) => d.ctx === first.ctx)?.harness).toBe("claude");
+      expect(first.ctx.agent.model).toBe("default");
+      finish(first.ctx, "built");
+    } finally {
+      expect((await postAs(s, "/api/agents/profile", { name: "default", settings: null }, s.page)).status).toBe(200);
+    }
+  }, 30_000);
+
   test("a card whose workflow is one plain step starts a branch run with that step's spec", async () => {
     await userWorkflow("one-step", "---\nname: one-step\nverb: do one\nblurb: One step.\n---\n\n## do\n\nDo the one thing.\n");
     const { tasks } = await startCard({ workflow: "one-step", equip: { loadout: "quick" } });

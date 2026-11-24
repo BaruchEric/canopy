@@ -142,3 +142,21 @@ test("a message while Eric's follow-up works on the event's branch starts nothin
   expect(made.length).toBe(drivers + 1);
   expect(await writersOn(origin)).toEqual([carried.runId ?? ""]);
 }, 30_000);
+
+test("a trigger fired under a default profile of another harness runs on Claude Code", async () => {
+  const codex = { harness: "codex", model: "gpt-5.5", effort: "high", yolo: true, extra: "" };
+  expect((await post("/api/agents/profile", { name: "default", settings: codex })).status).toBe(200);
+  try {
+    for (const r of await runs()) if (isRunActive(r)) await post("/api/runs/stop", { id: r.id });
+    const drivers = made.length;
+    const fired = await post("/api/triggers/fire", { rule: "lin", title: "Fix the badge colour" });
+    expect(fired.status).toBe(201);
+    const run = await until(async () => (await runs()).find((r) => isRunActive(r) && r.by === "trigger lin"), "the trigger's run to start");
+    expect(run.harness).toBe("claude");
+    expect(made.length).toBe(drivers + 1);
+    expect(made.at(-1)?.harness).toBe("claude");
+    await post("/api/runs/stop", { id: run.id });
+  } finally {
+    expect((await post("/api/agents/profile", { name: "default", settings: null })).status).toBe(200);
+  }
+}, 30_000);
