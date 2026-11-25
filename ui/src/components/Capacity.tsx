@@ -5,7 +5,8 @@ import { hitStands } from "../../../src/core/capacity";
 import type { CapacityInfo, HeldStart } from "../../../src/core/types";
 import { api } from "../api";
 import { AGENT_NAME } from "../runs";
-import { leavesPop, useFitPop } from "../pop";
+import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
+import { PopGrip } from "./PopGrip";
 import { plainOf, qual } from "../registry";
 import { useNow } from "./Registry";
 import { useStore, idText } from "../store";
@@ -161,6 +162,7 @@ export function CapacityChip() {
               </ul>
             </section>
           )}
+          <PopGrip name="capacity" anchor={HANGS_RIGHT} gear />
         </div>
       )}
     </div>

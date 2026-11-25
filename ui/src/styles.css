@@ -16068,6 +16068,9 @@ span.effective-flag:not(:first-child) {
   overflow: auto;
   padding: 8px var(--gutter) 10px;
 }
+.capacity-pop > .panel-label {
+  margin: 0 0 4px;
+}
 @media (max-width: 760px) {
   .capacity-pop {
     width: auto;
@@ -16076,7 +16079,6 @@ span.effective-flag:not(:first-child) {
 }
 .capacity-rows {
   display: grid;
-  gap: 12px;
   align-self: stretch;
 }
 .capacity-row {
@@ -16084,7 +16086,7 @@ span.effective-flag:not(:first-child) {
   gap: 4px;
   /* packed at the top: beside a taller row its lines would spread out */
   align-content: start;
-  padding: 6px 0;
+  padding: 8px 0;
   font-size: var(--t-md);
 }
 .capacity-row + .capacity-row {
@@ -16118,7 +16120,7 @@ span.effective-flag:not(:first-child) {
   margin-top: 8px;
 }
 .capacity-limited .panel-label {
-  margin-bottom: 4px;
+  margin: 0 0 4px;
 }
 .capacity-limited ul {
   list-style: none;
@@ -16144,7 +16146,7 @@ span.effective-flag:not(:first-child) {
   margin-top: 8px;
 }
 .capacity-held .panel-label {
-  margin-bottom: 4px;
+  margin: 0 0 4px;
 }
 .capacity-held ul {
   list-style: none;
@@ -16171,6 +16173,7 @@ span.effective-flag:not(:first-child) {
 }
 .capacity-block .capacity-rows {
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
 }
 /* side by side, every row starts under a hairline, the first one too, where
    stacked rows draw it only between them */
