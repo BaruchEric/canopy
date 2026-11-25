@@ -12,9 +12,12 @@
  * - An auto heal runs at the check's `nextHeal`, then the probe again; a
  *   check with no probe waits for its next report to say how the heal went.
  * - A give-up calls `onGaveUp` once, which DMs the human when tailchan is up.
+ * - With `records`, a check added for the first time takes the record it
+ *   had before a restart, and every change is handed back to be kept
+ *   (server/healthstore.ts, FR-088).
  */
 
-import { HEALTH_TIMINGS, healFailed, manualHeal, newCheck, observe, type HealAction, type HealthTimings, type ProbeResult } from "../core/health";
+import { HEALTH_TIMINGS, healFailed, manualHeal, newCheck, observe, type HealAction, type HealthRecord, type HealthTimings, type ProbeResult } from "../core/health";
 import type { HealMode, HealthCheck, HealthScope, RangerInfo, ServerEvent } from "../core/types";
 
 /** how long a probe may take unless its def says */
@@ -38,8 +41,15 @@ export interface CheckDef {
   healTimeout?: number;
 }
 
+/** where the checks' records outlive the process */
+export interface HealthRecordStore {
+  restore(id: string): HealthRecord | undefined;
+  save(checks: readonly HealthCheck[]): Promise<void>;
+}
+
 export interface HealthHubDeps {
   broadcast: (ev: ServerEvent) => void;
+  records?: HealthRecordStore;
   onGaveUp?: (c: HealthCheck) => void;
   now?: () => number;
   timings?: HealthTimings;
@@ -108,7 +118,7 @@ export class HealthHub {
     const old = this.entries.get(def.id);
     if (old) this.clearTimers(old);
     const shape = { id: def.id, label: def.label, scope: def.scope, heal: modeOf(def), button: hasButton(def) };
-    const check = old ? { ...old.check, ...shape } : newCheck(shape, this.now());
+    const check = old ? { ...old.check, ...shape } : newCheck(shape, this.now(), this.deps.records?.restore(def.id));
     const e: Entry = { def, check, poll: null, probing: false, healTimer: null, healing: false, awaitingReport: old?.awaitingReport ?? false };
     this.entries.set(def.id, e);
     if (def.probe && def.every) {
@@ -295,6 +305,8 @@ export class HealthHub {
       const text = JSON.stringify(checks);
       if (text === this.sent) return;
       this.sent = text;
+      // the store writes only when a record differs, not for a new detail
+      this.deps.records?.save(checks).catch((err: unknown) => console.error("health: keeping the records", err));
       try {
         this.deps.broadcast({ type: "health", checks });
       } catch (err) {

@@ -36,7 +36,9 @@ Assumed, not contradicted:
   an ask of its own (asks come from agents' hooks through the broker), and the
   broker may be the thing that is down.
 - History is in memory: the last 20 transitions per check. A canopy restart
-  starts it fresh.
+  starts it fresh. (2026-11-24, FR-088: the history is now kept in
+  `health-history.json` in the config dir and survives a restart; the cap is
+  still 20.)
 - A repo opts in by declaring checks in `.canopy/health.json` or canopy's
   config, layered the way tasks are. Nothing is detected in phase 2's first
   cut, so a repo with no checks keeps the plain git card.

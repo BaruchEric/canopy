@@ -5,7 +5,7 @@
  * browser-safe; the hub in server/health.ts owns the timers.
  */
 
-import type { HealMode, HealthCheck, HealthScope, HealthState } from "./types";
+import type { HealMode, HealthCheck, HealthEvent, HealthScope, HealthState } from "./types";
 
 /** heals in a row that may fail before canopy stops trying */
 export const HEAL_MAX = 5;
@@ -47,13 +47,26 @@ export const healDelay = (fails: number, t: HealthTimings = HEALTH_TIMINGS): num
 
 export const isBad = (c: Pick<HealthCheck, "state">): boolean => c.state === "down" || c.state === "gave-up";
 
-export function newCheck(def: { id: string; label: string; scope: HealthScope; heal: HealMode; button: boolean }, now: number): HealthCheck {
-  return { ...def, state: "unknown", why: null, since: now, lastOk: null, fails: 0, nextHeal: null, history: [] };
+/** what a check carries over a restart (FR-088): its state changes and
+ *  when it was last well */
+export interface HealthRecord {
+  lastOk: number | null;
+  history: HealthEvent[];
+}
+
+/** A check not yet answered. With `kept`, the record it had before a
+ *  restart: it stays `unknown` until its first answer all the same. */
+export function newCheck(def: { id: string; label: string; scope: HealthScope; heal: HealMode; button: boolean }, now: number, kept?: HealthRecord): HealthCheck {
+  return { ...def, state: "unknown", why: null, since: now, lastOk: kept?.lastOk ?? null, fails: 0, nextHeal: null, history: kept ? kept.history.slice(-HISTORY_MAX) : [] };
 }
 
 /** `c` moved to `state`, with a history entry when that is a change */
 function moveTo(c: HealthCheck, state: HealthState, why: string | null, now: number): HealthCheck {
   if (c.state === state) return { ...c, why };
+  // a check kept over a restart starts unknown; a first answer that matches
+  // its record carries that stretch on rather than starting one
+  const last = c.history[c.history.length - 1];
+  if (c.state === "unknown" && last?.state === state) return { ...c, state, why, since: last.at };
   const history = [...c.history, { at: now, state, why }].slice(-HISTORY_MAX);
   // the moment it came well or stopped being well, not every pass, so a
   // check that stays ok changes nothing worth sending

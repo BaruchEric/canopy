@@ -15,6 +15,41 @@ describe("newCheck", () => {
     expect(c.fails).toBe(0);
     expect(c.history).toEqual([]);
   });
+
+  const kept = (history: HealthCheck["history"], lastOk: number | null = null) =>
+    newCheck({ id: "canopy:x", label: "x", scope: { kind: "canopy" }, heal: "none", button: false }, 1000, { lastOk, history });
+
+  test("a kept record comes back, still unknown until it answers", () => {
+    const c = kept([{ at: 10, state: "ok", why: null }], 10);
+    expect(c.state).toBe("unknown");
+    expect(c.since).toBe(1000);
+    expect(c.lastOk).toBe(10);
+    expect(c.history).toEqual([{ at: 10, state: "ok", why: null }]);
+  });
+
+  test("a first answer that matches the record carries its stretch on", () => {
+    const { check } = observe(kept([{ at: 10, state: "down", why: "old" }]), fail("refused"), 1200, T);
+    expect(check.state).toBe("down");
+    expect(check.since).toBe(10);
+    expect(check.why).toBe("refused");
+    expect(check.history).toHaveLength(1);
+  });
+
+  test("a first answer that differs starts a stretch, and later ones change as ever", () => {
+    let c = observe(kept([{ at: 10, state: "down", why: "old" }]), pass(), 1200, T).check;
+    expect(c.history.map((e) => [e.at, e.state])).toEqual([
+      [10, "down"],
+      [1200, "ok"],
+    ]);
+    expect(c.lastOk).toBe(1200);
+    c = observe(c, fail("x"), 1300, T).check;
+    expect(c.history).toHaveLength(3);
+  });
+
+  test("a kept record longer than the cap is cut to it", () => {
+    const history = Array.from({ length: HISTORY_MAX + 5 }, (_, i) => ({ at: i, state: i % 2 ? ("ok" as const) : ("down" as const), why: null }));
+    expect(kept(history).history).toHaveLength(HISTORY_MAX);
+  });
 });
 
 describe("healDelay", () => {

@@ -264,6 +264,7 @@ import { StallHub } from "./stalls";
 import { SweepHub } from "./sweep";
 import type { PlanInputs, ShellFacts } from "../core/sweep";
 import { HealthHub, rangerResult, streamResult } from "./health";
+import { HealthRecords } from "./healthstore";
 import { antigravityUsageReader, CapacityHub, capacityFile } from "./capacity";
 import { CapacityHeldError, holdWords, parsePriority } from "../core/capacity";
 import { CollisionHub } from "./collisions";
@@ -7588,6 +7589,9 @@ export async function startServer(opts: {
   const health = new HealthHub({
     broadcast: (ev) => broadcast(state, ev),
     onGaveUp: (c) => state.chan.onHealthGaveUp(c),
+    // the checks' records over a restart; a test server with no config dir
+    // of its own must not write the real one
+    ...(ledgerOff ? {} : { records: new HealthRecords() }),
   });
   const callers = new CallerBook();
   // a test server that never pointed CANOPY_CONFIG_DIR at a scratch folder
