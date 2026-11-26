@@ -108,6 +108,8 @@ describe("a pulse from a transcript's reading", () => {
     expect(pulseOf(working, read({ writtenAt: quiet, tool: { name: "Bash", at: quiet } }), now).stalledSince).toBeNull();
     const long = now - TOOL_STALL_MS;
     expect(pulseOf(working, read({ writtenAt: long, tool: { name: "Bash", at: long } }), now).stalledSince).toBe(long);
+    // an active transcript is never stalled, even if an old call's timestamp lingered
+    expect(pulseOf(working, read({ writtenAt: now - 5_000, tool: { name: "Read", at: long } }), now).stalledSince).toBeNull();
     // a subagent may take as long as it takes
     expect(pulseOf(working, read({ writtenAt: long, tool: { name: "Agent", at: long } }), now).stalledSince).toBeNull();
     // so may Codex's waits: its clock's sleep and its wait on a subagent

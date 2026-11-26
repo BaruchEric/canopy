@@ -111,17 +111,18 @@ export function statusWord(c: CardState, f: StatusFacts = {}): string {
  * card and its transcript's reading (core/activity). Background work counts
  * from the card's start, since a resumed session's earlier tasks ended with
  * the process before it, and a monitor past its own timeout is over. A tool
- * call is named once it has run `TOOL_SHOWN`. A working card stalls when
- * nothing reached its transcript for `STALL_MS` outside a tool call, or one
- * call that is no subagent has run `TOOL_STALL_MS`.
+ * call is named once it has run `TOOL_SHOWN`. A working card stalls when its
+ * transcript has been quiet for `STALL_MS` outside a tool call, or while a
+ * call that is no subagent has run `TOOL_STALL_MS` and the transcript has
+ * been quiet for `STALL_MS`.
  */
 export function pulseOf(card: Pick<AgentCard, "id" | "state" | "startedAt">, a: Pick<AgentActivity, "background" | "tool" | "writtenAt">, now: number): AgentPulse {
   const open = a.background.filter((b) => (b.at === null || b.at >= card.startedAt - START_SLACK) && (b.until === null || b.until > now));
   const count = (kind: string): number => open.filter((b) => b.kind === kind).length;
   const call = a.tool && a.tool.at !== null ? { name: a.tool.name, at: a.tool.at } : null;
   let stalledSince: number | null = null;
-  if (card.state === "working") {
-    if (!a.tool && now - a.writtenAt >= STALL_MS) stalledSince = a.writtenAt;
+  if (card.state === "working" && now - a.writtenAt >= STALL_MS) {
+    if (!a.tool) stalledSince = a.writtenAt;
     else if (call && !LONG_TOOLS.has(call.name) && now - call.at >= TOOL_STALL_MS) stalledSince = call.at;
   }
   return {

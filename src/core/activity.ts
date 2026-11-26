@@ -71,6 +71,8 @@ export interface Tally {
   tokens: Tokens;
   msgId: string | null;
   msgUsage: Tokens | null;
+  /** latest Claude assistant message id, so a new message drops any call left open by an earlier one */
+  assistantId: string | null;
   /** Codex writes its running total; the latest stands */
   totals: Tokens | null;
   models: Set<string>;
@@ -113,6 +115,7 @@ export function newTally(harness: Harness): Tally {
     tokens: { ...NO_TOKENS },
     msgId: null,
     msgUsage: null,
+    assistantId: null,
     totals: null,
     models: new Set(),
     costUsd: null,
@@ -484,6 +487,14 @@ function feedClaude(t: Tally, rec: Record<string, unknown>): void {
     }
     return;
   }
+  const assistantId = typeof msg.id === "string" ? msg.id : null;
+  if (assistantId !== null && assistantId !== t.assistantId) {
+    // Claude resolves every tool_use before emitting the next assistant message,
+    // so any call left open from an earlier one (an interrupt, or a skipped result)
+    // is already over.
+    t.calls.clear();
+    t.assistantId = assistantId;
+  }
   model(t, msg.model);
   const usage = claudeUsage(msg.usage);
   if (usage) {
@@ -735,6 +746,9 @@ async function advance(h: Held, size: number): Promise<void> {
         if (bytesRead < CHUNK) return;
         h.offset += bytesRead;
         h.skipping = true;
+        // a record past a chunk is often a huge tool_result (a PDF, an image),
+        // so passing over it must not leave its call open forever
+        h.tally.calls.clear();
         continue;
       }
       let start = 0;

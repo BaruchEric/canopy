@@ -209,13 +209,26 @@ describe("background work and the call in progress", () => {
     const a = claude([
       assistant(0, "m1", [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/r/a.ts" } }]),
       user(1, [{ type: "tool_result", tool_use_id: "t1", content: "x" }]),
-      assistant(2, "m2", [
-        { type: "tool_use", id: "t2", name: "Bash", input: { command: "bun test" } },
-        { type: "tool_use", id: "t3", name: "Grep", input: { pattern: "x" } },
-      ]),
+      assistant(2, "m2", [{ type: "tool_use", id: "t2", name: "Bash", input: { command: "bun test" } }]),
+      // another block of the same assistant message keeps the earlier call open
+      assistant(2, "m2", [{ type: "tool_use", id: "t3", name: "Grep", input: { pattern: "x" } }]),
       user(3, [{ type: "tool_result", tool_use_id: "t3", content: "x" }]),
     ]);
     expect(a.tool).toEqual({ name: "Bash", at: ms(2) });
+  });
+
+  test("a later Claude assistant message drops calls left open by an earlier one", () => {
+    const a = claude([
+      assistant(0, "m1", [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/r/big.pdf" } }]),
+      // result missing (skipped oversized line or interrupted turn)
+      assistant(5, "m2", [{ type: "text", text: "looks good" }]),
+    ]);
+    expect(a.tool).toBeNull();
+    const b = claude([
+      assistant(0, "m1", [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/r/big.pdf" } }]),
+      assistant(5, "m2", [{ type: "tool_use", id: "t2", name: "Bash", input: { command: "bun test" } }]),
+    ]);
+    expect(b.tool).toEqual({ name: "Bash", at: ms(5) });
   });
 
   test("a Codex call's output closes it", () => {
@@ -426,5 +439,20 @@ describe("finding and reading a transcript", () => {
     await rm(file);
     expect(await readActivity("claude", S4, "/dev/inc", homes)).toBeNull();
     expect(await readActivity("claude", "nope", "/dev/inc", homes)).toBeNull();
+  });
+
+  test("skipping an oversized tool_result line clears the open call instead of leaking it", async () => {
+    const S5 = "55555555-6666-4777-8888-999999999999";
+    const homes = { claude: claudeHome };
+    const dir = join(claudeHome, "projects", projectFolder("/dev/big"));
+    const file = join(dir, `${S5}.jsonl`);
+    await mkdir(dir, { recursive: true });
+    const huge = user(1, [{ type: "tool_result", tool_use_id: "t1", content: "x".repeat((4 << 20) + 1024) }]);
+    await writeFile(
+      file,
+      `${assistant(0, "m1", [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/r/big.pdf" } }])}\n${huge}\n`,
+    );
+    const a = await readActivity("claude", S5, "/dev/big", homes);
+    expect(a?.tool).toBeNull();
   });
 });
