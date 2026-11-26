@@ -1,6 +1,6 @@
 {
   "name": "archify",
-  "version": "3.3.1",
+  "version": "3.3.2",
   "description": "Archify as a Claude Code plugin, packed by canopy: validated, interactive standalone HTML diagrams (architecture, workflow, sequence, data flow, lifecycle, ERD, class, tree, timeline, waterfall) and one-page explainers, from a description or a repository.",
   "author": {
     "name": "tt-a1i",

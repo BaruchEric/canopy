@@ -20,7 +20,7 @@
 import { TOOL_SETS, type ActionSpec } from "./actions";
 
 /** the upstream release lib/archify holds (VENDOR.md says how to move it) */
-export const ARCHIFY_VERSION = "3.3.1";
+export const ARCHIFY_VERSION = "3.3.2";
 
 /** a diagram run's action name, which the page and the CLI find it by */
 export const ARCHIFY_ACTION = "archify";

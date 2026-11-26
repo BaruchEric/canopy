@@ -1,6 +1,6 @@
 # canopy's copy of Archify
 
-This folder is [Archify](https://github.com/tt-a1i/archify) by tt-a1i, Apache-2.0 at this release (see `skills/archify/LICENSE`, with `NOTICE` and the older releases' `LICENSE-MIT` beside it), at **3.3.1**, commit `894225cca657d181e03f332e716b63782ba6b4da` (2026-11-24). canopy uses it for the diagrams in the repo panel's map section and `canopy archify` (FR-071), and its Code Analysis module for the section's Architecture Diagnosis and `canopy diagnosis` (FR-075). `docs/architecture.md`, "Diagrams (Archify)" and "The map's Architecture Diagnosis", says how the pieces fit.
+This folder is [Archify](https://github.com/tt-a1i/archify) by tt-a1i, Apache-2.0 at this release (see `skills/archify/LICENSE`, with `NOTICE` and the older releases' `LICENSE-MIT` beside it), at **3.3.2**, commit `a0199aab7bc1e87821c286f9b297afb8f98894ec` (2026-11-25). canopy uses it for the diagrams in the repo panel's map section and `canopy archify` (FR-071), and its Code Analysis module for the section's Architecture Diagnosis and `canopy diagnosis` (FR-075). `docs/architecture.md`, "Diagrams (Archify)" and "The map's Architecture Diagnosis", says how the pieces fit.
 
 A diagram run loads this folder with `claude --plugin-dir lib/archify`, so the skill is `archify:archify`. The run calls the skill's CLI as `node lib/archify/skills/archify/bin/archify.mjs` by its absolute path, which is the command canopy's permission rule allows.
 
