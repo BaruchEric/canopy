@@ -16068,8 +16068,15 @@ span.effective-flag:not(:first-child) {
   overflow: auto;
   padding: 8px var(--gutter) 10px;
 }
-.capacity-pop > .panel-label {
-  margin: 0 0 4px;
+.capacity-pop-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: stretch;
+  margin-bottom: 4px;
+}
+.capacity-pop-head .panel-label {
+  margin: 0;
 }
 @media (max-width: 760px) {
   .capacity-pop {

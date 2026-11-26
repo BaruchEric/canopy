@@ -1365,6 +1365,8 @@ export interface CanopyState {
   loadHealth: (backend?: string) => Promise<void>;
   /** reads one backend's capacity, home by default; an older backend has none */
   loadCapacity: (backend?: string) => Promise<void>;
+  /** triggers `POST /api/capacity/read` on one backend, or every shown backend with a reading */
+  refreshCapacity: (backend?: string) => Promise<void>;
   /** reads one backend's kit, home by default */
   loadKit: (backend?: string) => Promise<void>;
   /** reads one backend's landing queue, home by default */
@@ -4314,6 +4316,18 @@ export const useStore = create<CanopyState>((set, get) => ({
     } catch {
       // an older backend has no capacity route; it remains out of the chip
     }
+  },
+  refreshCapacity: async (backend) => {
+    const targets = backend ? [backend] : get().backendOrder.filter((b) => get().capacity[b] !== undefined && isShown(get(), b));
+    if (targets.length === 0) return;
+    const results = await Promise.allSettled(
+      targets.map(async (b) => {
+        const capacity = await api.capacityRead(b);
+        if (isShown(get(), b)) set((s) => ({ capacity: { ...s.capacity, [b]: capacity } }));
+      }),
+    );
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failed.length === results.length && failed[0]) throw failed[0].reason;
   },
   loadKit: async (backend) => {
     const b = backend ?? get().home;

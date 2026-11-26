@@ -7,9 +7,10 @@
  * the event. Bun-only.
  */
 
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { watch, type FSWatcher } from "node:fs";
+import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   DEFAULT_CAPACITY,
   FIVE_HOURS,
@@ -22,9 +23,12 @@ import {
   hear,
   hitOfLimited,
   hitStands,
+  mergeCli,
   observe,
   patchCapacity,
   readAntigravityUsage,
+  readClaudeStatusLimits,
+  readCodexLimits,
   readUsage,
   type Capacity,
   type CapacityHit,
@@ -37,6 +41,7 @@ import {
 import type { CostEntry } from "../core/costs";
 import { workEnv } from "../core/envnames";
 import { findBinary } from "../core/openers";
+import { claudeHome } from "../core/sessions";
 import { configDir } from "../core/store";
 import {
   HARNESSES,
@@ -130,6 +135,137 @@ export function antigravityUsageReader(opts: { command?: readonly string[]; time
   };
 }
 
+export const CODEX_USAGE_TIMEOUT = 15_000;
+
+/** Reads Codex's plan windows through `codex app-server`'s
+ *  `account/rateLimits/read` RPC using this backend's own Codex login
+ *  (0 threads, 0 turns, 0 tokens). Returns null when `codex` is not installed. */
+export function codexUsageReader(opts: { command?: readonly string[]; timeoutMs?: number; find?: (bin: string) => string | null } = {}): CliUsageReader {
+  const timeoutMs = opts.timeoutMs ?? CODEX_USAGE_TIMEOUT;
+  return async (now: number) => {
+    const argv = opts.command?.length
+      ? [...opts.command, "app-server", "--listen", "stdio://"]
+      : (() => {
+          const bin = (opts.find ?? findBinary)("codex");
+          return bin ? [bin, "app-server", "--listen", "stdio://"] : null;
+        })();
+    if (!argv) return null;
+    const proc = Bun.spawn(argv, {
+      cwd: tmpdir(),
+      env: workEnv(process.env),
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill();
+    }, timeoutMs);
+    (timer as { unref?: () => void }).unref?.();
+    const stderrTask = new Response(proc.stderr).text().catch(() => "");
+    let reply: Record<string, unknown> | null = null;
+    try {
+      proc.stdin.write(
+        `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { clientInfo: { name: "canopy", version: "0.2.0" }, capabilities: {} } })}\n`,
+      );
+      await proc.stdin.flush();
+      const reader = proc.stdout.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let asked = false;
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line) continue;
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(line);
+            } catch {
+              continue;
+            }
+            if (!isRecord(parsed)) continue;
+            if (parsed["id"] === 1 && !asked) {
+              asked = true;
+              if (isRecord(parsed["error"])) {
+                reply = parsed;
+                break;
+              }
+              proc.stdin.write(
+                `${JSON.stringify({ jsonrpc: "2.0", method: "initialized", params: {} })}\n`
+                + `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "account/rateLimits/read", params: {} })}\n`,
+              );
+              await proc.stdin.flush();
+            } else if (parsed["id"] === 2) {
+              reply = parsed;
+              break;
+            }
+          }
+          if (reply !== null) break;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    } finally {
+      clearTimeout(timer);
+      try {
+        proc.stdin.end();
+      } catch {
+        // already closed
+      }
+      proc.kill();
+    }
+    const [stderr, code] = await Promise.all([stderrTask, proc.exited]);
+    if (timedOut) throw new Error(`codex account/rateLimits/read timed out after ${timeoutMs}ms`);
+    if (reply === null) {
+      throw new Error(stderr.trim().split("\n").pop() || `codex app-server exited with ${code} before returning rate limits`);
+    }
+    if (isRecord(reply["error"])) {
+      const msg = typeof reply["error"]["message"] === "string" ? reply["error"]["message"] : "codex account/rateLimits/read failed";
+      throw new Error(msg);
+    }
+    const heard = readCodexLimits(reply["result"]);
+    if (!heard) throw new Error("codex account/rateLimits/read returned no readable rate limits");
+    return {
+      fiveHour: heard.fiveHour ? { ...heard.fiveHour, readAt: now } : null,
+      weekly: heard.weekly ? { ...heard.weekly, readAt: now } : null,
+    };
+  };
+}
+
+/** Where Claude Code's statusline script caches the latest `rate_limits` JSON. */
+export const claudeRateLimitsFile = (): string => join(claudeHome(), "cache", "rate-limits.json");
+
+/** Reads Claude Code's plan windows from the local cache file written by the
+ *  user's statusLine script (`~/.claude/cache/rate-limits.json`). Returns null
+ *  silently when the file is absent or holds only expired windows. */
+export function claudeStatusUsageReader(opts: { file?: string } = {}): CliUsageReader {
+  return async (now: number) => {
+    const file = opts.file ?? claudeRateLimitsFile();
+    let st: Awaited<ReturnType<typeof stat>>;
+    let raw: string;
+    try {
+      [st, raw] = await Promise.all([stat(file), readFile(file, "utf8")]);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+      throw error;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    return readClaudeStatusLimits(parsed, now, Math.round(st.mtimeMs));
+  };
+}
+
 export interface CapacityHubDeps {
   broadcast: (event: ServerEvent) => void;
   /** the ledger's rows since `since` (readCosts) */
@@ -140,6 +276,8 @@ export interface CapacityHubDeps {
   reader?: UsageReader | null;
   /** per-harness CLI usage readers, used when `reader` is not set */
   cliReaders?: Partial<Record<Harness, CliUsageReader>>;
+  /** cache files to watch per harness, triggering `cliReaders[harness]` on change */
+  watchFiles?: Partial<Record<Harness, string>>;
   now?: () => number;
   /** ms between a change and its event, so a burst sends one; 250 */
   debounce?: number;
@@ -201,6 +339,9 @@ export class CapacityHub {
   private readonly idle: number;
   private readonly reader: UsageReader | null;
   private readonly cliReaders: Partial<Record<Harness, CliUsageReader>>;
+  private readonly watchFiles: Partial<Record<Harness, string>>;
+  private readonly watchers: FSWatcher[] = [];
+  private readonly watchTimers = new Map<Harness, ReturnType<typeof setTimeout>>();
   private settings: CapacitySettings = { ...DEFAULT_CAPACITY };
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pending: ReturnType<typeof setTimeout> | null = null;
@@ -218,6 +359,7 @@ export class CapacityHub {
     this.idle = deps.timings?.idle ?? READ_IDLE;
     this.reader = deps.reader ?? null;
     this.cliReaders = deps.cliReaders ?? {};
+    this.watchFiles = deps.watchFiles ?? {};
     for (const harness of HARNESSES) this.readings.set(harness, emptyCapacity(harness));
   }
 
@@ -227,6 +369,7 @@ export class CapacityHub {
     this.started = true;
     await this.readKept();
     if (this.dropExpired(this.now())) await this.persist();
+    this.startWatchers();
     await this.refresh();
   }
 
@@ -236,6 +379,44 @@ export class CapacityHub {
     if (this.pending) clearTimeout(this.pending);
     this.timer = null;
     this.pending = null;
+    for (const t of this.watchTimers.values()) clearTimeout(t);
+    this.watchTimers.clear();
+    for (const w of this.watchers) {
+      try {
+        w.close();
+      } catch {
+        // already closed
+      }
+    }
+    this.watchers.length = 0;
+  }
+
+  private startWatchers(): void {
+    if (this.reader) return;
+    for (const [name, file] of Object.entries(this.watchFiles)) {
+      if (!isHarness(name) || !file || !this.cliReaders[name]) continue;
+      const target = basename(file);
+      try {
+        const watcher = watch(dirname(file), (_event, changed) => {
+          if (this.stopped) return;
+          if (changed !== null && changed !== target) return;
+          const prev = this.watchTimers.get(name);
+          if (prev) clearTimeout(prev);
+          const t = setTimeout(() => {
+            this.watchTimers.delete(name);
+            if (!this.stopped) void this.readCli(name, true);
+          }, 200);
+          (t as { unref?: () => void }).unref?.();
+          this.watchTimers.set(name, t);
+        });
+        watcher.on("error", () => {
+          // directory may be absent or unmounted; periodic refresh still reads it
+        });
+        this.watchers.push(watcher);
+      } catch {
+        // directory does not exist yet; periodic refresh will pick up the file
+      }
+    }
   }
 
   /** A run change: a new limited mark becomes its harness's hit, at the
@@ -348,12 +529,14 @@ export class CapacityHub {
     if (!reader || this.stopped) return Promise.resolve();
     const task = (async () => {
       try {
-        const windows = await reader(this.now());
+        const now = this.now();
+        const windows = await reader(now);
         if (this.stopped || !windows) return;
         const current = this.get(harness);
-        if (current.source === "endpoint") return;
-        this.readings.set(harness, { ...current, ...windows, source: "cli" });
+        const next = mergeCli(current, windows, now);
         this.readerFailures.delete(harness);
+        if (next === current) return;
+        this.readings.set(harness, next);
         this.keep();
         if (standalone) {
           this.changed();

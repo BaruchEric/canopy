@@ -1,11 +1,11 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_CAPACITY, HIT_GRACE, type CapacitySettings } from "../core/capacity";
 import type { CostEntry } from "../core/costs";
 import { HARNESSES, type CapacityInfo, type Harness, type HeldStart, type Run, type ServerEvent } from "../core/types";
-import { antigravityUsageReader, CapacityHub, type CapacityHubDeps } from "./capacity";
+import { antigravityUsageReader, CapacityHub, claudeStatusUsageReader, codexUsageReader, type CapacityHubDeps } from "./capacity";
 
 let dir = "";
 beforeAll(async () => {
@@ -449,4 +449,86 @@ test("antigravityUsageReader spawns agy, parses /usage JSON, fast-fails on auth 
   const t0 = Date.now();
   await expect(auth(NOW)).rejects.toThrow("authentication required");
   expect(Date.now() - t0).toBeLessThan(3_000);
+});
+
+test("codexUsageReader speaks account/rateLimits/read to codex app-server and returns null if missing", async () => {
+  const missing = codexUsageReader({ find: () => null });
+  expect(await missing(NOW)).toBeNull();
+
+  const okScript = join(dir, "fake-codex-ok.ts");
+  await writeFile(
+    okScript,
+    `
+      const reader = Bun.stdin.stream().getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          const req = JSON.parse(line);
+          if (req.id === 1) console.log(JSON.stringify({ id: 1, result: { userAgent: "fake" } }));
+          if (req.id === 2) {
+            console.log(JSON.stringify({ method: "account/updated", params: {} }));
+            console.log(JSON.stringify({ id: 2, result: { rateLimits: { primary: { usedPercent: 18, windowDurationMins: 300, resetsAt: ${Math.floor(AT_3PM / 1000)} }, secondary: { usedPercent: 6, windowDurationMins: 10080, resetsAt: ${Math.floor(THU_3PM / 1000)} } } } }));
+          }
+        }
+      }
+    `,
+  );
+  const ok = codexUsageReader({ command: [process.execPath, okScript], timeoutMs: 5_000 });
+  const got = await ok(NOW);
+  expect(got).toEqual({
+    fiveHour: { used: 0.18, resetsAt: AT_3PM, readAt: NOW },
+    weekly: { used: 0.06, resetsAt: THU_3PM, readAt: NOW },
+  });
+
+  const errScript = join(dir, "fake-codex-err.ts");
+  await writeFile(
+    errScript,
+    `console.log(JSON.stringify({ id: 2, error: { code: -32000, message: "not signed in" } }));`,
+  );
+  const err = codexUsageReader({ command: [process.execPath, errScript], timeoutMs: 5_000 });
+  await expect(err(NOW)).rejects.toThrow("not signed in");
+});
+
+test("claudeStatusUsageReader reads the statusline cache, ignores missing/older snapshots, and reacts to watchFiles", async () => {
+  const cacheDir = join(dir, "claude-cache");
+  await mkdir(cacheDir, { recursive: true });
+  const cacheFile = join(cacheDir, "rate-limits.json");
+  const reader = claudeStatusUsageReader({ file: cacheFile });
+
+  // absent file returns null silently
+  expect(await reader(NOW)).toBeNull();
+
+  // start hub with an older run reading; newer cache replaces it, then an even newer run reading wins
+  const capFile = join(dir, "cli-claude-watch.json");
+  const { h } = hub({ file: capFile, extra: { cliReaders: { claude: reader }, watchFiles: { claude: cacheFile } } });
+  await h.start();
+  h.onHeard("claude", { weekly: { used: 0.04, resetsAt: THU_3PM } });
+  expect(h.get("claude").source).toBe("run");
+
+  // writing a cache file with a newer timestamp updates the hub via watchFiles
+  const newerAt = NOW + 60_000;
+  await writeFile(
+    cacheFile,
+    JSON.stringify({
+      at: newerAt,
+      five_hour: { used_percentage: 27, resets_at: Math.floor(AT_3PM / 1000) },
+      seven_day: { used_percentage: 19, resets_at: Math.floor(THU_3PM / 1000) },
+    }),
+  );
+  // wait briefly for fs.watch debounce or fall back to explicit refresh if fs.watch coalesced
+  await sleep(350);
+  if (h.get("claude").source !== "cli") await h.refresh();
+  expect(h.get("claude")).toMatchObject({
+    source: "cli",
+    fiveHour: { used: 0.27, resetsAt: AT_3PM, readAt: newerAt },
+    weekly: { used: 0.19, resetsAt: THU_3PM, readAt: newerAt },
+  });
 });

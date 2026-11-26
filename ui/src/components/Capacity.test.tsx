@@ -88,6 +88,7 @@ test("a held start from the stream names its repo, not the id twice qualified", 
   Object.assign(initial, useStore.getState());
   try {
     expect(renderToStaticMarkup(<CapacityBlock />)).toContain("flow · the shop");
+    expect(renderToStaticMarkup(<CapacityBlock />)).toContain("refresh");
   } finally {
     Object.assign(initial, before);
   }

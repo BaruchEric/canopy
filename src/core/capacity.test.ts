@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CostEntry } from "./costs";
-import { CapacityHeldError, DEFAULT_CAPACITY, HIT_GRACE, HIT_HOLD, READ_EVERY, decide, emptyCapacity, fade, hear, hitOfLimited, hitStands, holdWords, isCapacityWords, isLimitText, laterPriority, limitHit, limitedWords, normalizeCapacity, observe, parsePriority, patchCapacity, readAntigravityUsage, readCodexLimits, readRateLimit, readUsage, resetWord, stale, type Capacity } from "./capacity";
+import { CapacityHeldError, DEFAULT_CAPACITY, HIT_GRACE, HIT_HOLD, READ_EVERY, decide, emptyCapacity, fade, hear, hitOfLimited, hitStands, holdWords, isCapacityWords, isLimitText, laterPriority, limitHit, limitedWords, mergeCli, normalizeCapacity, observe, parsePriority, patchCapacity, readAntigravityUsage, readClaudeStatusLimits, readCodexLimits, readRateLimit, readUsage, resetWord, stale, type Capacity } from "./capacity";
 
 // These are synthetic fixtures for the documented response/text shapes, not
 // captured output from a live endpoint or credential.
@@ -392,5 +392,46 @@ describe("readAntigravityUsage and cli source", () => {
     const high = agy({ fiveHour: win(0.95, AT_3PM, old) });
     expect(decide(high, "normal", DEFAULT_CAPACITY, NOW)).toEqual({ hold: "window", until: AT_3PM, why: "the 5-hour window is at 95% (resets 15:00)" });
     expect(decide(high, "normal", DEFAULT_CAPACITY, AT_3PM)).toBe("go");
+  });
+
+  test("readClaudeStatusLimits parses statusLine rate_limits cache and drops expired windows", () => {
+    const atMs = NOW - 120_000;
+    const sample = {
+      at: atMs,
+      five_hour: { used_percentage: 23.5, resets_at: Math.floor(AT_3PM / 1000) },
+      seven_day: { used_percentage: 18, resets_at: Math.floor(THU_3PM / 1000) },
+    };
+    expect(readClaudeStatusLimits(sample, NOW)).toEqual({
+      fiveHour: { used: 0.235, resetsAt: AT_3PM, readAt: atMs },
+      weekly: { used: 0.18, resetsAt: THU_3PM, readAt: atMs },
+    });
+    // nested rate_limits shape with expired 5h keeps only weekly, falling back to fallbackAt
+    const wrapped = {
+      rate_limits: {
+        five_hour: { used_percentage: 50, resets_at: Math.floor((NOW - 1000) / 1000) },
+        seven_day: { used_percentage: 12, resets_at: Math.floor(THU_3PM / 1000) },
+      },
+    };
+    expect(readClaudeStatusLimits(wrapped, NOW, atMs)).toEqual({
+      fiveHour: null,
+      weekly: { used: 0.12, resetsAt: THU_3PM, readAt: atMs },
+    });
+    expect(readClaudeStatusLimits({ five_hour: { used_percentage: 10, resets_at: 1 } }, NOW)).toBeNull();
+    expect(readClaudeStatusLimits("nope", NOW)).toBeNull();
+  });
+
+  test("mergeCli preserves strictly newer run readings, updates on fresher snapshots, and returns same ref when unchanged", () => {
+    const olderRun = cap({ fiveHour: win(0.1, AT_3PM, NOW - 60_000), weekly: win(0.04, THU_3PM, NOW - 60_000), source: "run" });
+    const cache = { fiveHour: win(0.25, AT_3PM, NOW), weekly: win(0.12, THU_3PM, NOW) };
+    const updated = mergeCli(olderRun, cache, NOW);
+    expect(updated).toEqual({ ...olderRun, ...cache, source: "cli" });
+    // identical snapshot again returns the exact same reference
+    expect(mergeCli(updated, cache, NOW)).toBe(updated);
+    // an older cache snapshot never overwrites a strictly newer run reading
+    const newerRun = cap({ fiveHour: win(0.3, AT_3PM, NOW + 30_000), weekly: win(0.15, THU_3PM, NOW + 30_000), source: "run" });
+    expect(mergeCli(newerRun, cache, NOW + 30_000)).toBe(newerRun);
+    // endpoint readings are never overwritten
+    const ep = cap({ fiveHour: win(0.1, AT_3PM, NOW - 60_000), source: "endpoint" });
+    expect(mergeCli(ep, cache, NOW)).toBe(ep);
   });
 });

@@ -311,6 +311,41 @@ export function hear(capacity: Capacity, heard: Heard, now: number): Capacity {
   return next.source !== "run" && !kept ? capacity : next;
 }
 
+const sameWindow = (a: Window | null, b: Window | null): boolean =>
+  a === b || (a !== null && b !== null && a.used === b.used && a.resetsAt === b.resetsAt && a.readAt === b.readAt);
+
+/** Fold a CLI or statusline-cache reading into the current capacity. Endpoint
+ *  readings always stand; an existing run or CLI window whose `readAt` is
+ *  strictly newer than this snapshot's is preserved so an unchanged cache file
+ *  never rolls back a fresher run reading. Returns the same reference when
+ *  nothing changed. */
+export function mergeCli(
+  current: Capacity,
+  windows: { fiveHour: Window | null; weekly: Window | null },
+  now: number,
+): Capacity {
+  if (current.source === "endpoint") return current;
+  const incFive = openCli(windows.fiveHour, now);
+  const incWeek = openCli(windows.weekly, now);
+  const incomingAt = incFive !== null && incWeek !== null
+    ? Math.max(incFive.readAt, incWeek.readAt)
+    : incFive?.readAt ?? incWeek?.readAt ?? null;
+  if (incomingAt === null) return current;
+  const keepCur = (w: Window | null): Window | null =>
+    current.source === "cli" ? openCli(w, now) : current.source === "run" ? open(w, now) : null;
+  const curFive = keepCur(current.fiveHour);
+  const curWeek = keepCur(current.weekly);
+  const takeFive = curFive === null || curFive.readAt <= incomingAt;
+  const takeWeek = curWeek === null || curWeek.readAt <= incomingAt;
+  if (!takeFive && !takeWeek) return current;
+  const fiveHour = takeFive ? incFive : curFive;
+  const weekly = takeWeek ? incWeek : curWeek;
+  if (current.source === "cli" && sameWindow(fiveHour, current.fiveHour) && sameWindow(weekly, current.weekly)) {
+    return current;
+  }
+  return { ...current, fiveHour, weekly, source: "cli" };
+}
+
 /** Estimate Claude's five-hour spend from ledger dollars when neither an
  *  endpoint nor a run has given a reading. A missing dollar figure leaves
  *  the reading unknown. */
@@ -573,6 +608,40 @@ export function readAntigravityUsage(json: unknown, now: number): { fiveHour: Wi
       else weekly = pick(weekly, window);
     }
   }
+  return fiveHour === null && weekly === null ? null : { fiveHour, weekly };
+}
+
+/** Parse Claude Code's statusLine `rate_limits` cache written by the user's
+ *  statusline script (`{ at?, five_hour?, seven_day? }` or
+ *  `{ at?, rate_limits: { five_hour?, seven_day? } }`). Each window carries
+ *  `used_percentage` (0–100, or `utilization`) and `resets_at` (unix seconds
+ *  or ISO). Drops expired windows against `now` and returns null when none
+ *  remain. */
+export function readClaudeStatusLimits(
+  json: unknown,
+  now: number,
+  fallbackAt = now,
+): { fiveHour: Window | null; weekly: Window | null } | null {
+  if (!isRecord(json)) return null;
+  const rawAt = json["at"];
+  const readAt = isFiniteNumber(rawAt) && rawAt > 0
+    ? rawAt < 1e12 ? rawAt * 1000 : rawAt
+    : fallbackAt;
+  const root = isRecord(json["rate_limits"]) ? json["rate_limits"] : json;
+  const parse = (value: unknown): Window | null => {
+    if (!isRecord(value)) return null;
+    const pct = value["used_percentage"];
+    const util = value["utilization"];
+    let used: number;
+    if (isFiniteNumber(pct) && pct >= 0) used = pct / 100;
+    else if (isFiniteNumber(util) && util >= 0) used = util > 1 ? util / 100 : util;
+    else return null;
+    const resetsAt = resetTimestamp(value["resets_at"] ?? value["resetsAt"]);
+    if (resetsAt === null || resetsAt <= now) return null;
+    return { used, resetsAt, readAt };
+  };
+  const fiveHour = parse(root["five_hour"]);
+  const weekly = parse(root["seven_day"]);
   return fiveHour === null && weekly === null ? null : { fiveHour, weekly };
 }
 

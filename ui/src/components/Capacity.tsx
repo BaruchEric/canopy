@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { hitStands } from "../../../src/core/capacity";
 import type { CapacityInfo, HeldStart } from "../../../src/core/types";
 import { api } from "../api";
+import { lacks } from "../callerToken";
 import { AGENT_NAME } from "../runs";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
@@ -98,6 +99,37 @@ function HeldList({ capacity, order }: { capacity: Record<string, CapacityInfo>;
   );
 }
 
+/** A button that asks every shown backend the caller can operate on to read
+ *  its capacity windows now (`POST /api/capacity/read`). */
+function RefreshButton({ onError }: { onError: (msg: string | null) => void }) {
+  const canRefresh = useStore((s) => s.backendOrder.some((b) => s.capacity[b] !== undefined && !lacks(s.authByBackend[b], "operate")));
+  const refreshCapacity = useStore((s) => s.refreshCapacity);
+  const [busy, setBusy] = useState(false);
+  if (!canRefresh) return null;
+  const run = async (): Promise<void> => {
+    setBusy(true);
+    onError(null);
+    try {
+      await refreshCapacity();
+    } catch (e) {
+      onError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      className="mini"
+      disabled={busy}
+      title="Read current usage windows from each backend now"
+      onClick={() => void run()}
+    >
+      {busy ? "reading…" : "refresh"}
+    </button>
+  );
+}
+
 /** The usage windows for every backend that has answered, with the held
  *  starts and the limited runs below. */
 export function CapacityChip() {
@@ -111,11 +143,15 @@ export function CapacityChip() {
   const word = capacityWord(rows);
   const tone = rowsTone(rows);
   const [open, setOpen] = useState(false);
+  const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   useFitPop(ref, open);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setRefreshErr(null);
+      return;
+    }
     const onDown = (event: PointerEvent) => {
       if (leavesPop(event.target, ref)) setOpen(false);
     };
@@ -146,7 +182,12 @@ export function CapacityChip() {
       </button>
       {open && (
         <div className="settings-pop capacity-pop" role="dialog" aria-label="Capacity">
-          <h3 className="panel-label">capacity</h3>
+          <div className="capacity-pop-head">
+            <h3 className="panel-label">capacity</h3>
+            <span className="spacer" />
+            <RefreshButton onError={setRefreshErr} />
+          </div>
+          {refreshErr && <p className="capacity-hit rust" role="alert">{refreshErr}</p>}
           <ReadingRows rows={rows} now={now} where="chip" />
           <HeldList capacity={capacity} order={order} />
           {limited.length > 0 && (
@@ -219,11 +260,17 @@ function SettingsForm({ backend, info }: { backend: string; info: CapacityInfo }
 export function CapacityBlock() {
   const { capacity, order } = useStore(useShallow((s) => ({ capacity: s.capacity, order: s.backendOrder })));
   const now = useNow();
+  const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const rows = useMemo(() => capacityRows(capacity, order, now), [capacity, order, now]);
   if (rows.length === 0) return null;
   return (
     <section className="cost-group capacity-block">
-      <h3 className="panel-label">capacity</h3>
+      <div className="capacity-pop-head">
+        <h3 className="panel-label">capacity</h3>
+        <span className="spacer" />
+        <RefreshButton onError={setRefreshErr} />
+      </div>
+      {refreshErr && <p className="capacity-hit rust" role="alert">{refreshErr}</p>}
       <ReadingRows rows={rows} now={now} where="costs" />
       <HeldList capacity={capacity} order={order} />
       <details className="capacity-holds">

@@ -265,7 +265,7 @@ import { SweepHub } from "./sweep";
 import type { PlanInputs, ShellFacts } from "../core/sweep";
 import { HealthHub, rangerResult, streamResult } from "./health";
 import { HealthRecords } from "./healthstore";
-import { antigravityUsageReader, CapacityHub, capacityFile } from "./capacity";
+import { antigravityUsageReader, CapacityHub, capacityFile, claudeRateLimitsFile, claudeStatusUsageReader, codexUsageReader } from "./capacity";
 import { CapacityHeldError, holdWords, parsePriority } from "../core/capacity";
 import { CollisionHub } from "./collisions";
 import { KitHub, kitPath } from "./kit";
@@ -7606,7 +7606,18 @@ export async function startServer(opts: {
     config: loadConfig,
     file: capacityFile(),
     reader: null,
-    ...(process.env["NODE_ENV"] === "test" ? {} : { cliReaders: { antigravity: antigravityUsageReader() } }),
+    ...(process.env["NODE_ENV"] === "test"
+      ? {}
+      : {
+          cliReaders: {
+            claude: claudeStatusUsageReader(),
+            codex: codexUsageReader(),
+            antigravity: antigravityUsageReader(),
+          },
+          watchFiles: {
+            claude: claudeRateLimitsFile(),
+          },
+        }),
     held: () => heldStarts(state),
     wake: () => wakeForCapacity(state),
     saveSettings: setCapacitySettings,
