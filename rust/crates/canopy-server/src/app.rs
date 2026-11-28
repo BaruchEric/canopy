@@ -1,65 +1,176 @@
 //! The router and its state, apart from `main` so tests can serve it.
 
 use axum::extract::State;
-use axum::http::{Method, StatusCode, Uri};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use canopy_core::scan::{DEFAULT_IGNORE, ScanOptions, scan};
-use canopy_core::store::load_config;
-use canopy_core::types::{ScanResult, now_ms};
+use canopy_core::scan::{DEFAULT_IGNORE, ScanOptions};
+use canopy_core::store::{CanopyConfig, load_config};
+use canopy_core::types::{LAUNCH_SOURCE, ScanResult, now_ms};
 use canopy_core::version::{canopy_dir, read_build};
 use futures_util::stream::{self, Stream, StreamExt};
 use serde_json::{Value, json};
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{RwLock, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::gate::{self, Gatekeeper};
+use crate::harnesses::backend_caps;
+use crate::people::People;
+use crate::routes::{first_load, not_ported};
+use crate::tree::build_tree;
 
-type Options = dyn Fn() -> Result<ScanOptions, String> + Send + Sync;
+type ConfigFn = dyn Fn() -> Result<CanopyConfig, String> + Send + Sync;
+type HarnessesFn = dyn Fn() -> Vec<&'static str> + Send + Sync;
+
+/// how often the stream says it is alive, as a named event the page sees
+pub const PING_EVERY: Duration = Duration::from_secs(25);
+
+/// What a server is started on.
+pub struct Setup {
+    pub root: String,
+    pub config_dir: String,
+    pub about: Value,
+    /// read before each scan and each config route, so an edit takes at once
+    pub config: Box<ConfigFn>,
+    /// the harnesses this backend offers now
+    pub harnesses: Box<HarnessesFn>,
+    pub people: Arc<People>,
+}
 
 pub struct AppState {
     pub root: String,
-    /// read before each scan, so a config edit takes at the next one
-    options: Box<Options>,
+    pub config_dir: String,
+    pub hostname: String,
+    pub config: Box<ConfigFn>,
+    harnesses: Box<HarnessesFn>,
     pub result: RwLock<ScanResult>,
     pub about: Value,
     /// every frame the `/api/events` streams send, as JSON text
     pub events: broadcast::Sender<String>,
+    pub people: Arc<People>,
+    /// the container's default gateway, which docker's proxy hands every
+    /// client as its address (Linux only)
+    pub gateway: Option<String>,
+}
+
+/// The config as the Bun server reads it.
+pub fn read_config() -> Result<CanopyConfig, String> {
+    load_config().map_err(|e| e.to_string())
 }
 
 /// The config's scan settings, as the Bun server reads them.
-pub fn scan_options() -> Result<ScanOptions, String> {
-    let cfg = load_config().map_err(|e| e.to_string())?;
+pub fn scan_options(cfg: &CanopyConfig) -> ScanOptions {
     let mut ignore: Vec<String> = DEFAULT_IGNORE.iter().map(|s| s.to_string()).collect();
-    ignore.extend(cfg.ignore);
-    Ok(ScanOptions {
+    ignore.extend(cfg.ignore.iter().cloned());
+    ScanOptions {
         max_depth: Some(cfg.max_depth),
         ignore: Some(ignore),
         tip_remotes: None,
-    })
+    }
+}
+
+/// `os.hostname()`.
+pub fn hostname() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+/// The default route's gateway in `/proc/net/route` (`parseDefaultGateway`
+/// in core/helper.ts): its little-endian hex as dotted octets.
+pub fn parse_default_gateway(text: &str) -> Option<String> {
+    for line in text.split('\n').skip(1) {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 3 || f[1] != "00000000" {
+            continue;
+        }
+        let hex = f[2];
+        if hex.len() != 8 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            continue;
+        }
+        let octets: Vec<String> = (0..4)
+            .rev()
+            .map(|i| {
+                u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+                    .unwrap_or(0)
+                    .to_string()
+            })
+            .collect();
+        return Some(octets.join("."));
+    }
+    None
+}
+
+fn default_gateway() -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    std::fs::read_to_string("/proc/net/route")
+        .ok()
+        .and_then(|t| parse_default_gateway(&t))
 }
 
 impl AppState {
-    pub async fn start(root: &str, about: Value, options: Box<Options>) -> Result<Self, String> {
-        let result = scan(root, &options()?).await?;
+    /// The first tree built; a launch root that will not scan fails the
+    /// start, as the Bun server's does.
+    pub async fn start(s: Setup) -> Result<Self, String> {
+        let cfg = (s.config)()?;
+        let backend = backend_caps(&(s.harnesses)());
+        let result = build_tree(
+            &s.root,
+            &s.config_dir,
+            &cfg.raw,
+            &scan_options(&cfg),
+            backend,
+            None,
+        )
+        .await;
+        if let Some(e) = result
+            .sources
+            .iter()
+            .find(|x| x.source.id == LAUNCH_SOURCE)
+            .and_then(|x| x.error.clone())
+        {
+            return Err(e);
+        }
         let (events, _) = broadcast::channel(64);
         Ok(Self {
-            root: root.into(),
-            options,
+            root: s.root,
+            config_dir: s.config_dir,
+            hostname: hostname(),
+            config: s.config,
+            harnesses: s.harnesses,
             result: RwLock::new(result),
-            about,
+            about: s.about,
             events,
+            people: s.people,
+            gateway: default_gateway(),
         })
+    }
+
+    pub fn backend(&self) -> Value {
+        backend_caps(&(self.harnesses)())
     }
 
     /// Scan again and tell every stream.
     pub async fn rescan(&self) -> Result<(), String> {
-        let result = scan(&self.root, &(self.options)()?).await?;
+        let cfg = (self.config)()?;
+        let last = self.result.read().await.clone();
+        let result = build_tree(
+            &self.root,
+            &self.config_dir,
+            &cfg.raw,
+            &scan_options(&cfg),
+            self.backend(),
+            Some(&last),
+        )
+        .await;
         let frame = json!({ "type": "scan", "result": &result }).to_string();
         *self.result.write().await = result;
         // no stream listening is not an error
@@ -81,13 +192,14 @@ pub async fn rescan_every(state: Arc<AppState>, every: std::time::Duration) {
 
 /// What `/api/about` says (`About` in src/core/types.ts).
 pub fn about(root: &str) -> Value {
-    let build = read_build(&canopy_dir());
+    let dir = canopy_dir();
+    let build = read_build(&dir);
     let mut v = serde_json::to_value(&build).unwrap_or_else(|_| json!({}));
-    let host = std::process::Command::new("hostname")
-        .output()
+    let homepage = std::fs::read_to_string(format!("{dir}/package.json"))
         .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|p| p.get("homepage").cloned())
+        .unwrap_or(Value::Null);
     if let Some(m) = v.as_object_mut() {
         m.insert("startedAt".into(), json!(now_ms()));
         // the field names the runtime; this one is Rust, not Bun
@@ -111,16 +223,20 @@ pub fn about(root: &str) -> Value {
                 a => a,
             }),
         );
-        m.insert("hostname".into(), json!(host));
+        m.insert("hostname".into(), json!(hostname()));
         m.insert("root".into(), json!(root));
-        m.insert("homepage".into(), Value::Null);
+        m.insert("homepage".into(), homepage);
         m.insert("coordinator".into(), json!(false));
     }
     v
 }
 
+/// The tree, with what this backend can do as it stands now: the login
+/// shell's answer may have come since the last scan.
 async fn tree(State(s): State<Arc<AppState>>) -> Json<ScanResult> {
-    Json(s.result.read().await.clone())
+    let mut t = s.result.read().await.clone();
+    t.backend = s.backend();
+    Json(t)
 }
 
 async fn about_route(State(s): State<Arc<AppState>>) -> Json<Value> {
@@ -131,20 +247,19 @@ async fn sources(State(s): State<Arc<AppState>>) -> Json<Value> {
     Json(serde_json::to_value(&s.result.read().await.sources).unwrap_or(Value::Null))
 }
 
-/// `: hello`, then every frame the server broadcasts.
+/// `: hello`, then every frame the server broadcasts, with a named `ping`
+/// whenever the stream has been quiet for 25 seconds.
 async fn events(
     State(s): State<Arc<AppState>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let hello = stream::once(async { Ok(Event::default().comment("hello")) });
     let frames = BroadcastStream::new(s.events.subscribe())
         .filter_map(|f| async move { f.ok().map(|data| Ok(Event::default().data(data))) });
-    Sse::new(hello.chain(frames)).keep_alive(KeepAlive::default())
-}
-
-/// An API path this port does not answer yet: say so plainly.
-async fn not_ported(method: Method, uri: Uri) -> Response {
-    let body = json!({ "error": format!("{method} {} is not in the Rust port yet", uri.path()) });
-    (StatusCode::NOT_IMPLEMENTED, Json(body)).into_response()
+    Sse::new(hello.chain(frames)).keep_alive(
+        KeepAlive::new()
+            .interval(PING_EVERY)
+            .event(Event::default().event("ping").data("")),
+    )
 }
 
 pub fn router(state: Arc<AppState>, keeper: Arc<Gatekeeper>, web: &str) -> Router {
@@ -154,6 +269,7 @@ pub fn router(state: Arc<AppState>, keeper: Arc<Gatekeeper>, web: &str) -> Route
         .route("/api/about", get(about_route))
         .route("/api/sources", get(sources))
         .route("/api/events", get(events))
+        .merge(first_load())
         .route("/api/{*rest}", axum::routing::any(not_ported))
         .fallback_service(page)
         .with_state(state)
@@ -187,12 +303,18 @@ mod tests {
         .unwrap();
         std::fs::write(web.path().join("app.js"), "console.log(1)").unwrap();
         // never the real config: defaults only
+        let config_dir = root.path().join("config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let config_dir = config_dir.to_str().unwrap().to_string();
         let state = Arc::new(
-            AppState::start(
-                root.path().to_str().unwrap(),
-                about("/r"),
-                Box::new(|| Ok(ScanOptions::default())),
-            )
+            AppState::start(Setup {
+                root: root.path().to_str().unwrap().into(),
+                config_dir: config_dir.clone(),
+                about: about("/r"),
+                config: Box::new(|| Ok(CanopyConfig::default())),
+                harnesses: Box::new(|| vec!["claude"]),
+                people: Arc::new(People::new(&config_dir)),
+            })
             .await
             .unwrap(),
         );
@@ -205,6 +327,7 @@ mod tests {
             },
             beyond_loopback: false,
             loopback_wanted: false,
+            people: Some(state.people.clone()),
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
@@ -275,7 +398,7 @@ mod tests {
                 .await
                 .contains("console.log(1)")
         );
-        let other = get(addr, "/api/runs", 1 << 14).await;
+        let other = get(addr, "/api/secrets", 1 << 14).await;
         assert!(
             other.starts_with("HTTP/1.1 501") && other.contains("not in the Rust port yet"),
             "{other}"
@@ -285,6 +408,72 @@ mod tests {
             events.contains("text/event-stream") && events.contains(": hello"),
             "{events}"
         );
+        assert!(
+            tree.contains(r#""id":"trees""#) && tree.contains(r#""harnesses":["claude"]"#),
+            "{tree}"
+        );
+    }
+
+    /// The body of a reply, after its headers.
+    fn body(reply: &str) -> serde_json::Value {
+        let (_, b) = reply.split_once("\r\n\r\n").unwrap_or(("", ""));
+        serde_json::from_str(b).unwrap_or_else(|e| panic!("{e}: {reply}"))
+    }
+
+    #[tokio::test]
+    async fn the_first_load_reads_answer_what_a_backend_that_runs_nothing_answers() {
+        let s = serve(CallersMode::Log, &[]).await;
+        let addr = s.addr.as_str();
+        for path in [
+            "/api/runs",
+            "/api/flows",
+            "/api/fleets",
+            "/api/jobs",
+            "/api/terms",
+            "/api/helpers",
+            "/api/devices",
+        ] {
+            let r = get(addr, path, 1 << 14).await;
+            assert!(r.starts_with("HTTP/1.1 200"), "{path}: {r}");
+            assert_eq!(body(&r), json!([]), "{path}");
+        }
+        assert_eq!(
+            body(&get(addr, "/api/verdict", 1 << 14).await),
+            json!({ "ready": false })
+        );
+        assert_eq!(
+            body(&get(addr, "/api/workspaces", 1 << 14).await),
+            json!([])
+        );
+        assert_eq!(body(&get(addr, "/api/launchers", 1 << 14).await), json!({}));
+        assert_eq!(
+            body(&get(addr, "/api/terms/kept", 1 << 14).await),
+            json!({ "keeping": false, "kept": [] })
+        );
+        let backends = body(&get(addr, "/api/backends", 1 << 14).await);
+        assert_eq!(backends["backends"], json!([]));
+        assert!(backends["self"].as_str().is_some_and(|n| !n.is_empty()));
+        let agents = body(&get(addr, "/api/agents", 1 << 14).await);
+        assert_eq!(agents["profiles"]["default"]["harness"], "claude");
+        // a test request comes from loopback by a loopback name, but no
+        // desktop is local to a test's backend unless it is a Mac's
+        let client = body(&get(addr, "/api/client", 1 << 14).await);
+        assert_eq!(client["address"], "127.0.0.1");
+        assert_eq!(client["shared"], false);
+        let people = body(&get(addr, "/api/people", 1 << 14).await);
+        assert_eq!(people["people"][0]["id"], "owner");
+        // another method on a ported path is still the Bun server's
+        let post = req(addr, "POST", "/api/runs", &["Content-Length: 0"], 1 << 14).await;
+        assert!(post.starts_with("HTTP/1.1 501"), "{post}");
+        let join = req(
+            addr,
+            "POST",
+            "/api/auth/join",
+            &["Content-Length: 0"],
+            1 << 14,
+        )
+        .await;
+        assert!(join.starts_with("HTTP/1.1 501"), "{join}");
     }
 
     #[tokio::test]

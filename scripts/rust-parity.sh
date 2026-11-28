@@ -141,9 +141,11 @@ gcheck commit-usage commit
 gcheck commit-no-message commit work
 gcheck commit-nothing-staged commit work -m "nothing yet"
 gcheck commit-missing commit nosuch -m x
+gcheck commit-backend commit work -m "nothing yet" --backend http://127.0.0.1:1
 both 'echo g >work/g.txt'
 gcheck commit-all commit work --all -m "add g"
 gcheck push-ff push work
+gcheck push-backend push work --backend http://127.0.0.1:1
 gcheck push-usage push
 gcheck push-missing push nosuch
 gcheck push-no-remote push lonely
@@ -154,6 +156,7 @@ gcheck commit-push commit work -m "add h" --push
 gcheck pull-usage pull
 both 'git -C writer pull -q && echo w2 >>writer/w.txt && git -C writer commit -qam "writer w2" && git -C writer push -q'
 gcheck pull-ff pull work
+gcheck pull-backend pull work --backend
 both 'git -C writer pull -q && echo w3 >>writer/w.txt && git -C writer commit -qam "writer w3" && git -C writer push -q && touch work/.git/index.lock'
 gcheck pull-locked pull work
 both 'rm work/.git/index.lock && git -C work pull -q'

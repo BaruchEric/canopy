@@ -8,7 +8,8 @@
 //! output byte for byte the TypeScript CLI's.
 //! `--token` is read for every verb, as index.ts reads it. Every other
 //! verb, and a local verb with a flag the port does not read yet
-//! (`--backend` on a local verb, `commit --ai`, `push test|ls`), still goes
+//! (`--backend` on tree or status, or in front of the repo, `commit --ai`,
+//! `push test|ls`), still goes
 //! to the TypeScript CLI (`bun bin/canopy.ts`) until it is ported, so the
 //! binary can stand in for `canopy` today. docs/rust-port.md has the
 //! ledger.
@@ -197,6 +198,20 @@ fn asks_help(args: &[String]) -> bool {
         .any(|a| a == "--help" || a == "-h")
 }
 
+/// A `--backend` (and the word after it) that comes after the repo: index.ts
+/// reads only `args[0]` for commit, push and pull, so it is ignored there.
+/// One in front of the repo stays, and the verb goes to the TypeScript CLI.
+fn drop_backend(a: &mut Vec<String>) {
+    if let Some(i) = a.iter().position(|w| w == "--backend")
+        && i > 0
+    {
+        a.remove(i);
+        if i < a.len() {
+            a.remove(i);
+        }
+    }
+}
+
 /// `PUSH_WORDS` in cli/push.ts: web push's test and list, not a repo.
 const PUSH_WORDS: &[&str] = &["test", "ls"];
 
@@ -238,8 +253,12 @@ fn plan(args: &[String]) -> Plan {
                 home_base: pointed.and_then(|i| rest.get(i + 1).cloned()),
             };
         }
-        // another backend for a local verb: only the TypeScript CLI knows
-        // that yet
+        // commit, push and pull read only the first word left for the repo,
+        // so a --backend after it changes nothing; before it, the repo would
+        // be "--backend", and that stays with the TypeScript CLI
+        Some("commit" | "push" | "pull") => {}
+        // another backend for any other local verb: only the TypeScript CLI
+        // knows that yet
         _ if pointed.is_some() => return Plan::Delegate,
         _ => {}
     }
@@ -260,6 +279,7 @@ fn plan(args: &[String]) -> Plan {
                 Some(m) => Some(m),
                 None => opt(&mut a, "--message"),
             };
+            drop_backend(&mut a);
             // --ai asks an agent for the message, which is not ported yet
             if ai || flagged(&a) {
                 return Plan::Delegate;
@@ -280,6 +300,7 @@ fn plan(args: &[String]) -> Plan {
             }
             let mut a = rest.to_vec();
             let drop_stale = flag(&mut a, "--drop-stale");
+            drop_backend(&mut a);
             if flagged(&a) {
                 return Plan::Delegate;
             }
@@ -288,9 +309,16 @@ fn plan(args: &[String]) -> Plan {
                 drop_stale,
             }
         }
-        Some("pull") if !flagged(rest) => Plan::Pull {
-            repo: rest.first().cloned(),
-        },
+        Some("pull") => {
+            let mut a = rest.to_vec();
+            drop_backend(&mut a);
+            if flagged(&a) {
+                return Plan::Delegate;
+            }
+            Plan::Pull {
+                repo: a.first().cloned(),
+            }
+        }
         _ => Plan::Delegate,
     }
 }
@@ -708,8 +736,13 @@ mod tests {
             commit(Some("r"), None, false, false)
         );
         assert_eq!(
-            plan(&args(&["commit", "r", "--backend", "http://b"])),
-            Plan::Delegate
+            plan(&args(&["commit", "r", "-m", "x", "--backend", "http://b"])),
+            commit(Some("r"), Some("x"), false, false)
+        );
+        assert_eq!(
+            plan(&args(&["commit", "--backend", "http://b", "r"])),
+            Plan::Delegate,
+            "index.ts would read --backend as the repo"
         );
         assert_eq!(plan(&args(&["commit", "r", "-m"])), Plan::Delegate);
     }
@@ -740,6 +773,29 @@ mod tests {
             }
         );
         assert_eq!(plan(&args(&["pull", "r", "--rebase"])), Plan::Delegate);
+        assert_eq!(
+            plan(&args(&[
+                "push",
+                "r",
+                "--backend",
+                "http://b",
+                "--drop-stale"
+            ])),
+            Plan::Push {
+                repo: Some("r".into()),
+                drop_stale: true
+            }
+        );
+        assert_eq!(
+            plan(&args(&["pull", "r", "--backend"])),
+            Plan::Pull {
+                repo: Some("r".into())
+            }
+        );
+        assert_eq!(
+            plan(&args(&["pull", "--backend", "http://b", "r"])),
+            Plan::Delegate
+        );
         assert_eq!(
             plan(&args(&["pull", "--help"])),
             Plan::Help {

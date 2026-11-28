@@ -10,13 +10,16 @@ use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use canopy_auth::{
-    Bypass, CallerBook, CallerGate, OriginPolicy, PREFLIGHT_HEADERS, Reply, Req, auth_route,
-    caller_of, callers_mode_env, cors_headers, is_loopback, library_origin_allowed,
-    loopback_auth_wanted_env, loopback_bypass, open_bind_env, parse_origins, return_leg,
+    AuthPeople, Bypass, Caller, CallerBook, CallerGate, OriginPolicy, PREFLIGHT_HEADERS, Reply,
+    Req, auth_route, caller_of, callers_mode_env, cors_headers, is_loopback,
+    library_origin_allowed, loopback_auth_wanted_env, loopback_bypass, open_bind_env,
+    parse_origins, return_leg,
 };
 use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
+
+use crate::people::People;
 
 /// The largest body an auth route takes; they carry a label or a code.
 const AUTH_BODY_MAX: usize = 64 * 1024;
@@ -26,11 +29,17 @@ pub struct Gatekeeper {
     pub policy: OriginPolicy,
     pub beyond_loopback: bool,
     pub loopback_wanted: bool,
+    /// the people the auth routes ask about; None on a backend that keeps none
+    pub people: Option<Arc<People>>,
 }
+
+/// The caller the gate found, handed to the routes behind it.
+#[derive(Debug, Clone)]
+pub struct GateCaller(pub Option<Caller>);
 
 impl Gatekeeper {
     /// The gate as the environment sets it, over the book at `book`.
-    pub fn from_env(book: CallerBook, host: &str) -> Gatekeeper {
+    pub fn from_env(book: CallerBook, host: &str, people: Arc<People>) -> Gatekeeper {
         let open = open_bind_env() || !is_loopback(host);
         let policy = OriginPolicy {
             public_origin: std::env::var("CANOPY_PUBLIC_ORIGIN")
@@ -46,6 +55,7 @@ impl Gatekeeper {
             policy,
             beyond_loopback: open,
             loopback_wanted: loopback_auth_wanted_env(),
+            people: Some(people),
         }
     }
 }
@@ -151,6 +161,15 @@ pub async fn check(
         return foreign();
     }
     let path = areq.path().to_string();
+    // an invite is spent by writing people.json, which this port does not do
+    if path == "/api/auth/join" {
+        return reply(Reply::json(
+            501,
+            json!({ "error": format!("{} {path} is not in the Rust port yet", req.method()) }),
+        ));
+    }
+    let mut req = req;
+    req.extensions_mut().insert(GateCaller(caller.clone()));
     let mut res = if path == "/api/auth" || path.starts_with("/api/auth/") {
         let (parts, body) = req.into_parts();
         let Ok(bytes) = to_bytes(body, AUTH_BODY_MAX).await else {
@@ -159,7 +178,8 @@ pub async fn check(
                 json!({ "error": "that body is too large" }),
             ));
         };
-        match auth_route(&keeper.gate, &areq, &bytes, caller.as_ref(), &addr, None) {
+        let people = keeper.people.as_deref().map(|p| p as &dyn AuthPeople);
+        match auth_route(&keeper.gate, &areq, &bytes, caller.as_ref(), &addr, people) {
             Some(r) => reply(r),
             None => {
                 next.run(Request::from_parts(parts, Body::from(bytes)))

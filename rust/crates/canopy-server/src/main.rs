@@ -1,8 +1,9 @@
 //! `canopy-server`, the start of the Rust port of the Bun server
 //! (`src/server/index.ts`). It scans the folders it is given and serves
-//! the built page (`dist/web`) with the page's first reads: `/api/tree`,
-//! `/api/about`, `/api/sources` and the `/api/events` stream. Nothing else
-//! of the API is here yet; docs/rust-port.md has the ledger.
+//! the built page (`dist/web`) with the reads the page makes on its first
+//! load (`routes.rs` lists them), the tree, `/api/about`, `/api/sources`
+//! and the `/api/events` stream. The rest of the API answers 501;
+//! docs/rust-port.md has the ledger.
 //!
 //!   canopy-server [--port 7860] [--host 127.0.0.1] [--web dist/web] [dir]
 //!
@@ -10,8 +11,12 @@
 
 mod app;
 mod gate;
+mod harnesses;
+mod people;
+mod routes;
+mod tree;
 
-use app::{AppState, about, rescan_every, scan_options};
+use app::{AppState, Setup, about, read_config, rescan_every};
 use canopy_core::pathx::resolve;
 use canopy_core::version::canopy_dir;
 use std::net::SocketAddr;
@@ -73,7 +78,18 @@ async fn main() -> std::process::ExitCode {
         return std::process::ExitCode::from(2);
     }
     let root = resolve(&args.root);
-    let state = match AppState::start(&root, about(&root), Box::new(scan_options)).await {
+    let config_dir = canopy_core::store::config_dir();
+    let people = Arc::new(people::People::new(&config_dir));
+    let login = harnesses::LoginHarnesses::new(harnesses::user_shell());
+    let setup = Setup {
+        root: root.clone(),
+        config_dir,
+        about: about(&root),
+        config: Box::new(read_config),
+        harnesses: Box::new(move || login.list()),
+        people: people.clone(),
+    };
+    let state = match AppState::start(setup).await {
         Ok(s) => Arc::new(s),
         Err(e) => {
             eprintln!("canopy-server: {e}");
@@ -102,6 +118,7 @@ async fn main() -> std::process::ExitCode {
     let keeper = Arc::new(gate::Gatekeeper::from_env(
         canopy_auth::CallerBook::open_default(),
         &args.host,
+        people,
     ));
     let app = app::router(state, keeper, &args.web);
     if let Err(e) = axum::serve(

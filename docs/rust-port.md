@@ -65,7 +65,7 @@ In about this order, each its own task:
 4. Shells: `term.ts` and the tmux bridge over websockets.
 5. Flows, workflows, peers, the Library, people and tenants, the coordinator.
 6. The separate processes: `src/stage`, `src/egress`, `src/secrets`.
-7. The cutover: the launchd agent, the compose images and `canopy` on PATH switch to the Rust binaries, with the TS kept one release for a rollback. Eric said yes on 2026-11-27; it runs once canopy-server serves the first load (step 2), and not before. Swapping only the CLI on PATH ahead of the server is not part of that yes.
+7. The cutover: the launchd agent, the compose images and `canopy` on PATH switch to the Rust binaries, with the TS kept one release for a rollback. Eric said yes on 2026-11-27. It runs once canopy-server does what the Bun server does for runs, shells, flows and the landing queue (steps 3 to 6), not when the first load stops answering 501: a server that renders the board but cannot start a run or open a shell would take canopy away on every screen, and the restart would end live runs and lock the secrets key. Swapping only the CLI on PATH ahead of the server is not part of that yes.
 
 ## Every module
 
