@@ -661,8 +661,8 @@ bun run dev        # API on :7850
 bun run dev:web    # Vite dev server on :7851 (proxies /api)
 bun run typecheck && bun run lint && bun run test && bun run build
 cd rust && cargo test --workspace   # the Rust port of the backend and CLI (docs/rust-port.md)
-bash scripts/rust-parity.sh ~/dev   # canopy-rs and the TypeScript CLI print the same tree, help, commit, push and pull output on scratch repos, and the output of the ported backend verbs (note, awake, issues, pr, scenarios, sweep, kit, loadouts, groups, work, land, queue, collisions, floorplan, archify, diagnosis, understand, capacity, costs, plugins, people, clip, worktrees, fr, workflow, health) against a scratch server
-bash scripts/rust-server-parity.sh  # canopy-server and a scratch Bun server answer the page's first-load routes the same; a route not ported yet answers 501 and is listed
+bash scripts/rust-parity.sh ~/dev   # canopy-rs and the TypeScript CLI print the same tree, help, commit, push and pull output on scratch repos, and the output of the ported backend verbs (note, awake, issues, pr, scenarios, sweep, kit, loadouts, groups, work, land, queue, collisions, floorplan, archify, diagnosis, understand, capacity, costs, plugins, people, clip, worktrees, fr, workflow, health, run, runs, auth, tenant, coordinator, mcp, secrets, new, incubator, ranger, library, helper, push, source) against scratch servers
+bash scripts/rust-server-parity.sh  # canopy-server and a scratch Bun server answer the page's first-load routes, quick notes and reminders the same; a route not ported yet answers 501 and is listed
 bash scripts/rust-shell-parity.sh   # one shell on tmux opened through each server's websocket, then listed, read, renamed, moved, left, rejoined and ended, every answer compared
 bun run floorplan:update   # pull a newer Floorplan into lib/floorplan, canopy's edits merged in (lib/floorplan/VENDOR.md)
 bun scripts/floorplan-update.ts --check   # one line on whether a newer Floorplan is out; the health check floorplan runs it every 6 h

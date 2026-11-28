@@ -15,26 +15,30 @@ The port runs beside the TypeScript. Bun still runs everything that ships: the M
 | `canopy-core` | exec, ssh locators, the seed guard, config, remotes, card meta, the shared spec, git reads and writes, the stale-copy judge, the scan, the tree's lines, the build version, and the pure halves the ported verbs and routes read (backends, agent routing, harnesses, kept shells, launchers, notes, peers, screen layouts, workflows, fr, clips, costs and more) | `src/core/` |
 | `canopy-auth` | caller tokens, rights, the callers book, the request gate, the auth routes, the origin gate, CORS | `src/core/callers.ts`, `src/server/callers.ts`, `src/core/library.ts`, `src/core/cors.ts` |
 | `canopy-cli` | the binary `canopy-rs` | `src/cli/` |
-| `canopy-server` | the binary `canopy-server`: the page, the tree and its stream, the first-load reads, the people and devices | `src/server/index.ts` and its feature modules |
+| `canopy-server` | the binary `canopy-server`: the page, the tree and its stream, every first-load read but health, capacity and triggers, quick notes with their reminders, shells on tmux, the people and devices | `src/server/index.ts` and its feature modules |
 
-Of 315 modules (106,675 lines of TypeScript under `src/core`, `src/server`, `src/cli`, `src/stage`, `src/egress` and `src/secrets`), 46 are ported, 50 are in part and 219 are not started. The table at the end lists each.
+Of 315 modules (106,675 lines of TypeScript under `src/core`, `src/server`, `src/cli`, `src/stage`, `src/egress` and `src/secrets`), 63 are ported, 79 are in part and 173 are not started. The table at the end lists each.
 
 ## What runs in Rust today
 
-- `canopy-rs` answers `canopy [dir]`, `canopy tree`, `canopy status`, `canopy version`, `canopy commit <repo> [-m msg] [--all] [--push]`, `canopy push <repo> [--drop-stale]` and `canopy pull <repo>` itself. Any other verb goes to `bun bin/canopy.ts` with the same arguments and exit code, and so does any of these with a flag the port does not read yet: `--backend` on tree or status or in front of the repo (after it, commit, push and pull take it and run here, as index.ts does), `commit --ai`, `push test` and `push ls` (web push), or a flag the verb does not take. So `canopy-rs` can stand in for `canopy` now. `CANOPY_TS_CLI` points it at another entry.
+- `canopy-rs` answers `canopy [dir]`, `canopy tree`, `canopy status`, `canopy version`, `canopy commit <repo> [-m msg] [--all] [--push]`, `canopy push <repo> [--drop-stale]` and `canopy pull <repo>` itself. Any other verb goes to `bun bin/canopy.ts` with the same arguments and exit code, and so does any of these with a flag the port does not read yet: `--backend` on tree or status or in front of the repo (after it, commit, push and pull take it and run here, as index.ts does), `commit --ai`, or a flag the verb does not take. So `canopy-rs` can stand in for `canopy` now. `CANOPY_TS_CLI` points it at another entry.
 - It also answers the backend verbs `canopy note` (add, list, done, delete), `canopy awake`, `canopy issues`, `canopy pr` (open and rebase), `canopy prs`, `canopy scenarios` (list, add, run), `canopy sweep`, `canopy kit` (status, apply), `canopy loadouts` (list, resolve, adopt, restore), `canopy groups` (list, pick), `canopy work` (list, show, note, close, export), `canopy land` (one run, `--all`, `--approve`, `--skip-judge`, followup), `canopy queue` and `canopy collisions` over HTTP (`api.rs`, `ask.rs`): the backend's address from `--backend`, else `$CANOPY_API`, else `127.0.0.1:7850`; the caller token from `--token`, the backend's token file or `$CANOPY_TOKEN`, with the flag and the variable kept to the backend the command was pointed at; each of a backend's addresses tried in turn, no redirect followed, an 8-second timeout. The client is reqwest on rustls with ring. A backend that does not answer is worded as Bun's fetch words it ("ECONNREFUSED: Unable to connect. ...", "getaddrinfo ENOTFOUND host", "The operation timed out.", the TLS handshake on a plain port), so a "did not answer" line reads the same from either CLI. A verb that asks every backend the home one lists (`kit`, `groups`, `work list`, `queue`, `collisions`) asks each in turn and prints a line for each one that does not answer, as the TypeScript does. These verbs write to `out.rs` and main prints it before the failure line, the order the TypeScript's own end leaves them in.
 - On the same client it answers the map section's verbs, `canopy floorplan`, `canopy archify`, `canopy diagnosis` and `canopy understand` (their listings, `--json`, stops, refusals and a page saved to a path; a make, revise, analysis or plugin prepare goes to the server as the TypeScript sends it), and `canopy capacity`, `canopy costs`, `canopy plugins`, `canopy people`, `canopy clip` and `canopy clips` (text, a file's bytes up and down, pins), `canopy worktrees` (with `shell-init`), `canopy workflow` (list, show, `--dot`, check), `canopy health` (list, show, heal, watch, checks, add, rm, lint, init) and `canopy fr` (list, reserve, check, on the repo's own git and its origin). Every verb sends through the one `ask::Client`: a clip's bytes and health watch's event stream use its `request` builder, and a page that needs a minute uses `ask_text_within`. `mapsection.rs` and `worktrees.rs` still carry private copies of `run.ts`'s target pickers until that verb is ported.
+- It also answers `canopy run` (a start, a group, pickup) and `canopy runs` (the kept transcripts: list, show, export, prune, fork; the live runs: ls, name, stop, say, interrupt, side, model; `runs child`), `canopy auth` (login with a pair code, join with an invite, status, logout, the token file written as the TypeScript writes it), `canopy tenant`, `canopy coordinator`, `canopy mcp` (an MCP server on stdio), `canopy secrets` (all but `recover`, which needs age and ed25519 and goes to the TypeScript), `canopy new`, `canopy incubator`, `canopy ranger`, `canopy library` (the Library's Python adapter, and `library sync`), `canopy helper`'s refusals and its `--pair` (the long-running loop goes to the TypeScript, since the desktop openers are not ported), `canopy push test|ls`, and the bare `canopy source` listing. `delegate()` now replaces the canopy-rs process with bun, so a signal reaches the TypeScript and its exit code is the command's. Still delegated: `peers`, `source add|rm`, `spec`, `drift`, `ui`, `open`, `launch`, `ws`, `suggest` and `secrets recover`; `tenant register|unregister` hands its config write to the TypeScript, since `saveConfig` is not ported.
 - `--token` is read for every verb but `source`, as index.ts reads it, and every verb's `--help` or `-h` (but `library`'s), `canopy help` and `canopy help <verb>` print from `help.ts`. canopy-rs reads `src/core/help.ts` when it is built (`include_str!`), so the two CLIs cannot print different help.
 - The write half of `git.ts` runs in Rust (`gitwrite.rs`): a commit's detail and diff, stage and unstage, commit, push with its rebase of a rejected push and FR-048's stale-copy offer (`stalecopy.rs`), pull, and the stale `index.lock` sweep. Nothing calls the diff, stage or commit-detail functions outside the tests until the server's routes are ported.
 - `canopy-server` serves the built page (`dist/web`, with the page as the fallback for client routes), `GET /api/tree` (the launch root, the config's extra folders and the kept worktrees' folder, each its own source, with the harnesses this backend can start), `/api/about`, `/api/sources` and the `/api/events` stream (`: hello`, a `scan` frame after each rescan, a named `ping` after 25 quiet seconds). Every request passes the same gate as the Bun server's `route()`: the preflight, the caller token or the loopback bypass, the coordinator's lane, the rights gate in `CANOPY_CALLERS` mode, the origin gate, then the auth routes.
 - It answers the reads the page makes on its first load (`routes.rs`): backends, workspaces, launchers, agent routing, kept shells, the client's address, people, quick notes, screen layouts and, while peer sync is off, peers, each read from the config dir as the Bun server reads it. A stream opened with `?client=<id>&name=&platform=` puts its browser on `GET /api/devices` while it is open, with the person the gate found, and 300 ms after the last open or close every stream hears a `devices` frame and a `people` frame; `POST /api/people/at` records which repos a browser has open (`presence.rs`). The live lists of work this port does not run yet (runs, flows, fleets, jobs, helpers, agent pulses, an evaluator's verdict) answer what a Bun server that runs nothing answers. Where that empty answer would not be true, the route answers 501 instead: `/api/runs?kept=1` (the run log), `/api/terms` and `/api/terms/kept` where tmux runs, `/api/flows` and `/api/fleets` when the config dir keeps flow records the Bun server would take back at its start, `/api/verdict` with a gateway key set (`AI_GATEWAY_API_KEY`), and `/api/agents/pulse` with a broker's address. Jobs and helpers start empty on the Bun server too: a launch fills the one, a desktop helper's websocket the other. The Bun server deletes expired kept-shell records as it lists them; this port leaves them on disk and only leaves them out.
+- The other first-load reads answer where their answer is surely the Bun server's own, and 501 otherwise (`settings_reads.rs`, `work_reads.rs`): `/api/history` while no claude-history is found; `/api/clips`; `/api/secrets` for a reader that pulls nothing; `/api/ranger` without tmux; `/api/kit` while kit.json is missing; `/api/worktrees` while nothing is held; `/api/incubator`, `/stages` and `/advice` while no sprout record or flows lock is there; `/api/landing`, `/api/prs` and `/api/work` while no flow record, queued trigger event, landing record or run worktree could bring a run back; `/api/trees` where the keeper's start would change no record. Each module's header says which way each route goes and why.
+- Quick notes are canopy-server's own (`notes.rs`): add, edit, done and delete, written to `notes.json` byte for byte as the TypeScript writes it, one write at a time, each broadcast as a `notes` frame; and every 30 seconds (the trigger engine's `TICK_EVERY`) a reminder that has come due is marked and broadcast once. The rest of the trigger engine does not run.
+- Shells run on tmux (`terms.rs`, `pty.rs`): `GET /api/terms` lists tmux's sessions, `/api/terms/kept` subtracts them, and `/api/term` is the websocket the page opens, with the Bun server's URL, frames and close codes, a tmux client of the socket's own on a pty. `DELETE /api/terms`, `text`, `screen`, `watched`, `agent`, `label`, `place` and `keys` are ported; restore, paste, say, transcript, moves, a shell on a plain pty and a shell in a kept worktree answer 501.
 - Routes whose answer the Bun server decides by what the machine has (`gated.rs`) say what it says when the machine has none of it: the tasks without tmux, tailchan, its registry, asks, presence and guards without a broker's address, voice without its keys. Where the machine has one, the feature is not here yet, and the route answers 501.
-- Every other API route, and any method other than the one a ported path answers, gets 501 with "not in the Rust port yet". Of the routes the page reads on its first load, 16 still do: history, the three incubator reads, ranger, health, capacity, kit, landing, trees, prs, triggers, work, clips, secrets and worktrees. Joining with an invite, people's roster changes, the delivery of a due reminder (the trigger engine's tick), the Library, websockets and every feature route's writes are not here yet.
+- Every other API route, and any method other than the one a ported path answers, gets 501 with "not in the Rust port yet". Of the routes the page reads on its first load, 3 still do: health (its checks are live probes), capacity (its readings come from the harness CLIs and the work hubs) and triggers (it reports the flows lock). Runs, flows, the landing queue, joining with an invite, people's roster changes, the rest of the trigger engine, the Library and most feature routes' writes are not here yet.
 - `canopy-server` refuses to start without `CANOPY_CONFIG_DIR`, and defaults to port 7870, clear of the Bun server's preview ports (7860 to 7869). The Bun server owns `~/.config/canopy` and port 7850 until the cutover; two servers writing `callers.json` would corrupt it.
 
 ## How it was checked
 
-- `cd rust && cargo test --workspace` runs 771 tests. Most are the TypeScript tests ported case by case: `exec.test.ts`, `host.test.ts`, `seedgit.test.ts`, `git.test.ts` (both halves, against real repos, the eight diverged-branch rebase cases and the seven amend cases included), `stalecopy.test.ts`, `scan.test.ts`, `meta.test.ts`, `spec.test.ts`, `treelines.test.ts`, `access.test.ts` (remotes), the callers tests, `api.test.ts`, `notes.test.ts`, `issues.test.ts`, `pr.test.ts`, the CLI's `scenarios`, `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `floorplan`, `archify`, `diagnosis`, `understand`, `capacity`, `costs`, `plugins`, `people`, `clips`, `worktrees`, `fr`, `workflow` and `health` tests (each TS test has a Rust test named after it, the ones that share state run as named steps in the TS's order), and core's `workflow.test.ts`, `flowgraph.test.ts` and `fr.test.ts` with the clip functions of `clips.test.ts`. canopy-server's own tests drive its routes over a real socket: the first-load reads, the 501s, a page's stream on the devices list and gone when it closes. `land.test.ts` builds its entries with the queue's own `enqueue` and `advance`, which are not ported, so the Rust test writes the JSON those calls leave. The verbs' tests hand in a fake backend (`ask::tests::Fake`) as the TS tests hand in their own `ask`; `ask.rs`'s own tests run a raw HTTP server on a free port and check each way of not answering against the words Bun printed for it. No test makes a request to 127.0.0.1:7850.
+- `cd rust && cargo test --workspace` runs 1,210 tests. Most are the TypeScript tests ported case by case: `exec.test.ts`, `host.test.ts`, `seedgit.test.ts`, `git.test.ts` (both halves, against real repos, the eight diverged-branch rebase cases and the seven amend cases included), `stalecopy.test.ts`, `scan.test.ts`, `meta.test.ts`, `spec.test.ts`, `treelines.test.ts`, `access.test.ts` (remotes), the callers tests, `api.test.ts`, `notes.test.ts`, `issues.test.ts`, `pr.test.ts`, the CLI's `scenarios`, `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `floorplan`, `archify`, `diagnosis`, `understand`, `capacity`, `costs`, `plugins`, `people`, `clips`, `worktrees`, `fr`, `workflow` and `health` tests (each TS test has a Rust test named after it, the ones that share state run as named steps in the TS's order), and core's `workflow.test.ts`, `flowgraph.test.ts` and `fr.test.ts` with the clip functions of `clips.test.ts`. canopy-server's own tests drive its routes over a real socket: the first-load reads, the 501s, a page's stream on the devices list and gone when it closes. `land.test.ts` builds its entries with the queue's own `enqueue` and `advance`, which are not ported, so the Rust test writes the JSON those calls leave. The verbs' tests hand in a fake backend (`ask::tests::Fake`) as the TS tests hand in their own `ask`; `ask.rs`'s own tests run a raw HTTP server on a free port and check each way of not answering against the words Bun printed for it. No test makes a request to 127.0.0.1:7850.
 - `canopy-auth`'s parity tests read fixtures the TypeScript wrote (`rust/crates/canopy-auth/scripts/gen-fixtures.ts`): what every route needs for 5,796 paths by 7 methods, 68,400 origin cases, and a `callers.json` the TS minted. The Rust reads that book, checks its 9 tokens and writes it back byte for byte; `scripts/check-rust.ts` checks the other direction.
 - `bash scripts/rust-parity.sh [folder]` runs the TypeScript CLI and `canopy-rs` on the same folder against a scratch config dir and diffs tree, status, the bare form, version and a missing folder. On `~/dev` (175 lines of tree) every one came out byte-identical, with the last column (how long ago the newest commit was) masked because a scan of that size lets it tick over between the two runs. The script runs with `NO_COLOR`; under a real terminal (Python's `pty.spawn`) the colored tree of `~/dev/dev-tools` was byte-identical too, color codes and all.
 - The same script then builds two identical sets of scratch repos (a bare origin, clones, a repo with no remote, a detached checkout), with names, dates and the global git config pinned so both sides make the same hashes, and runs each git step through both CLIs, stdout, stderr and exit code apart: commit's usage, no message, nothing staged, a missing repo, `--all` and `--push` (which rebases onto a newer upstream first); push fast-forward, usage, a missing repo, no remote and detached; pull usage, fast-forward and a held `index.lock`; and the atlas case, a push refused over an upstream amend and then `--drop-stale`. All 16 came out byte-identical. `CANOPY_PARITY_KEEP=1` keeps the scratch dir to read.
@@ -42,8 +46,10 @@ Of 315 modules (106,675 lines of TypeScript under `src/core`, `src/server`, `src
 - For the backend verbs it clears `CANOPY_API`, `CANOPY_TOKEN` and `CANOPY_BACKEND`, starts a scratch Bun server on a free port with its own config dir, and runs 32 steps through both CLIs: notes added (one with a reminder, one on a repo that does not exist, one read under `TZ=Asia/Tokyo`), listed, done, listed with `--all` and deleted; the usages; a note that does not exist; a `--backend` that is not an origin; a bogus `--token`; keep awake's status; issues and prs, with a repo and without; pr and pr rebase on a run that does not exist; and each verb pointed at a port nothing listens on. A note's id, which each side mints, is masked. All 32 came out byte-identical. Only calls that change nothing outside that scratch server run: no keep-awake mode, no real run.
 - Before that server starts, the script seeds its config dir and HOME: a scratch repo with one commit, kit.json with a store target, two loadouts and defaults, two work items (one closed, so the work hub never moves it), a finished best-of-N group and a ready run whose repo does not exist, with a sensitive file waiting for approval. Then 56 more steps run through both CLIs: scenarios listed, added (by the TypeScript CLI, once) and run (the scenario runs `true` in the scratch repo); sweep with nothing to close, with `--yes`, and with a bad `--kind`; kit status and a dry-run apply; loadouts listed, as JSON, resolved in the repo and in one that does not exist; groups listed and a pick of a group that does not exist; work listed with filters, shown, exported and noted; the queue and collisions with and without a repo; `land` on the seeded run, which the scratch server refuses with "its diff could not be sorted" since its repo does not exist; and every verb's usages and a port nothing listens on. All 56 came out byte-identical. Nothing starts a run, a gate, a landing, a coordinator or an incubator stage.
 - A third batch of steps covers the verbs ported since: the map section's listings, `--json`, stops, refusals and pages saved to each side's own copy (compared with `cmp`), capacity under two zones, costs over each window, the plugins listing against a stand-in plugin CLI, people's roster changes, clips (a file's raw bytes compared with `cmp`), worktrees with three kept trees, workflow listings, drawings and checks of scratch files, health listings, refusals, lint and init, and fr reserving on a scratch repo with its own bare origin. Steps that change the scratch server answer the same when run twice, work on an object of each side's own, or run after the TypeScript CLI cleared the way. In all the script runs 518 steps, every one byte-identical. No step starts a run, a flow, a heal, an analysis, a plugin install or a marketplace change.
-- `bash scripts/rust-server-parity.sh` starts a scratch Bun server and a scratch canopy-server side by side on free ports, each with a copy of one seeded config dir (peers, backends with a bad name and a non-URL, workspaces, launchers, agent profiles and roles, notes and screen layouts with good and bad records) and the same scan root. It opens a page's stream on each and says which repos that browser has open, then asks both for the 44 routes the page reads on its first load and diffs the JSON with keys sorted and clocks masked: 28 came out the same, devices and people with the browser on included, and the 16 that answer 501 are listed. It exits 1 when a route canopy-server answers says something else.
-- The built page, served by each server from the parity script's seeded config dir, was loaded at 1400 and 390 px in headless Chromium (`scripts/browser`), with no page error on either. At 1400 px the two screenshots were byte-identical. At 390 px, loaded a few seconds later, the Bun page had an inbox chip and a waiting count that canopy-server's lacked: the seeded reminder had come due, and the Bun server's trigger engine had marked it in `notes.json` and broadcast it. canopy-server reads reminders back but never delivers one, since that engine is not ported. The route diff misses this, because it reads the notes before the first trigger tick.
+- A fourth batch of steps covers run and runs (a run log seeded in its own format: kept transcripts listed, shown, exported and pruned, every refusal; no step starts a run, and every start names a repo the server does not scan), library on a scratch workspace with each side's adapter state compared file by file, library sync, helper's refusals and one full pair approved on the scratch server, push and source, coordinator (refused for want of a coordinator), mcp over a piped stdio session, tenants kept in scratch folders, auth against a second scratch server that enforces who calls (sign-in, an invite traded for a member's token, sign-out), secrets with a key made, replaced, unlocked and forgotten under a scratch passphrase in the scratch config dir, the incubator with four seeded projects none of which starts, new, and the ranger left off. In all the script runs 832 steps, every one byte-identical.
+- `bash scripts/rust-server-parity.sh` starts a scratch Bun server and a scratch canopy-server side by side on free ports, each with a copy of one seeded config dir and the same scan root, opens a page's stream on each and says which repos that browser has open, waits for both to deliver a seeded reminder on their first trigger tick (and compares the two `notes.json` files and the notes frames), then asks both for the 50 routes and queries the page reads on its first load and diffs the JSON with keys sorted and clocks masked: 47 came out the same and 3 answer 501 (health, capacity, triggers). It then makes the same 48 note writes on both and compares each answer, the files and the frames, and runs canopy-rs's `note` verb against each server. It exits 1 when anything canopy-server answers says something else.
+- `bash scripts/rust-shell-parity.sh` gives each server tmux on a socket of its own, opens one shell on each over the `/api/term` websocket as the page does, and drives both through the same steps (output, resize, screen, watched, agent, a rename and a place, the socket leaving, the shell's end): 23 of 23 the same.
+- The built page, served by each server from the parity script's seeded config dir, was loaded at 1400 and 390 px in headless Chromium (`scripts/browser`), with no page error on either. Every first-load request answered the same status but `/api/health`, `/api/capacity` and `/api/triggers`, which canopy-server answers 501. What the two pages showed differed by those alone (the Bun page's health dot and count, which also push its notes chip into the "more" menu) and by clock words, since the second page loaded a minute later. A shell opened on canopy-server from the page at 1400 px and on a 390 px phone took typing on both, followed a resize, and closed on both screens.
 - Under `script` (a real terminal), a push to a local server that answers 401 failed at once in both CLIs with the same bytes, Bun's red error included: git found no terminal to ask for a username on. The Rust exec had put a timed command in a process group of its own, which kept the terminal, so git would have stopped on a prompt it could not read until the 15-minute timeout. It now calls `setsid` as Bun's `detached: true` does.
 - `canopy-server` was run on a scratch port and config dir against the real `dist/web`: the page and its assets load, `/api/tree` returns the scan, a cross-site Origin gets `{"error":"Foreign origin"}`, the stream says `: hello`, and with `CANOPY_CALLERS=log` it prints the TS's own "callers: would refuse" lines. It wrote nothing to its config dir.
 
@@ -51,7 +57,7 @@ No speed claim yet. Timings taken on 2026-11-27 ran on a machine at a load avera
 
 ## Rules for the rest of the port
 
-- One copy of each helper. A JavaScript rule goes in canopy-core's `js.rs`, `pathx.rs` or `jsdate.rs`, the palette and red errors in canopy-cli's `render.rs`, a request to a backend through `ask::Client` (`request` for one that is not a JSON answer), and the roles in canopy-core's `people.rs`. A verb that needs a helper another verb owns moves it to one of these instead of copying it.
+- One copy of each helper. A JavaScript rule goes in canopy-core's `js.rs`, `pathx.rs`, `jsjson.rs` (JSON.parse and JSON.stringify for records passed through) or `fserr.rs` (a file error in Bun's words), or canopy-cli's `jsdate.rs`, and a time as typed in canopy-core's `cron.rs`, the palette and red errors in canopy-cli's `render.rs`, a request to a backend through `ask::Client` (`request` for one that is not a JSON answer), and the roles in canopy-core's `people.rs`. A verb that needs a helper another verb owns moves it to one of these instead of copying it.
 - State files round-trip byte for byte. A Rust module that writes a file the TypeScript also writes (config, callers, runs, notes, anything under `~/.config/canopy/` or a repo's `.canopy/`) must write what the TS would write, key order and trailing newline included, and read what the TS wrote. `serde_json` has `preserve_order` on for this.
 - JavaScript's rules where output is compared: `pathx.rs` has Node's `path` functions, UTF-16 lengths for padding, JavaScript's sort order, JavaScript's whitespace for `trim` and `\s` (`JS_S`), and a field that is absent in TS JSON is `skip_serializing_if` in Rust while a `null` one is a plain `Option`. `js.rs` has what a template's `${x}` prints for a JSON value (`undefined`, `null`, `[object Object]`), `String(n)`, `Number(s)`, `Math.round`, `toFixed` (an exact tie rounds away from zero), `Object.keys()` order, `JSON.stringify` of a number and of a whole value, and the truthiness and `??` reads of a field, which differ for `0` and `""`. `jsdate.rs` prints `toLocaleString()` as Bun does, always en-US ("12/1/2026, 9:00:00 AM") in the zone `TZ` names, whatever `LANG` says. With `TZ` unset, Rust takes the zone from `/etc/localtime`'s data and Bun from its name; in canopy's containers on the mini `Etc/UTC` holds Los Angeles's rules, so run the parity scripts with the shell's `TZ` kept.
 - canopy-rs builds from one file outside `rust/`: `src/core/help.ts`, read with `include_str!`. The page imports that file too, so it stays where it is after the cutover; a test fails if `HELP_TEXT` ever interpolates.
@@ -67,10 +73,10 @@ No speed claim yet. Timings taken on 2026-11-27 ran on a machine at a load avera
 
 In about this order, each its own task:
 
-1. The rest of the CLI's verbs (`run`, `runs`, `tenant`, `secrets`, `auth`, `incubator`, `coordinator`, `library`, `helper`, `mcp` and the others in `src/cli/` the ledger lists as not started), one at a time on the pattern `note` set: the verb's own parsing and failure words, its pure helpers with their tests, a fake backend in its tests, and its steps in the parity script. When `run.ts` lands, `mapsection.rs` and `worktrees.rs` drop their copies of its pickers; a byte-body and a streaming call on `ask::Client` let `clips.rs` and `health.rs` drop their own HTTP clients.
-2. The rest of the first load: the 16 routes that still answer 501 (history, the incubator's three, ranger, health, capacity, kit, landing, trees, prs, triggers, work, clips, secrets, worktrees), the shells under tmux, the kept runs, peers with sync on, then the SSE events the page listens for beyond scan, devices and people. Most of them read state that runs, flows and the landing queue write, so they land with steps 3 to 5 more than before them.
+1. The CLI verbs still delegated: `peers` (on `peersync.ts`), `source add|rm` and `tenant register|unregister` (on a byte-for-byte `saveConfig`), `spec`, `drift`, `secrets recover` (age and ed25519), the helper's loop (the desktop openers), and the local verbs `ui`, `open`, `launch`, `ws` and `suggest`.
+2. The rest of the first load: health (its probes), capacity (its readers and the work hubs' held starts) and triggers (the engine and the flows lock); then the SSE events the page listens for beyond scan, devices, people and notes.
 3. Runs: `runner.ts`, `driver.ts`, `claudedrive.ts` and the stream-json fold, then `codexrun.ts` and `antigravity.ts`.
-4. Shells: `term.ts` and the tmux bridge over websockets.
+4. The rest of shells: restore, paste, say, transcripts, moves, a plain pty, shells in kept worktrees, and the keep pass.
 5. Flows, workflows, peers, the Library, people and tenants, the coordinator.
 6. The separate processes: `src/stage`, `src/egress`, `src/secrets`.
 7. The cutover: the launchd agent, the compose images and `canopy` on PATH switch to the Rust binaries, with the TS kept one release for a rollback. Eric said yes on 2026-11-27. It runs once canopy-server does what the Bun server does for runs, shells, flows and the landing queue (steps 3 to 6), not when the first load stops answering 501: a server that renders the board but cannot start a run or open a shell would take canopy away on every screen, and the restart would end live runs and lock the secrets key. Swapping only the CLI on PATH ahead of the server is not part of that yes.
@@ -98,13 +104,13 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `awake.ts` | 191 | not started |  |  |
 | `backendid.ts` | 28 | ported | core `backendid.rs` |  |
 | `backends.ts` | 50 | ported | core `backends.rs` | the config's list and this backend's name |
-| `branchtrees.ts` | 464 | not started |  |  |
+| `branchtrees.ts` | 464 | partial | core `branchtrees.rs` | `parseTreesRecord`, `listTreeDirs` (given the repo's folder), `treeStatus`, `TREES_RECORD`, `TREE_PORTS_DEFAULT`; making, merging, syncing, slugs and ports wait on the server |
 | `browse.ts` | 88 | not started |  |  |
 | `build.ts` | 50 | ported | core `version.rs` |  |
 | `builtincheck.ts` | 81 | not started |  |  |
 | `callers.ts` | 314 | ported | auth `rights.rs` | checked against 5796 paths x 7 methods the TS answered |
-| `canopymcp.ts` | 402 | not started |  |  |
-| `capacity.ts` | 679 | partial | cli `capacity.rs` | `hitStands` and `resetWord` only |
+| `canopymcp.ts` | 402 | ported | cli `canopymcp.rs` | in the CLI crate for canopy-auth's `allows`; a fold reads a missing list as empty where Bun throws |
+| `capacity.ts` | 679 | partial | cli `capacity.rs`, `run.rs` | `hitStands`, `resetWord` and `parsePriority` only |
 | `cards.ts` | 67 | ported | core `cards.rs` |  |
 | `chan.ts` | 319 | not started |  |  |
 | `check.ts` | 145 | not started |  |  |
@@ -112,25 +118,25 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `claudefold.ts` | 276 | not started |  |  |
 | `cli.ts` | 14 | not started |  |  |
 | `client.ts` | 57 | partial | auth `origin.rs` | isLoopback and isLoopbackHost only |
-| `clips.ts` | 504 | partial | core `clips.rs` | `CLIP_FILE_MAX`, the secret checks, `textHead`, the UTF-8 read, `sniffType`, `sizeWord`, `clipKey`, the order, the kinds, `clipLine`, `agoWord`; not the store, devices, swatches or the served and inline kinds |
+| `clips.ts` | 504 | partial | core `clips.rs` | `CLIP_FILE_MAX`, the secret checks, `textHead`, the UTF-8 read, `sniffType`, `sizeWord`, `clipKey`, the order, the kinds, `clipLine`, `agoWord`, `isClipId`, `sourceOf`, `clipLabel`, `parseDevice`, `parseFile`, `fileName`, `mediaType`, `parseClip`, `parseClips`, `pruneClips`; not `putClip`, `takeClip`, `applyClips`, `mintClipId`, `clipText` or the swatches |
 | `codexfold.ts` | 368 | not started |  |  |
-| `codexrpc.ts` | 363 | not started |  |  |
+| `codexrpc.ts` | 363 | partial | core `codexrpc.rs` | `parseMessage` and `LineSplitter`; the client waits on the runs port |
 | `codexrun.ts` | 1100 | not started |  |  |
 | `codextrust.ts` | 80 | not started |  |  |
 | `compose.ts` | 92 | not started |  |  |
-| `coordinator.ts` | 1104 | not started |  |  |
+| `coordinator.ts` | 1104 | partial | core `coordinator.rs` | `cardCarries`, `cardCounts`, `isProjectCard`, `NO_LOADOUT` |
 | `cors.ts` | 33 | ported | auth `cors.rs` |  |
 | `costledger.ts` | 172 | not started |  |  |
 | `costs.ts` | 238 | partial | core `costs.rs` | `SERVICE_NAME` only |
 | `costsheet.ts` | 273 | partial | core `costsheet.rs` | no detail, runs, `sessionLines` or `windowStart` |
-| `cron.ts` | 246 | not started |  |  |
+| `cron.ts` | 246 | partial | core `cron.rs` | `parseCron`, `expandCron`, `isCron`, `CRON_MAX`, `parseWhen` (an ISO date read as Bun's Date reads it, a clock change by its compatible rule) and `leadingWhen`; not `nextFire` or `lastClock` |
 | `deploy.ts` | 190 | not started |  |  |
 | `diagnosis.ts` | 312 | partial | core `diagnosis.rs` | the folder and page names, the languages, `diagnosisLine`, `changesLine`, `othersLine`, `languageWord`, `diagnosisFailure` |
 | `digest.ts` | 111 | not started |  |  |
 | `driver.ts` | 722 | not started |  |  |
 | `emulatord.ts` | 236 | not started |  |  |
 | `emulators.ts` | 246 | not started |  |  |
-| `envnames.ts` | 83 | not started |  |  |
+| `envnames.ts` | 83 | partial | core `term.rs` | `SECRET_ENV`, `PRIVATE_ENV` and the trigger prefix |
 | `evidence.ts` | 37 | not started |  |  |
 | `exec.ts` | 287 | ported | core `exec.rs` | exec, onHost, git, the seed guard's hook (`SeedGitHook`); a timed command gets a session of its own, as Bun's detached child does |
 | `explain.ts` | 1296 | not started |  |  |
@@ -150,13 +156,13 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `forkcut.ts` | 164 | not started |  |  |
 | `fr.ts` | 126 | ported | core `fr.rs` |  |
 | `gatename.ts` | 4 | not started |  |  |
-| `gates.ts` | 132 | not started |  |  |
+| `gates.ts` | 132 | partial | core `gates.rs` | `parseGatesFile`, `packageGates`, `readGates` (a file that is not JSON is flagged, since JavaScriptCore's words are not copied); not `gatesScript`, `GATES_CHECK` or `touchesLockfile` |
 | `git.ts` | 1309 | ported | core `git.rs`, `gitwrite.rs` | the read half in `git.rs`; commit detail, diff, stage, commit, push, pull and the lock sweep in `gitwrite.rs`, with `GitError` in place of the TS error classes |
 | `github.ts` | 122 | not started |  |  |
 | `going.ts` | 55 | not started |  |  |
 | `group.ts` | 238 | partial | core `group.rs` | `groupWord` only; fan-out, scoring and the reviewer wait on runs |
 | `guards.ts` | 121 | not started |  |  |
-| `handoff.ts` | 93 | not started |  |  |
+| `handoff.ts` | 93 | partial | cli `transcripts.rs` | `forkLine` only |
 | `harness.ts` | 284 | partial | core `harness.rs` | the table, models, efforts and the cross-harness checks; no argv builders |
 | `harnessshare.ts` | 201 | partial | core `harnessshare.rs` | no `barWidths`, `cardsOf`, `harnessSlot` or `weekKey` |
 | `health.ts` | 130 | not started |  |  |
@@ -164,14 +170,14 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `helper.ts` | 231 | not started |  |  |
 | `helperd.ts` | 267 | not started |  |  |
 | `herdr.ts` | 248 | not started |  |  |
-| `history.ts` | 248 | not started |  |  |
+| `history.ts` | 248 | partial | core `history.rs` | `locateHistory`, `RING_DAYS`; not the reports or the overview |
 | `historymerge.ts` | 32 | ported | core `historymerge.rs` |  |
 | `host.ts` | 110 | ported | core `host.rs` |  |
-| `improvements.ts` | 94 | not started |  |  |
+| `improvements.ts` | 94 | partial | server `work_reads.rs` | the read behind `offers()` (a file that will not read is empty); the writes wait on the server |
 | `incubator.ts` | 1865 | not started |  |  |
 | `issue.ts` | 243 | not started |  |  |
 | `jev.ts` | 114 | not started |  |  |
-| `keep.ts` | 262 | partial | core `keep.rs` | the read side: the records, `expiredShells`, `lostShells`; no writes, forgets or replays |
+| `keep.ts` | 262 | partial | core `keep.rs` | the read side (the records, `expiredShells`, `lostShells`), `agentIn`, `argvAgent` and `forgetKept`; no writes, replays or resume lines |
 | `kit.ts` | 714 | not started |  |  |
 | `kitapply.ts` | 142 | not started |  |  |
 | `kitfake.ts` | 42 | not started |  |  |
@@ -181,15 +187,15 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `launch.ts` | 292 | partial | core `launch.rs` | `normalizeLaunch` and `isDefaultLaunch`; no release assets, builds or the launch |
 | `launcher.ts` | 838 | not started |  |  |
 | `leftovers.ts` | 127 | not started |  |  |
-| `library.ts` | 252 | partial | auth `origin.rs` | the origin gate only |
+| `library.ts` | 252 | partial | core `library.rs`, cli `library.rs`, auth `origin.rs` | `libraryArgs`, `libraryStateDir`, `libraryCommand` and the origin gate; not the `Library` worker or `libraryCall` |
 | `libsync.ts` | 432 | not started |  |  |
 | `loadout.ts` | 482 | not started |  |  |
 | `mentions.ts` | 310 | not started |  |  |
 | `meta.ts` | 261 | ported | core `meta.rs` |  |
 | `move.ts` | 243 | not started |  |  |
-| `notes.ts` | 133 | partial | core `notes.rs` | the record, `openNotes`, `sortNotes`, `dueWord`, the id and the file read back (`parseNotes`); `isDue` and `remindDue` wait on the server's writes |
+| `notes.ts` | 133 | ported | core `notes.rs` | the record, `openNotes`, `sortNotes`, `dueWord`, `noteText` (a cut through a surrogate pair ends in U+FFFD), `mintNoteId`, `isDue`, `remindDue` and the file read back; a lone-surrogate escape reads as U+FFFD rather than making the file look empty |
 | `offer.ts` | 35 | not started |  |  |
-| `openers.ts` | 737 | partial | server `harnesses.rs` | `findBinary`, `LoginHarnesses`, `harnessesFrom`, `backendCaps`; no openers |
+| `openers.ts` | 737 | partial | server `harnesses.rs`, core `term.rs`, `types.rs` | `findBinary`, `LoginHarnesses`, `harnessesFrom`, `backendCaps`, `sshSessionArgs` for a shell, `isOpenerId`; no openers |
 | `panesizes.ts` | 129 | partial | core `screenlayouts.rs` | the panes table and `parsePaneSizes` |
 | `passkeeper.ts` | 93 | not started |  |  |
 | `paste.ts` | 63 | not started |  |  |
@@ -205,21 +211,21 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `presence.ts` | 95 | ported | server `presence.rs` | `parseStream` and `devicesOf` |
 | `preview.ts` | 480 | not started |  |  |
 | `previewPublic.ts` | 34 | not started |  |  |
-| `procs.ts` | 184 | not started |  |  |
+| `procs.ts` | 184 | partial | core `procs.rs` | pid, ppid, argv, the walk, `processTree`; no comm, state, CPU or start time |
 | `providers.ts` | 212 | not started |  |  |
 | `prscenarios.ts` | 57 | not started |  |  |
 | `push.ts` | 351 | not started |  |  |
-| `ranger.ts` | 365 | not started |  |  |
+| `ranger.ts` | 365 | partial | core `ranger.rs` | `normalizeRanger`, `rangerHandle`, `parseWake`, the defaults, `TELEGRAM_PLUGIN`; not `patchRanger`, `readWake`, the argv, the brief or `wakeLine` |
 | `redact.ts` | 121 | not started |  |  |
 | `remember.ts` | 265 | not started |  |  |
 | `remote.ts` | 75 | ported | core `remote.rs` |  |
 | `repohealth.ts` | 203 | partial | core `repohealth.rs` | no `mergeChecks` or the per-host blocking; bad JSON is worded by serde |
-| `retro.ts` | 374 | not started |  |  |
+| `retro.ts` | 374 | partial | core `retro.rs` | `parseImprovements`, `offered`, `adviceWorkflow`; a cut that halves a surrogate pair is refused (501); fold, decide, the markdown and the retro itself wait on the server |
 | `review.ts` | 356 | not started |  |  |
 | `route.ts` | 406 | partial | core `route.rs` | profiles, roles and repo overrides read back, `GET /api/agents`'s shape; no `resolveAgent` |
 | `runerror.ts` | 55 | not started |  |  |
-| `runlog.ts` | 536 | not started |  |  |
-| `runname.ts` | 134 | not started |  |  |
+| `runlog.ts` | 536 | partial | cli `transcripts.rs` | `RUN_ID` only |
+| `runname.ts` | 134 | partial | cli `transcripts.rs` | `runSubject` and `nameFailure` only |
 | `runnamer.ts` | 83 | not started |  |  |
 | `runner.ts` | 1267 | not started |  |  |
 | `runtools.ts` | 48 | not started |  |  |
@@ -231,18 +237,18 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `secretcrypt.ts` | 123 | not started |  |  |
 | `secretfile.ts` | 348 | not started |  |  |
 | `secretimport.ts` | 183 | not started |  |  |
-| `secretlocal.ts` | 473 | not started |  |  |
+| `secretlocal.ts` | 473 | partial | server `settings_reads.rs` | the `localPaths` names, the pin and remote check, and `info()` of a reader with nothing pinned |
 | `secretmcp.ts` | 68 | not started |  |  |
 | `secretsclient.ts` | 36 | not started |  |  |
 | `secretwire.samples.ts` | 42 | not started |  |  |
-| `secretwire.ts` | 300 | not started |  |  |
+| `secretwire.ts` | 300 | partial | core `secretwire.rs` | the proposal, pending and passphrase limits, `proposedWords`, `skippedWords` |
 | `seed.ts` | 380 | not started |  |  |
 | `seedgit.ts` | 237 | ported | core `seedgit.rs` | the stage runner's side of the hook waits on src/stage |
 | `seedmirror.ts` | 173 | not started |  |  |
 | `seedsource.ts` | 282 | not started |  |  |
 | `sessionrules.ts` | 62 | not started |  |  |
 | `sessions.ts` | 390 | not started |  |  |
-| `shellname.ts` | 12 | not started |  |  |
+| `shellname.ts` | 12 | ported | core `shellname.rs` |  |
 | `shellwords.ts` | 359 | not started |  |  |
 | `shipper.ts` | 682 | not started |  |  |
 | `sidequestion.ts` | 75 | not started |  |  |
@@ -250,7 +256,7 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `sinkssh.ts` | 129 | not started |  |  |
 | `sinksync.ts` | 138 | not started |  |  |
 | `spec.ts` | 192 | ported | core `spec.rs` | load, plan, sync and state |
-| `sprout.ts` | 918 | not started |  |  |
+| `sprout.ts` | 918 | partial | core `sprout.rs` | `oneLine`, `urlWithoutSecret`, `githubRepo`, `repoPage`, `handOffText`, SHIP and HAND_OFF, `isOwnStep`, `sproutEnded`, `lastDone`, `nextWorkflow`, `parsePick`, `pickRefusal`, `phaseRefusal` |
 | `sproutnote.ts` | 204 | not started |  |  |
 | `sproutstore.ts` | 177 | not started |  |  |
 | `stageclient.ts` | 497 | not started |  |  |
@@ -260,16 +266,16 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `stalecopy.ts` | 186 | ported | core `stalecopy.rs` |  |
 | `stall.ts` | 95 | not started |  |  |
 | `steer.ts` | 68 | not started |  |  |
-| `store.ts` | 698 | partial | core `store.rs` | config path, maxDepth, ignore, workspaces and flags; the other settings ride along as raw JSON |
+| `store.ts` | 698 | partial | core `store.rs`, `warm.rs`, `history.rs`, `ranger.rs` | config path, maxDepth, ignore, workspaces and flags, `historyBin`, `warm` (`warmFor`) and `ranger` as normalize reads them; the other settings ride along as raw JSON, and there is no `saveConfig` yet |
 | `suggest.ts` | 190 | not started |  |  |
 | `sweep.ts` | 265 | partial | core `sweep.rs` | the kinds and `mayClose`; the planner waits on the server |
 | `sweepstore.ts` | 182 | not started |  |  |
-| `tailchan.ts` | 427 | not started |  |  |
+| `tailchan.ts` | 427 | partial | core `term.rs` | `shellHandle` only |
 | `taskrun.ts` | 165 | not started |  |  |
 | `tasks.ts` | 515 | partial | core `tasks.rs` | names, patches, `tasks.json`, detection; no env filling, layer merge, backoff, status, logs or sweep |
-| `tenant.ts` | 212 | not started |  |  |
-| `term.ts` | 245 | not started |  |  |
-| `tmux.ts` | 816 | not started |  |  |
+| `tenant.ts` | 212 | ported | core `tenant.rs` |  |
+| `term.ts` | 245 | partial | core `term.rs`, server `pty.rs` | everything pure, and `spawnOnPty` for tmux clients; no plain-pty `startTerm` |
+| `tmux.ts` | 816 | partial | core `tmux.rs`, server `terms.rs` | the shells' argv, the list and pane parsers, `primeText`, and the calls; no tasks, ranger session, steer buffers, `typedAsEmpty` or `parseActivity` |
 | `todos.ts` | 42 | not started |  |  |
 | `touch.ts` | 269 | partial | core `touch.rs` | `withName` only; the overlap scan waits on runs |
 | `transcribe.ts` | 100 | not started |  |  |
@@ -277,7 +283,7 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `treewords.ts` | 82 | partial | core `treewords.rs` | `treeWords` only |
 | `treework.ts` | 267 | not started |  |  |
 | `trigger.ts` | 1282 | not started |  |  |
-| `types.ts` | 4875 | partial | core `types.rs` | the scan's types, `AwakeInfo`, `AWAKE_MODES` and `awakeWords`; the rest as they are needed |
+| `types.ts` | 4875 | partial | core `types.rs` | the scan's types, `AwakeInfo`, `AWAKE_MODES`, `awakeWords`, `isRunActive`, `OPENER_IDS`; `RUN_ACTIONS` sits in cli `run.rs`; the rest as they are needed |
 | `understand.ts` | 284 | partial | core `understand.rs` | `understandLine`, `isWait`, `PREPARING_WORDS` |
 | `understandvendor.ts` | 53 | not started |  |  |
 | `vault.ts` | 177 | not started |  |  |
@@ -286,13 +292,13 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `voice.ts` | 102 | not started |  |  |
 | `voicelive.ts` | 120 | not started |  |  |
 | `voicewire.ts` | 227 | not started |  |  |
-| `warm.ts` | 233 | not started |  |  |
+| `warm.ts` | 233 | partial | core `warm.rs` | `WARM_MAX`, `WARM_RECORD`, `isWarmName`, and whether a record surely holds nothing (not the full `parseWarmRecord`) |
 | `webpush.ts` | 206 | not started |  |  |
 | `wirereplay.ts` | 409 | not started |  |  |
-| `work.ts` | 257 | partial | core `work.rs` | `WORK_STATES`, `isWorkId`, `workIdOf`, `fromWord` and `noteStamp`; the store and the export wait on the server |
+| `work.ts` | 257 | partial | core `work.rs` | `WORK_STATES`, `isWorkId`, `workIdOf`, `fromWord`, `noteStamp` and `stateOf` with `WorkFacts`; the export and the ledger wait on the server |
 | `workflow.ts` | 373 | ported | core `workflow.rs` | the whole parser |
 | `workflows.ts` | 71 | partial | core `workflows.rs` | no `readFlowModes`; a read error such as EISDIR is worded differently |
-| `workstore.ts` | 116 | not started |  |  |
+| `workstore.ts` | 116 | partial | core `workstore.rs` | `readWorkItems` with `isWorkItem`; a folder that will not list is an error, as the TS throws; the write waits on the server |
 | `worktree.ts` | 367 | not started |  |  |
 
 ### src/server
@@ -304,10 +310,10 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `archify.ts` | 220 | not started |  |  |
 | `asks.ts` | 362 | not started |  |  |
 | `body.ts` | 33 | not started |  |  |
-| `branchtrees.ts` | 719 | not started |  |  |
+| `branchtrees.ts` | 719 | partial | server `work_reads.rs` | GET `/api/trees` where adopt and the follow pass would change no record and tmux is off; the POSTs answer 501 |
 | `callers.ts` | 885 | ported | auth `book.rs`, `gate.rs`, `auth.rs` | reads and writes the same callers.json, both ways |
 | `capacity.ts` | 717 | not started |  |  |
-| `clips.ts` | 436 | not started |  |  |
+| `clips.ts` | 436 | partial | server `settings_reads.rs` | `GET /api/clips` with `?ids=` |
 | `collisions.ts` | 359 | not started |  |  |
 | `coordinator.ts` | 1394 | not started |  |  |
 | `diagnosis.ts` | 232 | not started |  |  |
@@ -317,49 +323,49 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `groups.ts` | 1180 | not started |  |  |
 | `health.ts` | 345 | not started |  |  |
 | `healthstore.ts` | 122 | not started |  |  |
-| `incubator.ts` | 271 | not started |  |  |
-| `index.ts` | 9346 | partial | server `app.rs`, `gate.rs`, `routes.rs`, `gated.rs`, `tree.rs`, `presence.rs` | the page, tree, about, sources and the event stream with its devices; the first-load reads (backends, workspaces, launchers, agents, kept shells, client, peers with sync off, devices) and the empty live lists; the tmux, broker and voice gates; 16 first-load routes and every other answer 501 |
-| `kit.ts` | 734 | not started |  |  |
-| `landing.ts` | 1382 | not started |  |  |
+| `incubator.ts` | 271 | partial | server `work_reads.rs` | GET `/api/incubator` (empty while no sprout record), `/stages` (off or unisolated with no runner, sprout or flows lock), `/advice`; the writes and `/one` answer 501 |
+| `index.ts` | 9346 | partial | server `app.rs`, `gate.rs`, `routes.rs`, `gated.rs`, `tree.rs`, `presence.rs`, `settings_reads.rs`, `work_reads.rs`, `notes.rs`, `terms.rs` | the page, tree, about, sources and the event stream with its devices; every first-load read but health, capacity and triggers (each where its answer is the Bun server's, else 501); quick notes with their writes and reminders; shells on tmux (list, kept, the `/api/term` websocket, delete, text, screen, watched, agent, label, place, keys); the tmux, broker and voice gates |
+| `kit.ts` | 734 | partial | server `settings_reads.rs` | `kitPath`, and `GET /api/kit` when kit.json is missing |
+| `landing.ts` | 1382 | partial | server `work_reads.rs` | GET `/api/landing`: the empty queue with `notices.json`'s notices while no flow, queued trigger event, landing record or run worktree could bring a run back; `/diff` and the POSTs answer 501 |
 | `layouts.ts` | 169 | partial | server `routes.rs` | `GET /api/layouts`, read at each call |
 | `libsync.ts` | 496 | not started |  |  |
 | `linear.ts` | 182 | not started |  |  |
-| `notes.ts` | 266 | partial | server `routes.rs` | `GET /api/notes`; no writes or reminders |
+| `notes.ts` | 266 | ported | server `notes.rs` | every route, its refusal words, the temp-file write, the notes frame; a 500 is worded as Bun's by core `fserr.rs` |
 | `peers.ts` | 173 | not started |  |  |
 | `people.ts` | 609 | partial | server `people.rs` | `GET /api/people` and `POST /api/people/at`; no roster changes |
 | `providers.ts` | 191 | not started |  |  |
-| `prs.ts` | 1082 | not started |  |  |
+| `prs.ts` | 1082 | partial | server `work_reads.rs` | GET `/api/prs` is `[]` under the landing route's quiet with no `prs/` record; the watch loop and the POSTs are not ported |
 | `prscenarios.ts` | 119 | not started |  |  |
 | `pulse.ts` | 107 | not started |  |  |
 | `push.ts` | 389 | not started |  |  |
-| `ranger.ts` | 937 | not started |  |  |
+| `ranger.ts` | 937 | partial | core `ranger.rs`, server `settings_reads.rs` | `rangerTermId`, `parseRecord`, `telegramInUserSettings`, `GET /api/ranger` without tmux |
 | `registry.ts` | 233 | partial | server `gated.rs` | the answer with no broker |
 | `repohealth.ts` | 391 | not started |  |  |
 | `runtools.ts` | 85 | not started |  |  |
 | `scenarios.ts` | 324 | not started |  |  |
 | `scope.ts` | 145 | not started |  |  |
-| `secrets.ts` | 332 | not started |  |  |
+| `secrets.ts` | 332 | partial | server `settings_reads.rs` | `GET /api/secrets` for a reader that pulls nothing (no socket, no pin with a remote, no key on a Mac) |
 | `stacks.ts` | 85 | not started |  |  |
 | `stalls.ts` | 151 | not started |  |  |
 | `sweep.ts` | 624 | not started |  |  |
 | `tailchan.ts` | 258 | partial | server `gated.rs` | the answer with no broker address |
 | `tasks.ts` | 1024 | partial | server `gated.rs` | the answer with no tmux |
-| `triggers.ts` | 1388 | not started |  |  |
+| `triggers.ts` | 1388 | partial | server `notes.rs` | only `TICK_EVERY` and the notes' reminders on the tick; rules, events and the daily line do not run, and no flows lock is taken |
 | `understand.ts` | 441 | not started |  |  |
-| `warm.ts` | 559 | not started |  |  |
-| `work.ts` | 301 | not started |  |  |
+| `warm.ts` | 559 | partial | core `warm.rs`, server `settings_reads.rs` | `freeBytes`, and `GET /api/worktrees` while nothing is held |
+| `work.ts` | 301 | partial | server `work_reads.rs` | GET `/api/work` with `repo` and `state` under the same quiet while no open item holds a state other than open; `/one`, `/export` and the POSTs answer 501 |
 
 ### src/cli
 
 | Module | Lines | Status | Rust | Notes |
 |---|---:|---|---|---|
-| `api.ts` | 71 | partial | cli `api.rs` | `apiBase`, `tokenFile` and `callerToken`, read from one `Caller`; `helperTokenFile` comes with `canopy helper` |
+| `api.ts` | 71 | ported | cli `api.rs` | `apiBase`, `tokenFile`, `callerToken` and `helperTokenFile`, read from one `Caller` |
 | `archify.ts` | 112 | ported | cli `archify.rs` |  |
-| `auth.ts` | 195 | not started |  |  |
+| `auth.ts` | 195 | ported | cli `auth.rs`, `pair.rs` | `pairFlow`, `saveToken`, `readHelperToken`, `pairLabel` and `hostname` in `pair.rs`, shared with helper; `statusWords` lives here |
 | `awake.ts` | 25 | ported | cli `awake.rs` |  |
 | `capacity.ts` | 165 | ported | cli `capacity.rs` | holds `hitStands` and `resetWord` from core capacity.ts |
 | `clips.ts` | 254 | ported | cli `clips.rs` | a file's bytes go through `ask::Client::request`; Bun's MIME table by extension copied |
-| `coordinator.ts` | 174 | not started |  |  |
+| `coordinator.ts` | 174 | ported | cli `coordinator.rs` | a new goal's multipart form is built by hand |
 | `costs.ts` | 174 | ported | cli `costs.rs` | the reads per target go out together; the first failure back is the one reported |
 | `diagnosis.ts` | 117 | ported | cli `diagnosis.rs` |  |
 | `drift.ts` | 57 | not started |  |  |
@@ -367,28 +373,28 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `fr.ts` | 294 | ported | cli `fr.rs` | every sub-command |
 | `groups.ts` | 141 | ported | cli `groups.rs` |  |
 | `health.ts` | 523 | ported | cli `health.rs`, `ask.rs` | list, show, heal, watch, checks, add, rm, lint, init; `ask`, `targetsOf` and the error classes in `ask.rs` |
-| `incubator.ts` | 307 | not started |  |  |
-| `index.ts` | 946 | partial | cli `main.rs` | tree, status, version, commit, push, pull, note, awake, issues, pr, prs, scenarios, sweep, kit, loadouts, groups, work, land, queue, collisions, floorplan, archify, diagnosis, understand, capacity, costs, plugins, people, clip, clips, worktrees, fr, workflow, health, help and `--token` run in Rust; every other verb goes to the TS CLI |
+| `incubator.ts` | 307 | ported | cli `incubator.rs` | new and every subcommand, pick-check included; forms go multipart through `Ask::fetch` |
+| `index.ts` | 946 | partial | cli `main.rs`, `ranger.rs`, `helper.rs`, `library.rs`, `sources.rs` | tree, status, version, commit, push, pull, note, awake, issues, pr, prs, scenarios, sweep, kit, loadouts, groups, work, land, queue, collisions, floorplan, archify, diagnosis, understand, capacity, costs, plugins, people, clip, clips, worktrees, fr, workflow, health, run, runs, auth, tenant, coordinator, mcp, secrets (not recover), new, incubator, ranger, library, helper (its refusals and `--pair`; the loop goes to the TS CLI), push test and ls, the bare source listing, help and `--token` run in Rust; every other verb goes to the TS CLI |
 | `issues.ts` | 65 | ported | cli `issues.rs` |  |
 | `kit.ts` | 95 | ported | cli `kit.rs` |  |
 | `land.ts` | 164 | ported | cli `land.rs` | land, queue and collisions |
-| `libsync.ts` | 63 | not started |  |  |
+| `libsync.ts` | 63 | ported | cli `libsync.rs` |  |
 | `loadouts.ts` | 117 | ported | cli `loadouts.rs` |  |
-| `mcp.ts` | 83 | not started |  |  |
-| `newargs.ts` | 102 | not started |  |  |
+| `mcp.ts` | 83 | ported | cli `mcp.rs` | the shells bundle (bin/canopy-mcp.ts) stays Bun's |
+| `newargs.ts` | 102 | ported | cli `newargs.rs` |  |
 | `notes.ts` | 74 | ported | cli `notes.rs` | the reminder's time printed by `jsdate.rs` |
 | `peersroot.ts` | 19 | not started |  |  |
-| `people.ts` | 243 | ported | cli `people.rs` | `statusWords` (auth.ts) copied into its tests only |
+| `people.ts` | 243 | ported | cli `people.rs` |  |
 | `plugins.ts` | 165 | ported | cli `plugins.rs` | holds `isPluginAgent` and `opText` from core plugins.ts |
 | `pr.ts` | 87 | ported | cli `prs.rs` |  |
-| `push.ts` | 69 | not started |  |  |
+| `push.ts` | 69 | ported | cli `webpush.rs` |  |
 | `render.ts` | 29 | ported | cli `render.rs` | the palette, `useColor` and Bun's red `console.error`, one copy for every verb |
-| `run-transcripts.ts` | 270 | not started |  |  |
-| `run.ts` | 305 | partial | cli `mapsection.rs`, `worktrees.rs` | private copies of `selectedTarget`, `repoId`, `folderOf`, `isPathArgument`; the verb is not started |
+| `run-transcripts.ts` | 270 | ported | cli `transcripts.rs` | every form; holds `RUN_ID`, `runSubject`, `nameFailure`, `forkLine`; `toISOString` in `jsdate.rs`; a failed `--out` is worded as Node words it |
+| `run.ts` | 305 | ported | cli `run.rs` | every form: start, group, pickup, `runs child`; the one copy of `selectedTarget`, `repoId`, `folderOf` and `isPathArgument`; holds `RUN_ACTIONS` and `parsePriority` |
 | `scenarios.ts` | 82 | ported | cli `scenarios.rs` |  |
-| `secrets.ts` | 494 | not started |  |  |
+| `secrets.ts` | 494 | partial | cli `secrets.rs` | list, status, unlock (a hidden line in raw mode through rustix termios, or piped), forget, key, propose and pin; recover (age and ed25519) goes to the TS CLI |
 | `sweep.ts` | 90 | ported | cli `sweep.rs` |  |
-| `tenant.ts` | 419 | not started |  |  |
+| `tenant.ts` | 419 | ported | cli `tenant.rs` | config.json's registry write runs the TS CLI's tenant register and unregister until `saveConfig` is ported |
 | `understand.ts` | 123 | ported | cli `understand.rs` |  |
 | `work.ts` | 122 | ported | cli `work.rs` | `work note` reads the branch through `exec.rs` |
 | `workflow.ts` | 186 | ported | cli `workflow.rs` | list, show, `--dot`, check |
