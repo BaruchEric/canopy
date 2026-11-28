@@ -8,14 +8,20 @@
 #
 # The seed holds something for each ported route to read: backends (one of
 # them not a URL), workspaces, launchers, agent profiles and roles, quick
-# notes and screen layouts with good and bad records. Both servers run under
-# env -i with a scratch HOME, CANOPY_TMUX=0 and CANOPY_TAILCHAN_URL=off, so
-# neither reads ~/.config/canopy, starts a shell or dials a broker, and
-# neither takes port 7850.
+# notes and screen layouts with good and bad records, a historyBin that is
+# not there, clips (pruned, pinned, a file, a duplicate, a bad source), a
+# secrets key with a pin but no remote, the ranger's settings, record and
+# wakes with Claude's settings giving the Telegram plugin to every session,
+# an empty worktrees root and a gates file with a warm count. HOME holds no
+# kit.json. Both servers run under env -i with a scratch HOME, CANOPY_TMUX=0
+# and CANOPY_TAILCHAN_URL=off, so neither reads ~/.config/canopy, starts a
+# shell or dials a broker, and neither takes port 7850.
 #
 # Answers are compared as JSON with keys sorted, millisecond clocks masked,
-# the runtime field of /api/about masked and canopy-server's config dir
-# named as the Bun server's.
+# the runtime field of /api/about masked, a volume's free bytes masked (the
+# disk moves between two reads) and canopy-server's config dir named as the
+# Bun server's. A few routes are asked again with a query (clips by id,
+# history over 90 days).
 #
 #   bash scripts/rust-server-parity.sh
 #
@@ -48,7 +54,8 @@ for r in app web; do
   git -C "$S/root/$r" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
 done
 cat >"$S/seed/config.json" <<JSON
-{"self": "scratch", "keepShells": true,
+{"self": "scratch", "keepShells": true, "historyBin": "$S/no/claude-history",
+ "ranger": {"on": true, "telegram": true, "handle": "ranger-scratch", "profile": "Bad", "fresh": {"daily": null, "maxMb": 40.4}},
  "peers": [{"name": "mini", "alias": "eric@mini", "root": "/srv/dev", "role": "mirror", "repos": ["app", ""]}, {"name": "mini", "alias": "x", "root": "/y"}, {"name": "nb", "alias": "gpd", "root": "/a/../b"}],
  "backends": [{"name": "mini", "tailnet": "http://127.0.0.1:1"}, {"name": "bad name!"}, {"name": "pub", "public": "http://not-https.example"}],
  "workspaces": [{"name": "both", "repos": ["$S/root/app", "$S/root/web", 3], "primary": "$S/root/web", "color": "nope"}, {"name": 5}],
@@ -76,6 +83,41 @@ cat >"$S/seed/screen-layouts.json" <<'JSON'
  "presets": {"preset-1920x1080": {"name": "office", "device": "dell", "width": 1920, "height": 1080, "layout": {"agents": "lanes"}},
              "preset-1x1": {"name": "none", "width": 1000, "height": 800}}}
 JSON
+# the settings reads (settings_reads.rs): clips around now, so the prune's
+# age cut lands well clear of either server's clock
+now=$("$bun" -e 'console.log(Date.now())')
+H=3600000
+D=$((24 * H))
+F=$(printf 'f%.0s' $(seq 1 64))
+cat >"$S/seed/clips.json" <<JSON
+[{"id": "c-aaaaaaaa", "text": "ship it", "source": "shell", "at": $((now - H)), "createdAt": $((now - 2 * H)), "count": 3, "from": " app \\n  main ", "device": {"id": "0123456789abcdef", "name": " desk ", "platform": "Mac OS"}},
+ {"id": "c-bbbbbbbb", "text": "old", "source": "cli", "at": $((now - 20 * D))},
+ {"id": "c-cccccccc", "text": "pinned old", "source": "page", "at": $((now - 20 * D)), "pinned": true},
+ {"id": "c-dddddddd", "text": "x", "source": "clipboard", "at": $((now - 3 * H)), "cut": true, "file": {"name": "a/b.pdf", "type": "Application/PDF; q=1", "size": 3, "sha": "$F"}},
+ {"id": "c-eeeeeeee", "text": "bad source", "source": "mail", "at": $now},
+ {"id": "c-aaaaaaaa", "text": "again", "source": "page", "at": $now},
+ {"id": "c-ffffffff", "text": "two", "source": "canopy", "at": $((now - 4 * H)), "count": 2.0, "cut": true},
+ "nothing"]
+JSON
+# a key on disk reads locked (on a Mac canopy-server leaves it to the keychain: 501)
+printf 'wrapped\n' >"$S/seed/secrets-key.age"
+printf '{"pin": "%s=", "remote": null}\n' "$(printf 'A%.0s' $(seq 1 43))" >"$S/seed/secrets-config.json"
+mkdir -p "$S/seed/ranger" "$S/seed/worktrees"
+cat >"$S/seed/ranger/state.json" <<'JSON'
+{"session": "0123abcd-0123-0123-0123-0123456789ab", "sessionAt": 1764300000000, "exitedAt": 1764300000500, "exitCode": null, "fails": 2.0, "previous": "x", "junk": true}
+JSON
+cat >"$S/seed/ranger/wakes.json" <<'JSON'
+[{"id": "0000000a", "by": "eric", "prompt": "morning", "created": 7.0, "cron": "0 8 * * *", "next": 2.5},
+ {"id": "0000000b", "by": "run", "from": "r-12", "prompt": "look", "created": 1, "run": "r-9"},
+ {"id": "0000000c", "by": "ranger", "prompt": "at a time", "created": 1, "cron": "nope", "at": 5},
+ {"id": "nothex!!", "by": "eric", "prompt": "x", "created": 1, "at": 5},
+ {"id": "0000000d", "by": "run", "prompt": "no from", "created": 1, "run": "r-1"}]
+JSON
+cat >"$S/home/.claude/settings.json" <<'JSON'
+{"enabledPlugins": {"telegram@claude-plugins-official": true}}
+JSON
+mkdir -p "$S/root/app/.canopy"
+printf '{"gates": [{"name": "t", "run": " true "}], "warm": 2}\n' >"$S/root/app/.canopy/gates.json"
 for side in bun rs; do cp -R "$S/seed" "$S/config-$side"; done
 
 free() { "$bun" -e 'const s = Bun.serve({ port: 0, fetch: () => new Response() }); console.log(s.port); s.stop(true);'; }
@@ -123,12 +165,15 @@ sleep 5
 routes="backends tree auth runs flows fleets agents helpers verdict jobs terms client devices terms/kept
   workspaces launchers tasks tailchan history peers registry asks incubator/stages incubator/advice incubator
   ranger agents/pulse health capacity kit landing trees prs triggers people work clips notes secrets layouts
-  about worktrees voice sources"
+  about worktrees voice sources
+  clips?ids=c-dddddddd,c-bbbbbbbb,nope history?window=90d&refresh=1"
 same=0
 unported=()
 differ=()
+# a query's ? must not glob
+set -f
 for p in $routes; do
-  f=$(echo "$p" | tr / _)
+  f=$(echo "$p" | tr '/?=,&' '_____')
   for side in bun rs; do
     port=$bp
     [ $side = rs ] && port=$rp
@@ -139,7 +184,7 @@ for p in $routes; do
 import json, sys
 raw = open(sys.argv[1]).read().replace("/config-rs", "/config-bun")
 def mask(v):
-    if isinstance(v, dict): return {k: ("<runtime>" if k == "bun" else mask(x)) for k, x in v.items()}
+    if isinstance(v, dict): return {k: ("<runtime>" if k == "bun" else "<free>" if k == "free" and isinstance(x, (int, float)) and x > 0 else mask(x)) for k, x in v.items()}
     if isinstance(v, list): return [mask(x) for x in v]
     if isinstance(v, (int, float)) and not isinstance(v, bool) and 1_000_000_000_000 <= v < 10_000_000_000_000: return "<ms>"
     return v
@@ -157,6 +202,7 @@ PY
     diff "$S/bun.$f" "$S/rs.$f" | head -20 || true
   fi
 done
+set +f
 echo "same: $same"
 echo "not ported (501): ${#unported[@]} (${unported[*]})"
 if [ ${#differ[@]} -gt 0 ]; then

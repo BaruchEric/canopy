@@ -355,6 +355,7 @@ pub fn router(state: Arc<AppState>, keeper: Arc<Gatekeeper>, web: &str) -> Route
         .route("/api/sources", get(sources))
         .route("/api/events", get(events))
         .merge(first_load())
+        .merge(crate::settings_reads::routes())
         .route("/api/{*rest}", axum::routing::any(gated::fallback))
         .fallback_service(page)
         .with_state(state)
@@ -559,7 +560,7 @@ mod tests {
                 .await
                 .contains("console.log(1)")
         );
-        let other = get(addr, "/api/secrets", 1 << 14).await;
+        let other = get(addr, "/api/capacity", 1 << 14).await;
         assert!(
             other.starts_with("HTTP/1.1 501") && other.contains("not in the Rust port yet"),
             "{other}"

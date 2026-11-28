@@ -35,7 +35,7 @@ pub async fn not_ported(method: Method, uri: Uri) -> Response {
 }
 
 /// A GET handler, with every other method still the Bun server's.
-fn read<H, T>(h: H) -> MethodRouter<Arc<AppState>>
+pub(crate) fn read<H, T>(h: H) -> MethodRouter<Arc<AppState>>
 where
     H: axum::handler::Handler<T, Arc<AppState>>,
     T: 'static,
@@ -44,9 +44,9 @@ where
 }
 
 /// a config that will not read, as the Bun server's 500 says it
-type Refusal = (StatusCode, Json<Value>);
+pub(crate) type Refusal = (StatusCode, Json<Value>);
 
-async fn config(s: &AppState) -> Result<Value, Refusal> {
+pub(crate) async fn config(s: &AppState) -> Result<Value, Refusal> {
     (s.config)().map(|c| c.raw).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
