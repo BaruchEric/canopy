@@ -106,6 +106,17 @@ if [ $up = 0 ]; then
   tail -5 "$S/bun.log" "$S/rs.log" >&2
   exit 1
 fi
+# a page's stream on each, so the devices list and the people have a
+# browser on, and the repos that browser says it has open
+for port in $bp $rp; do
+  curl -sN "http://127.0.0.1:$port/api/events?client=0123456789abcdef&name=%20desk%20&platform=mac" >/dev/null 2>&1 &
+  pids+=($!)
+done
+sleep 1
+for port in $bp $rp; do
+  curl -s -o /dev/null -X POST -H 'Content-Type: application/json' \
+    -d '{"client":"0123456789abcdef","repos":["app","app","web"]}' "http://127.0.0.1:$port/api/people/at"
+done
 # the Bun server's first scan and its login-shell probe settle after the bind
 sleep 5
 

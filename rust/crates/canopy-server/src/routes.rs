@@ -1,10 +1,13 @@
 //! The read routes the page calls on its first load (src/server/index.ts),
-//! in two kinds. The config's own lists (backends, workspaces, launchers,
+//! in three kinds. The config's own lists (backends, workspaces, launchers,
 //! agent routing, kept shells, people, quick notes) are read the way the
-//! Bun server reads them. The live lists (runs, flows, fleets, jobs, shells, helpers,
-//! devices, agent pulses) are state the Bun server holds in memory for the
-//! work it runs; this port runs none yet, so they answer what a Bun server
-//! that runs nothing answers. Any other method on these paths answers 501.
+//! Bun server reads them. The devices list and where each browser is come
+//! from the pages' event streams, as they do there. The other live lists
+//! (runs, flows, fleets, jobs, helpers, agent pulses) are state the Bun
+//! server holds for the work it runs; this port runs none yet, so they
+//! answer what a Bun server that runs nothing answers. Where that answer
+//! would not be true (shells under tmux, the kept runs), the route answers
+//! 501, and so does any other method on these paths.
 
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
@@ -78,9 +81,17 @@ async fn agents(State(s): State<Arc<AppState>>) -> Result<Json<Value>, Refusal> 
 
 /// The records on disk past neither retention window and answered by no
 /// live shell (`refreshKept`). The Bun server deletes the expired records
-/// as it reads; this port leaves them, and only leaves them out.
-async fn kept(State(s): State<Arc<AppState>>) -> Result<Json<Value>, Refusal> {
-    let raw = config(&s).await?;
+/// as it reads; this port leaves them, and only leaves them out. Where tmux
+/// runs, the live shells it holds would be subtracted, and this port does
+/// not read them yet.
+async fn kept(State(s): State<Arc<AppState>>, method: Method, uri: Uri) -> Response {
+    if s.gates.tmux {
+        return not_ported(method, uri).await;
+    }
+    let raw = match config(&s).await {
+        Ok(raw) => raw,
+        Err(e) => return e.into_response(),
+    };
     let all = list_kept(&s.config_dir);
     let gone = expired_shells(&all, now_ms() as f64, KEEP_DAYS);
     let left: Vec<_> = all.into_iter().filter(|k| !gone.contains(&k.id)).collect();
@@ -89,9 +100,28 @@ async fn kept(State(s): State<Arc<AppState>>) -> Result<Json<Value>, Refusal> {
         .into_iter()
         .map(|k| k.json)
         .collect();
-    Ok(Json(
-        json!({ "keeping": flag(&raw, "keepShells", false), "kept": kept }),
-    ))
+    Json(json!({ "keeping": flag(&raw, "keepShells", false), "kept": kept })).into_response()
+}
+
+/// `GET /api/runs`: no live run here. `?kept=1` is the runs kept in the run
+/// log, which this port does not read yet.
+async fn runs(method: Method, uri: Uri) -> Response {
+    let kept = form_urlencoded::parse(uri.query().unwrap_or("").as_bytes())
+        .find(|(k, _)| k == "kept")
+        .is_some_and(|(_, v)| v == "1");
+    if kept {
+        return not_ported(method, uri).await;
+    }
+    Json(json!([])).into_response()
+}
+
+/// `GET /api/terms`: the shells. Without tmux there are none; with it they
+/// are its sessions, which this port does not list yet.
+async fn terms(State(s): State<Arc<AppState>>, method: Method, uri: Uri) -> Response {
+    if s.gates.tmux {
+        return not_ported(method, uri).await;
+    }
+    Json(json!([])).into_response()
 }
 
 /// The empty list a backend that runs nothing answers.
@@ -161,8 +191,33 @@ async fn people(
     State(s): State<Arc<AppState>>,
     caller: Option<Extension<GateCaller>>,
 ) -> Json<Value> {
-    let caller = caller.and_then(|Extension(GateCaller(c))| c);
-    Json(s.people.info(caller.as_ref(), now_ms() as f64))
+    let caller = caller.and_then(|Extension(GateCaller(c, _))| c);
+    let devices = s.presence.devices();
+    Json(s.people.info(caller.as_ref(), &devices, now_ms() as f64))
+}
+
+/// `GET /api/devices`: the browsers on the event stream now.
+async fn devices(State(s): State<Arc<AppState>>) -> Json<Value> {
+    Json(Value::from(s.presence.devices()))
+}
+
+/// `POST /api/people/at`: the repos a browser has open.
+async fn place(
+    State(s): State<Arc<AppState>>,
+    caller: Option<Extension<GateCaller>>,
+    body: axum::body::Bytes,
+) -> Response {
+    let caller = caller.and_then(|Extension(GateCaller(c, _))| c);
+    let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let devices = s.presence.devices();
+    let r = s
+        .people
+        .at(caller.as_ref(), &body, &devices, now_ms() as f64);
+    if r.publish {
+        crate::app::tell_people(&s, &devices);
+    }
+    let status = StatusCode::from_u16(r.status).unwrap_or(StatusCode::OK);
+    (status, Json(r.body)).into_response()
 }
 
 /// `GET /api/notes`: `<config>/notes.json` read back. No file is no notes,
@@ -226,13 +281,17 @@ pub fn first_load() -> Router<Arc<AppState>> {
         .route("/api/client", read(client))
         .route("/api/verdict", read(verdict))
         .route("/api/agents/pulse", read(pulse))
-        .route("/api/runs", read(none))
+        .route("/api/runs", read(runs))
         .route("/api/flows", read(none))
         .route("/api/fleets", read(none))
         .route("/api/jobs", read(none))
-        .route("/api/terms", read(none))
+        .route("/api/terms", read(terms))
         .route("/api/helpers", read(none))
-        .route("/api/devices", read(none))
+        .route("/api/devices", read(devices))
+        .route(
+            "/api/people/at",
+            axum::routing::post(place).fallback(not_ported),
+        )
 }
 
 #[cfg(test)]

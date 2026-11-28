@@ -14,6 +14,7 @@ mod gate;
 mod gated;
 mod harnesses;
 mod people;
+mod presence;
 mod routes;
 mod tree;
 

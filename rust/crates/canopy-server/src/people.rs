@@ -9,6 +9,7 @@ use canopy_auth::rights::Right;
 use canopy_auth::{AuthPeople, Caller, CallersMode, Invited};
 use canopy_core::pathx::{js_trim, js_ws};
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::SystemTime;
 
@@ -360,6 +361,49 @@ pub fn hand_refusal(actor: &Person, target: &Person) -> Option<String> {
 pub struct People {
     dir: String,
     kept: Mutex<(Option<SystemTime>, PeopleFile)>,
+    /// the repos each browser has open, by its id, as its person said
+    places: Mutex<HashMap<String, Place>>,
+}
+
+/// how long a place outlives its browser's stream, so a place said just
+/// before the stream opened is not lost
+const PLACE_WAITS: f64 = 30_000.0;
+/// the places kept at most, so a caller cannot grow the map without end
+const MOST_BROWSERS: usize = 500;
+/// the repos one place names at most (`MOST_PLACES`)
+const MOST_PLACES: usize = 12;
+
+#[derive(Debug, Clone, PartialEq)]
+struct Place {
+    person: String,
+    repos: Vec<String>,
+    said: f64,
+}
+
+/// `parsePlaces()`: repo ids, each once, at most MOST_PLACES; None when the
+/// list is not one.
+pub fn parse_places(v: &Value) -> Option<Vec<String>> {
+    let mut out: Vec<String> = vec![];
+    for x in v.as_array()? {
+        let s = x
+            .as_str()
+            .filter(|s| !s.is_empty() && s.encode_utf16().count() <= 200)?;
+        if !out.iter().any(|o| o == s) {
+            out.push(s.to_string());
+        }
+        if out.len() == MOST_PLACES {
+            break;
+        }
+    }
+    Some(out)
+}
+
+/// What `POST /api/people/at` answers: its status and body, and whether
+/// the people list moved for every page.
+pub struct PlaceReply {
+    pub status: u16,
+    pub body: Value,
+    pub publish: bool,
 }
 
 impl People {
@@ -367,6 +411,7 @@ impl People {
         People {
             dir: dir.into(),
             kept: Mutex::new((None, parse_people(&Value::Null))),
+            places: Mutex::new(HashMap::new()),
         }
     }
 
@@ -398,19 +443,39 @@ impl People {
         kept.1.clone()
     }
 
-    /// `GET /api/people`: everyone with no browser or place yet (the device
-    /// list is live state this port does not hold), the teams, and the
-    /// live invites for a caller who holds admin.
-    pub fn info(&self, caller: Option<&Caller>, now: f64) -> Value {
+    /// `info()`: every person with the browsers they have on and the repos
+    /// those have open, and the teams. `devices` is the devices list now.
+    pub fn here(&self, devices: &[Value], now: f64) -> Value {
         let file = self.file();
         let live = file.live_invites(now);
+        let places = self.places.lock().unwrap_or_else(|e| e.into_inner());
         let people: Vec<Value> = file
             .everyone()
             .iter()
             .map(|p| {
+                let mine: Vec<&Value> = devices
+                    .iter()
+                    .filter(|d| d.get("person").and_then(Value::as_str).unwrap_or(OWNER_ID) == p.id)
+                    .collect();
+                let mut at: Vec<&str> = vec![];
+                for d in &mine {
+                    let id = d["id"].as_str().unwrap_or_default();
+                    // a place counts only for the person who said it
+                    if let Some(place) = places.get(id).filter(|pl| pl.person == p.id) {
+                        for r in &place.repos {
+                            if !at.contains(&r.as_str()) {
+                                at.push(r);
+                            }
+                        }
+                    }
+                }
+                let shown: Vec<Value> = mine
+                    .iter()
+                    .map(|d| json!({ "id": d["id"], "name": d["name"], "platform": d["platform"] }))
+                    .collect();
                 let mut o = p.to_json();
-                o.insert("devices".into(), json!([]));
-                o.insert("at".into(), json!([]));
+                o.insert("devices".into(), json!(shown));
+                o.insert("at".into(), json!(at));
                 o.insert(
                     "invited".into(),
                     json!(live.iter().filter(|i| i.person == p.id).count()),
@@ -423,6 +488,91 @@ impl People {
             .iter()
             .map(|t| json!({ "id": t.id, "name": t.name, "folders": t.folders, "created": t.created }))
             .collect();
+        json!({ "people": people, "teams": teams })
+    }
+
+    /// `sawDevices()`: the devices list moved, so a place whose browser is
+    /// gone and was said long enough ago is forgotten.
+    pub fn saw_devices(&self, devices: &[Value], now: f64) {
+        let on: Vec<&str> = devices.iter().filter_map(|d| d["id"].as_str()).collect();
+        self.places
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|id, place| on.contains(&id.as_str()) || now - place.said <= PLACE_WAITS);
+    }
+
+    /// `POST /api/people/at`: the repos a browser has open, said by its own
+    /// person. One not on yet is taken at its word, and shown only once its
+    /// stream says the same person.
+    pub fn at(
+        &self,
+        caller: Option<&Caller>,
+        body: &Value,
+        devices: &[Value],
+        now: f64,
+    ) -> PlaceReply {
+        let reply = |status: u16, body: Value, publish: bool| PlaceReply {
+            status,
+            body,
+            publish,
+        };
+        let ok = || json!({ "ok": true });
+        let file = self.file();
+        let Some(actor) = file.person_of(caller.and_then(|c| c.user.as_deref())) else {
+            return reply(
+                401,
+                json!({ "error": "nobody this backend knows is calling" }),
+                false,
+            );
+        };
+        let client = body
+            .get("client")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let repos = body.get("repos").and_then(parse_places);
+        let is_client = client.len() == 16
+            && client
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        let Some(repos) = repos.filter(|_| is_client) else {
+            let error = "client is a browser's id and repos a list of repo ids";
+            return reply(400, json!({ "error": error }), false);
+        };
+        let device = devices.iter().find(|d| d["id"] == client);
+        if device.is_some_and(|d| {
+            d.get("person").and_then(Value::as_str).unwrap_or(OWNER_ID) != actor.id
+        }) {
+            return reply(200, ok(), false);
+        }
+        let mut places = self.places.lock().unwrap_or_else(|e| e.into_inner());
+        let was = places.get(client).cloned();
+        if was
+            .as_ref()
+            .is_some_and(|w| w.person == actor.id && w.repos == repos)
+        {
+            return reply(200, ok(), false);
+        }
+        if repos.is_empty() {
+            places.remove(client);
+        } else if was.is_some() || places.len() < MOST_BROWSERS {
+            places.insert(
+                client.to_string(),
+                Place {
+                    person: actor.id.clone(),
+                    repos,
+                    said: now,
+                },
+            );
+        }
+        reply(200, ok(), device.is_some())
+    }
+
+    /// `GET /api/people`: who is here, and the live invites for a caller
+    /// who holds admin.
+    pub fn info(&self, caller: Option<&Caller>, devices: &[Value], now: f64) -> Value {
+        let mut out = self.here(devices, now);
+        let file = self.file();
+        let live = file.live_invites(now);
         let me = file.person_of(caller.and_then(|c| c.user.as_deref()));
         let invites: Vec<Value> = if me.is_some_and(|m| role_allows(m.role, Right::Admin)) {
             live.iter()
@@ -431,7 +581,8 @@ impl People {
         } else {
             vec![]
         };
-        json!({ "people": people, "teams": teams, "invites": invites })
+        out["invites"] = json!(invites);
+        out
     }
 }
 
@@ -558,7 +709,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("people.json"), roster().to_string()).unwrap();
         let people = People::new(dir.path().to_str().unwrap());
-        let owner = people.info(None, 50.0);
+        let owner = people.info(None, &[], 50.0);
         assert_eq!(owner["invites"].as_array().unwrap().len(), 1);
         assert_eq!(owner["people"][1]["invited"], 1);
         assert_eq!(owner["people"][0]["name"], "Eric B");
@@ -573,13 +724,13 @@ mod tests {
             user: Some("p-cccccccc".into()),
         };
         assert!(
-            people.info(Some(&member), 50.0)["invites"]
+            people.info(Some(&member), &[], 50.0)["invites"]
                 .as_array()
                 .unwrap()
                 .is_empty()
         );
         assert!(
-            people.info(None, 200.0)["invites"]
+            people.info(None, &[], 200.0)["invites"]
                 .as_array()
                 .unwrap()
                 .is_empty()

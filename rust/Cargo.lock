@@ -167,6 +167,7 @@ dependencies = [
  "axum",
  "canopy-auth",
  "canopy-core",
+ "form_urlencoded",
  "futures-util",
  "serde",
  "serde_json",

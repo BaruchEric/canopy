@@ -1,9 +1,10 @@
 //! The router and its state, apart from `main` so tests can serve it.
 
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
+use axum::http::Uri;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use canopy_core::scan::{DEFAULT_IGNORE, ScanOptions};
 use canopy_core::store::{CanopyConfig, load_config};
 use canopy_core::types::{LAUNCH_SOURCE, ScanResult, now_ms};
@@ -11,16 +12,19 @@ use canopy_core::version::{canopy_dir, read_build};
 use futures_util::stream::{self, Stream, StreamExt};
 use serde_json::{Value, json};
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{RwLock, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::services::{ServeDir, ServeFile};
 
-use crate::gate::{self, Gatekeeper};
+use crate::gate::{self, GateCaller, Gatekeeper};
 use crate::gated::{self, Gates};
 use crate::harnesses::backend_caps;
 use crate::people::People;
+use crate::presence::{Presence, TELL_AFTER, parse_stream};
+use crate::routes::client_key;
 use crate::routes::first_load;
 use crate::tree::build_tree;
 
@@ -59,6 +63,8 @@ pub struct AppState {
     /// client as its address (Linux only)
     pub gateway: Option<String>,
     pub gates: Gates,
+    /// the pages' event streams and the browsers they say they are
+    pub presence: Presence,
 }
 
 /// The config as the Bun server reads it.
@@ -156,6 +162,7 @@ impl AppState {
             people: s.people,
             gateway: default_gateway(),
             gates: s.gates,
+            presence: Presence::default(),
         })
     }
 
@@ -252,14 +259,87 @@ async fn sources(State(s): State<Arc<AppState>>) -> Json<Value> {
     Json(serde_json::to_value(&s.result.read().await.sources).unwrap_or(Value::Null))
 }
 
+/// The people list as every page gets it (`publish()`): `{ type, people, teams }`.
+pub fn tell_people(s: &AppState, devices: &[Value]) {
+    let here = s.people.here(devices, now_ms() as f64);
+    let mut frame = serde_json::Map::new();
+    frame.insert("type".into(), json!("people"));
+    if let Value::Object(m) = here {
+        frame.extend(m);
+    }
+    let _ = s.events.send(Value::Object(frame).to_string());
+}
+
+/// `tellDevices()`: the devices list and then the people, to every stream,
+/// once no other open or close has come for 300 ms.
+pub fn tell_devices(s: &Arc<AppState>) {
+    let ticket = s.presence.changed();
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    let s = s.clone();
+    rt.spawn(async move {
+        tokio::time::sleep(TELL_AFTER).await;
+        if !s.presence.latest(ticket) {
+            return;
+        }
+        let devices = s.presence.devices();
+        let _ = s
+            .events
+            .send(json!({ "type": "devices", "devices": &devices }).to_string());
+        s.people.saw_devices(&devices, now_ms() as f64);
+        tell_people(&s, &devices);
+    });
+}
+
+/// A stream's browser, let go when the stream is.
+struct Closer {
+    state: Arc<AppState>,
+    key: Option<u64>,
+}
+
+impl Drop for Closer {
+    fn drop(&mut self) {
+        if let Some(k) = self.key
+            && self.state.presence.close(k)
+        {
+            tell_devices(&self.state);
+        }
+    }
+}
+
 /// `: hello`, then every frame the server broadcasts, with a named `ping`
-/// whenever the stream has been quiet for 25 seconds.
+/// whenever the stream has been quiet for 25 seconds. A stream whose query
+/// names its browser puts it on the devices list while it is open.
 async fn events(
     State(s): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    caller: Option<Extension<GateCaller>>,
+    uri: Uri,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let hello = stream::once(async { Ok(Event::default().comment("hello")) });
-    let frames = BroadcastStream::new(s.events.subscribe())
-        .filter_map(|f| async move { f.ok().map(|data| Ok(Event::default().data(data))) });
+    // subscribed before the browser is told, so this stream hears it too
+    let rx = s.events.subscribe();
+    let address = client_key(&peer.ip().to_string());
+    let opened =
+        parse_stream(uri.query().unwrap_or(""), &address, now_ms() as f64).map(|mut st| {
+            if let Some(Extension(GateCaller(c, mode))) = &caller {
+                st.person =
+                    canopy_auth::AuthPeople::me(&*s.people, c.as_ref(), *mode).map(|m| m.id);
+            }
+            s.presence.open(st)
+        });
+    if opened.is_some() {
+        tell_devices(&s);
+    }
+    let closer = Closer {
+        state: s.clone(),
+        key: opened,
+    };
+    let frames = BroadcastStream::new(rx).filter_map(move |f| {
+        let _held = &closer;
+        async move { f.ok().map(|data| Ok(Event::default().data(data))) }
+    });
     Sse::new(hello.chain(frames)).keep_alive(
         KeepAlive::new()
             .interval(PING_EVERY)
@@ -298,6 +378,15 @@ mod tests {
     /// A server on a scratch root, page and callers book, with the gate in
     /// `mode` and nothing read from the environment.
     async fn serve(mode: CallersMode, origins: &[&str]) -> Served {
+        let off = Gates {
+            tmux: false,
+            chan: false,
+            voice: false,
+        };
+        serve_with(mode, origins, off).await
+    }
+
+    async fn serve_with(mode: CallersMode, origins: &[&str], gates: Gates) -> Served {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("a/repo/.git")).unwrap();
         let web = tempfile::tempdir().unwrap();
@@ -319,11 +408,7 @@ mod tests {
                 config: Box::new(|| Ok(CanopyConfig::default())),
                 harnesses: Box::new(|| vec!["claude"]),
                 people: Arc::new(People::new(&config_dir)),
-                gates: Gates {
-                    tmux: false,
-                    chan: false,
-                    voice: false,
-                },
+                gates,
             })
             .await
             .unwrap(),
@@ -385,6 +470,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_stream_that_names_its_browser_is_on_the_devices_list_while_open() {
+        let s = serve(CallersMode::Log, &[]).await;
+        let addr = s.addr.clone();
+        let mut sse = tokio::net::TcpStream::connect(&addr).await.unwrap();
+        let open = format!(
+            "GET /api/events?client=0123456789abcdef&name=desk&platform=mac HTTP/1.1\r\nHost: {addr}\r\n\r\n"
+        );
+        sse.write_all(open.as_bytes()).await.unwrap();
+        // the stream hears the devices list once the change has settled
+        let mut heard = String::new();
+        let mut buf = [0u8; 4096];
+        while !heard.contains(r#""type":"people""#) {
+            match tokio::time::timeout(std::time::Duration::from_secs(3), sse.read(&mut buf)).await
+            {
+                Ok(Ok(n)) if n > 0 => heard.push_str(&String::from_utf8_lossy(&buf[..n])),
+                _ => panic!("no devices frame: {heard}"),
+            }
+        }
+        assert!(heard.contains(r#"data: {"type":"devices","devices":[{"id":"0123456789abcdef","name":"desk","platform":"mac","address":"127.0.0.1""#), "{heard}");
+        let devices = body(&get(&addr, "/api/devices", 1 << 14).await);
+        assert_eq!(devices[0]["person"], "owner");
+        assert_eq!(devices[0]["streams"], 1);
+        // its person says which repos it has open
+        let said = r#"{"client":"0123456789abcdef","repos":["a/repo","a/repo","b"]}"#;
+        let len = format!("Content-Length: {}", said.len());
+        let mut post = tokio::net::TcpStream::connect(&addr).await.unwrap();
+        let raw = format!(
+            "POST /api/people/at HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Type: application/json\r\n{len}\r\n\r\n{said}"
+        );
+        post.write_all(raw.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        post.read_to_string(&mut answer).await.unwrap();
+        assert!(
+            answer.starts_with("HTTP/1.1 200") && answer.contains(r#"{"ok":true}"#),
+            "{answer}"
+        );
+        let people = body(&get(&addr, "/api/people", 1 << 14).await);
+        assert_eq!(
+            people["people"][0]["devices"],
+            json!([{ "id": "0123456789abcdef", "name": "desk", "platform": "mac" }])
+        );
+        assert_eq!(people["people"][0]["at"], json!(["a/repo", "b"]));
+        drop(sse);
+        let mut gone = false;
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            if body(&get(&addr, "/api/devices", 1 << 14).await) == json!([]) {
+                gone = true;
+                break;
+            }
+        }
+        assert!(gone, "the device outlived its stream");
+        let bad = r#"{"client":"nope","repos":[]}"#;
+        let len = format!("Content-Length: {}", bad.len());
+        let mut post = tokio::net::TcpStream::connect(&addr).await.unwrap();
+        let raw = format!(
+            "POST /api/people/at HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Type: application/json\r\n{len}\r\n\r\n{bad}"
+        );
+        post.write_all(raw.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        post.read_to_string(&mut answer).await.unwrap();
+        assert!(answer.starts_with("HTTP/1.1 400"), "{answer}");
+    }
+
+    #[tokio::test]
     async fn serves_the_page_the_tree_and_the_stream() {
         let s = serve(CallersMode::Log, &[]).await;
         let addr = s.addr.as_str();
@@ -428,6 +578,23 @@ mod tests {
     fn body(reply: &str) -> serde_json::Value {
         let (_, b) = reply.split_once("\r\n\r\n").unwrap_or(("", ""));
         serde_json::from_str(b).unwrap_or_else(|e| panic!("{e}: {reply}"))
+    }
+
+    #[tokio::test]
+    async fn what_this_port_cannot_read_yet_answers_501_not_an_empty_list() {
+        let tmux = Gates {
+            tmux: true,
+            chan: false,
+            voice: false,
+        };
+        let s = serve_with(CallersMode::Log, &[], tmux).await;
+        let addr = s.addr.as_str();
+        for path in ["/api/terms", "/api/terms/kept", "/api/runs?kept=1"] {
+            let r = get(addr, path, 1 << 14).await;
+            assert!(r.starts_with("HTTP/1.1 501"), "{path}: {r}");
+        }
+        let r = get(addr, "/api/runs?kept=0", 1 << 14).await;
+        assert!(r.starts_with("HTTP/1.1 200"), "{r}");
     }
 
     #[tokio::test]

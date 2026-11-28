@@ -33,9 +33,10 @@ pub struct Gatekeeper {
     pub people: Option<Arc<People>>,
 }
 
-/// The caller the gate found, handed to the routes behind it.
+/// The caller the gate found and the mode it checked in, handed to the
+/// routes behind it.
 #[derive(Debug, Clone)]
-pub struct GateCaller(pub Option<Caller>);
+pub struct GateCaller(pub Option<Caller>, pub canopy_auth::CallersMode);
 
 impl Gatekeeper {
     /// The gate as the environment sets it, over the book at `book`.
@@ -169,7 +170,8 @@ pub async fn check(
         ));
     }
     let mut req = req;
-    req.extensions_mut().insert(GateCaller(caller.clone()));
+    req.extensions_mut()
+        .insert(GateCaller(caller.clone(), keeper.gate.mode));
     let mut res = if path == "/api/auth" || path.starts_with("/api/auth/") {
         let (parts, body) = req.into_parts();
         let Ok(bytes) = to_bytes(body, AUTH_BODY_MAX).await else {
