@@ -2,10 +2,16 @@
 //! docs/rust-port.md for what is ported and what is not yet). No HTTP here;
 //! the server and the CLI crates sit on top.
 
+pub mod backendid;
+pub mod cards;
+pub mod costs;
+pub mod costsheet;
 pub mod exec;
 pub mod git;
 pub mod gitwrite;
 pub mod group;
+pub mod harnessshare;
+pub mod historymerge;
 pub mod host;
 pub mod js;
 pub mod landing;

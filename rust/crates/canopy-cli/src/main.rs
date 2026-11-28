@@ -3,8 +3,9 @@
 //! It answers `canopy [dir]`, `canopy tree`, `canopy status`, `canopy
 //! version`, `canopy commit`, `canopy push` and `canopy pull` itself, the
 //! backend verbs `note`, `awake`, `issues`, `pr`, `prs`, `scenarios`,
-//! `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `queue` and
-//! `collisions` over HTTP (`HTTP_VERBS`), and every verb's `--help`, with
+//! `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `queue`,
+//! `collisions`, `capacity`, `costs` and `plugins` over HTTP
+//! (`HTTP_VERBS`), and every verb's `--help`, with
 //! output byte for byte the TypeScript CLI's.
 //! `--token` is read for every verb, as index.ts reads it. Every other
 //! verb, and a local verb with a flag the port does not read yet
@@ -16,6 +17,8 @@
 mod api;
 mod ask;
 mod awake;
+mod capacity;
+mod costs;
 mod groups;
 mod help;
 mod issues;
@@ -25,6 +28,7 @@ mod land;
 mod loadouts;
 mod notes;
 mod out;
+mod plugins;
 mod prs;
 mod scenarios;
 mod sweep;
@@ -165,6 +169,9 @@ const HTTP_VERBS: &[&str] = &[
     "land",
     "queue",
     "collisions",
+    "capacity",
+    "costs",
+    "plugins",
 ];
 
 /// `flag()` in index.ts: take a bare flag out of the arguments.
@@ -452,6 +459,21 @@ async fn http_verb(
                 .unwrap_or_else(|_| ".".into());
             work::work_cmd(rest, &caller, &client, &mut o, &cwd).await
         }
+        "capacity" => {
+            let tz = jiff::tz::TimeZone::system();
+            capacity::capacity_cmd(
+                rest,
+                &caller,
+                &client,
+                &mut o,
+                now_ms() as f64,
+                &tz,
+                use_color(),
+            )
+            .await
+        }
+        "costs" => costs::costs_cmd(rest, &caller, &client, &mut o, use_color()).await,
+        "plugins" => plugins::plugins_cmd(rest, &caller, &client, &mut o).await,
         _ => land::land_cmd(verb, rest, &caller, &client, &mut o).await,
     };
     finish_out(o, r)
@@ -663,8 +685,18 @@ mod tests {
                 "{verb}"
             );
         }
-        for verb in ["run", "runs", "capacity", "secrets", "people"] {
+        for verb in ["run", "runs", "secrets", "people"] {
             assert_eq!(plan(&args(&[verb])), Plan::Delegate, "{verb}");
+        }
+    }
+
+    #[test]
+    fn capacity_costs_and_plugins_run_here() {
+        for verb in ["capacity", "costs", "plugins"] {
+            assert!(
+                matches!(plan(&args(&[verb])), Plan::Http { verb: v, .. } if v == verb),
+                "{verb}"
+            );
         }
     }
 
