@@ -2,7 +2,8 @@
  * Writes the fixtures canopy-auth's Rust tests check against, from the TS
  * modules themselves: the route table (`needs`, `normalPath`), the origin
  * gate, and a callers.json minted by the TS CallerBook with the tokens that
- * open it. Run from the scratch dir: bun gen-fixtures.ts <src root> <out dir>
+ * open it. From the repo root:
+ *   bun rust/crates/canopy-auth/scripts/gen-fixtures.ts src rust/crates/canopy-auth/tests/fixtures
  */
 import { mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
