@@ -4,10 +4,8 @@
 //! over the HTTP API.
 
 use crate::api::Caller;
-use crate::ask::{AskError, Target, did_not_answer, form_query, has, take};
-use crate::mapsection::{
-    AskText, Clock, ago_ms, is_there, pretty, repo_id, selected_target, write_page,
-};
+use crate::ask::{Ask, AskError, Target, did_not_answer, form_query, has, take};
+use crate::mapsection::{Clock, ago_ms, is_there, pretty, repo_id, selected_target, write_page};
 use crate::out::Out;
 use canopy_core::diagnosis::{
     DIAGNOSIS_LANGUAGES, DIAGNOSIS_PAGE, DIAGNOSIS_PATH, changes_line, diagnosis_failure,
@@ -170,7 +168,7 @@ const WAIT_MS: f64 = 16.0 * 60_000.0;
 pub(crate) async fn diagnosis_cmd(
     argv: Vec<String>,
     caller: &Caller,
-    ask: &impl AskText,
+    ask: &impl Ask,
     out: &mut Out,
     cwd: &str,
     clock: &Clock<'_>,
@@ -269,7 +267,7 @@ pub(crate) async fn diagnosis_cmd(
 }
 
 /// The route's read of the diagnosis.
-async fn read(ask: &impl AskText, target: &Target, path: &str) -> Result<Value, AskError> {
+async fn read(ask: &impl Ask, target: &Target, path: &str) -> Result<Value, AskError> {
     ask.ask_within(target, "GET", path, None, Duration::from_millis(30_000))
         .await
 }

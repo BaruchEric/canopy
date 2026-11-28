@@ -9,7 +9,7 @@ use crate::api::Caller;
 use crate::ask::{Ask, Target, backend_targets, did_not_answer, has, shift, take};
 use crate::out::Out;
 use canopy_core::js::{field, list_at, num_at, str_at, template};
-use canopy_core::pathx::{js_trim, pad_end};
+use canopy_core::pathx::pad_end;
 use canopy_core::store::js_number;
 use jiff::Timestamp;
 use jiff::civil::Weekday;
@@ -28,60 +28,12 @@ pub const CAPACITY_USAGE: &str = "usage: canopy capacity [--json] [--on NAME] [-
 /// `HIT_GRACE` in core/capacity.ts: how long a hit stands past its reset.
 const HIT_GRACE: f64 = 2.0 * 60_000.0;
 
-/// The tones a harness's line takes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tone {
-    Moss,
-    Lichen,
-    Rust,
-}
+/// The tones a harness's line takes (moss, lichen or rust) and the palette
+/// that paints them, render.ts's.
+pub use crate::render::Paint as Palette;
+pub use canopy_core::treelines::Tone;
 
-/// render.ts's palette, on when stdout is a terminal and NO_COLOR is unset.
-#[derive(Debug, Clone, Copy)]
-pub struct Palette {
-    pub color: bool,
-}
-
-impl Palette {
-    fn rgb(&self, (r, g, b): (u8, u8, u8), s: &str) -> String {
-        if self.color {
-            format!("\x1b[38;2;{r};{g};{b}m{s}\x1b[0m")
-        } else {
-            s.to_string()
-        }
-    }
-
-    /// `paintTone()`: rust, lichen or moss.
-    pub fn tone(&self, tone: Tone, s: &str) -> String {
-        match tone {
-            Tone::Moss => self.rgb((147, 201, 139), s),
-            Tone::Lichen => self.rgb((217, 179, 107), s),
-            Tone::Rust => self.rgb((201, 123, 95), s),
-        }
-    }
-
-    fn dim(&self, s: &str) -> String {
-        if self.color {
-            format!("\x1b[2m{s}\x1b[0m")
-        } else {
-            s.to_string()
-        }
-    }
-
-    fn bold(&self, s: &str) -> String {
-        if self.color {
-            format!("\x1b[1m{s}\x1b[0m")
-        } else {
-            s.to_string()
-        }
-    }
-}
-
-/// `Math.round()`: the nearer whole number, a half toward +∞.
-fn round(x: f64) -> f64 {
-    let f = x.floor();
-    if x - f >= 0.5 { f + 1.0 } else { f }
-}
+use canopy_core::js::round;
 
 /// `pct()`: "32%".
 fn pct(share: f64) -> String {
@@ -245,76 +197,9 @@ pub fn capacity_lines(
     out
 }
 
-/// `Number(s)` for a word on the command line: JavaScript's whitespace
-/// trimmed, empty is 0, Infinity and the 0x, 0o and 0b forms read, and
-/// anything else that is not a decimal NaN.
-pub(crate) fn js_number_of(s: &str) -> f64 {
-    let t = js_trim(s);
-    if t.is_empty() {
-        return 0.0;
-    }
-    match t {
-        "Infinity" | "+Infinity" => return f64::INFINITY,
-        "-Infinity" => return f64::NEG_INFINITY,
-        _ => {}
-    }
-    for (prefix, radix) in [
-        ("0x", 16),
-        ("0X", 16),
-        ("0o", 8),
-        ("0O", 8),
-        ("0b", 2),
-        ("0B", 2),
-    ] {
-        if let Some(rest) = t.strip_prefix(prefix) {
-            if rest.is_empty() || !rest.chars().all(|c| c.is_digit(radix)) {
-                return f64::NAN;
-            }
-            return rest.chars().fold(0.0, |n, c| {
-                n * f64::from(radix) + f64::from(c.to_digit(radix).unwrap_or(0))
-            });
-        }
-    }
-    let b = t.as_bytes();
-    let mut i = usize::from(matches!(b.first(), Some(b'+' | b'-')));
-    let digits = |i: &mut usize| {
-        let start = *i;
-        while *i < b.len() && b[*i].is_ascii_digit() {
-            *i += 1;
-        }
-        *i - start
-    };
-    let mut seen = digits(&mut i);
-    if i < b.len() && b[i] == b'.' {
-        i += 1;
-        seen += digits(&mut i);
-    }
-    if seen == 0 {
-        return f64::NAN;
-    }
-    if i < b.len() && matches!(b[i], b'e' | b'E') {
-        i += 1;
-        if i < b.len() && matches!(b[i], b'+' | b'-') {
-            i += 1;
-        }
-        if digits(&mut i) == 0 {
-            return f64::NAN;
-        }
-    }
-    if i != b.len() {
-        return f64::NAN;
-    }
-    t.parse::<f64>().unwrap_or(f64::NAN)
-}
+pub(crate) use canopy_core::js::number_of as js_number_of;
 
-/// A number as JSON.stringify writes it: a whole one with no point.
-fn json_number(n: f64) -> Value {
-    if n.fract() == 0.0 && n.abs() < 9_007_199_254_740_992.0 {
-        json!(n as i64)
-    } else {
-        serde_json::Number::from_f64(n).map_or(Value::Null, Value::Number)
-    }
-}
+use canopy_core::js::num as json_number;
 
 /// `holdArg()`: a hold as written on the command line, 0.7 or 70%.
 pub fn hold_arg(v: &str) -> Option<f64> {
@@ -365,10 +250,7 @@ pub fn parse_set_args(argv: &[String]) -> Result<Value, String> {
     Ok(Value::Object(patch))
 }
 
-/// `JSON.stringify(v, null, 2)`.
-fn pretty(v: &Value) -> String {
-    serde_json::to_string_pretty(v).unwrap_or_default()
-}
+use canopy_core::js::pretty;
 
 /// `capacityCommand()`.
 #[allow(clippy::too_many_arguments)]

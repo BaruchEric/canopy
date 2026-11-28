@@ -4,9 +4,9 @@
 //! API.
 
 use crate::api::Caller;
-use crate::ask::{did_not_answer, form_query, has, take};
+use crate::ask::{Ask, did_not_answer, form_query, has, take};
 use crate::mapsection::{
-    AskText, Clock, ago_ms, is_there, pretty, repo_id, selected_target, started_line, write_page,
+    Clock, ago_ms, is_there, pretty, repo_id, selected_target, started_line, write_page,
 };
 use crate::out::Out;
 use canopy_core::archify::{
@@ -181,7 +181,7 @@ pub fn archify_lines(info: &Value, now: f64) -> Vec<String> {
 pub(crate) async fn archify_cmd(
     argv: Vec<String>,
     caller: &Caller,
-    ask: &impl AskText,
+    ask: &impl Ask,
     out: &mut Out,
     cwd: &str,
     clock: &Clock<'_>,

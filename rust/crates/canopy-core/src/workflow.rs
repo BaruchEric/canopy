@@ -89,60 +89,9 @@ const DEFAULT_TURNS: f64 = 30.0;
 const MAX_RETRIES: f64 = 10.0;
 const MAX_CHECK_MINUTES: f64 = 120.0;
 
-/// `Number(s)` for a string, as JavaScript reads it: whitespace around it,
-/// empty as 0, hex, octal and binary, Infinity, an exponent; NaN for the
-/// rest.
+/// `Number(s)` (`js::number_of`).
 pub fn to_number(s: &str) -> f64 {
-    let t = js_trim(s);
-    if t.is_empty() {
-        return 0.0;
-    }
-    for (prefix, radix) in [
-        ("0x", 16),
-        ("0X", 16),
-        ("0o", 8),
-        ("0O", 8),
-        ("0b", 2),
-        ("0B", 2),
-    ] {
-        if let Some(digits) = t.strip_prefix(prefix) {
-            if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
-                return f64::NAN;
-            }
-            return digits.chars().fold(0.0, |n, c| {
-                n * f64::from(radix) + f64::from(c.to_digit(radix).unwrap_or(0))
-            });
-        }
-    }
-    let unsigned = t.strip_prefix(['+', '-']).unwrap_or(t);
-    if unsigned == "Infinity" {
-        return if t.starts_with('-') {
-            f64::NEG_INFINITY
-        } else {
-            f64::INFINITY
-        };
-    }
-    // digits with an optional point, or a point and digits, then an optional exponent
-    let (mantissa, exponent) = match unsigned.find(['e', 'E']) {
-        Some(i) => (&unsigned[..i], Some(&unsigned[i + 1..])),
-        None => (unsigned, None),
-    };
-    let (whole, frac) = match mantissa.split_once('.') {
-        Some((w, f)) => (w, Some(f)),
-        None => (mantissa, None),
-    };
-    let digits = |d: &str| d.chars().all(|c| c.is_ascii_digit());
-    let mantissa_ok = digits(whole)
-        && frac.is_none_or(digits)
-        && !(whole.is_empty() && frac.is_none_or(str::is_empty));
-    let exponent_ok = exponent.is_none_or(|e| {
-        let e = e.strip_prefix(['+', '-']).unwrap_or(e);
-        !e.is_empty() && digits(e)
-    });
-    if !mantissa_ok || !exponent_ok {
-        return f64::NAN;
-    }
-    t.parse().unwrap_or(f64::NAN)
+    crate::js::number_of(s)
 }
 
 /// `Number.isInteger(n)`.
@@ -150,15 +99,7 @@ fn is_integer(n: f64) -> bool {
     n.is_finite() && n.trunc() == n
 }
 
-/// A number as JSON holds it: a whole one without a point, as
-/// JSON.stringify writes it.
-fn num(n: f64) -> Value {
-    if is_integer(n) && n.abs() < 9_007_199_254_740_992.0 {
-        json!(n as i64)
-    } else {
-        json!(n)
-    }
-}
+use crate::js::num;
 
 /// A file a workflow cannot be read from, and why (`Bad`).
 type Bad = String;

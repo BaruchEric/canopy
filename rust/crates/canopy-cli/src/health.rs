@@ -48,51 +48,13 @@ const KIND_FLAGS: [(&str, &str); 5] = [
     ("--command", "command"),
 ];
 
-/// render.ts's palette, on when stdout is a terminal and NO_COLOR is not
-/// set (main.rs decides).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Paint {
-    pub color: bool,
-}
-
-impl Paint {
-    fn rgb(&self, (r, g, b): (u8, u8, u8), s: &str) -> String {
-        if self.color {
-            format!("\x1b[38;2;{r};{g};{b}m{s}\x1b[0m")
-        } else {
-            s.to_string()
-        }
-    }
-    fn moss(&self, s: &str) -> String {
-        self.rgb((147, 201, 139), s)
-    }
-    fn lichen(&self, s: &str) -> String {
-        self.rgb((217, 179, 107), s)
-    }
-    fn rust(&self, s: &str) -> String {
-        self.rgb((201, 123, 95), s)
-    }
-    fn dim(&self, s: &str) -> String {
-        if self.color {
-            format!("\x1b[2m{s}\x1b[0m")
-        } else {
-            s.to_string()
-        }
-    }
-    fn bold(&self, s: &str) -> String {
-        if self.color {
-            format!("\x1b[1m{s}\x1b[0m")
-        } else {
-            s.to_string()
-        }
-    }
-}
+pub use crate::render::Paint;
 
 /// `Number(v)` as JSON keeps it: a number JSON cannot hold (NaN, Infinity)
 /// as null, which every rule of `normalizeCheck` refuses as it refuses
 /// those.
 fn num(v: &str) -> Value {
-    let n = canopy_core::workflow::to_number(v);
+    let n = canopy_core::js::number_of(v);
     if !n.is_finite() {
         Value::Null
     } else if n.trunc() == n && n.abs() < 9_007_199_254_740_992.0 {
@@ -522,9 +484,7 @@ async fn repo_info(
     call(ask, t, method, &path, body).await
 }
 
-fn pretty(v: &Value) -> String {
-    serde_json::to_string_pretty(v).unwrap_or_default()
-}
+use canopy_core::js::pretty;
 
 /// What `health_cmd` needs beyond the backend: the palette, the clock, and
 /// where watch's lines go as they come.
@@ -739,7 +699,7 @@ pub(crate) async fn health_cmd(
                     } else {
                         String::new()
                     };
-                    follow(ask, caller, t, &f, prefix, p, env.live)
+                    follow(ask, t, &f, prefix, p, env.live)
                 })
                 .collect();
             join_all(follows).await;
@@ -889,7 +849,6 @@ fn locale_time() -> String {
 /// or never opens.
 fn follow<'a>(
     ask: &'a impl Ask,
-    caller: &'a Caller,
     t: &'a Target,
     f: &'a ListFilter,
     prefix: String,
@@ -912,19 +871,18 @@ fn follow<'a>(
             say(format!("{prefix}{}", check_line(c, p)));
         }
         let mut last = by_id(&first);
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let Ok(http) = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-        else {
+        // a fake backend has no network, so no stream
+        let Some(client) = ask.client() else {
             say(format!("{prefix}{}", p.rust("no event stream")));
             return;
         };
         for url in &t.urls {
-            let mut req = http.get(format!("{url}/api/events"));
-            if let Some(token) = caller.caller_token(url, None) {
-                req = req.header("x-canopy-token", token);
-            }
+            let req = client.request(
+                reqwest::Method::GET,
+                url,
+                &format!("{url}/api/events"),
+                None,
+            );
             let Ok(mut res) = req.send().await else {
                 continue;
             };

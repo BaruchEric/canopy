@@ -17,7 +17,6 @@ use canopy_core::fr::{
 use canopy_core::pathx::{join, js_trim, js_ws};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::io::IsTerminal;
 
 /// `FR_USAGE`.
 pub const FR_USAGE: &str = "usage: canopy fr [list] [--all] [--json] [-C dir]
@@ -604,41 +603,21 @@ pub fn fr_check(root: &str) -> Vec<u64> {
     }
 }
 
+#[cfg(test)]
 const MINUTE: i64 = 60_000;
+#[cfg(test)]
 const HOUR: i64 = 60 * MINUTE;
+#[cfg(test)]
 const DAY: i64 = 24 * HOUR;
 
-/// `ageWord()` in cli/worktrees.ts: "2h", "3d", "5m", "now". A private copy
-/// until worktrees.ts is ported.
+/// `ageWord()` in cli/worktrees.ts, on a whole number of milliseconds.
 fn age_word(ms: i64) -> String {
-    let age = ms.max(0);
-    if age < MINUTE {
-        "now".into()
-    } else if age < HOUR {
-        format!("{}m", age / MINUTE)
-    } else if age < DAY {
-        format!("{}h", age / HOUR)
-    } else {
-        format!("{}d", age / DAY)
-    }
+    crate::worktrees::age_word(ms as f64)
 }
 
-/// `JSON.stringify(v, null, 2)`.
-fn pretty<T: Serialize>(v: &T) -> String {
-    serde_json::to_string_pretty(v).unwrap_or_default()
-}
+use canopy_core::js::pretty;
 
-/// `console.error(s)`: Bun paints it red when stderr is a terminal and
-/// NO_COLOR is unset or empty.
-fn say_err(s: &str) {
-    let red =
-        std::io::stderr().is_terminal() && std::env::var("NO_COLOR").map_or(true, |v| v.is_empty());
-    if red {
-        eprintln!("\x1b[0m\x1b[31m{s}\x1b[0m");
-    } else {
-        eprintln!("{s}");
-    }
-}
+use crate::render::say_err;
 
 /// `frCommand()`: `cwd` is the shell's folder, `env` stands for
 /// process.env, `now` for Date.now().

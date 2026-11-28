@@ -9,14 +9,14 @@ use crate::jsdate::locale_string;
 use crate::out::Out;
 use canopy_core::js::{field, list_at, num_at, str_at, truthy_at};
 use canopy_core::pathx::{js_len, js_trim, pad_end};
-use canopy_core::people::{ROLES, find_person, find_team, is_role, role_words};
+use canopy_core::people::{ROLES, find_person, find_team, is_role, role_names};
 use serde_json::{Map, Value, json};
 
 /// `PEOPLE_USAGE`.
 pub fn people_usage() -> String {
     let roles: Vec<String> = ROLES
         .iter()
-        .map(|r| format!("{r} ({})", role_words(r)))
+        .map(|r| format!("{r} ({})", r.words()))
         .collect();
     [
         "usage: canopy people [list] [--backend URL]",
@@ -224,59 +224,9 @@ pub fn invite_words(
     ]
 }
 
-/// JavaScript's `Number(s)`: whitespace trimmed, empty is 0, hex, octal and
-/// binary with their prefixes, Infinity, else a decimal or NaN.
-fn js_to_number(s: &str) -> f64 {
-    let t = js_trim(s);
-    if t.is_empty() {
-        return 0.0;
-    }
-    let radix = |p: &str, r: u32| {
-        t.strip_prefix(p)
-            .or_else(|| t.strip_prefix(&p.to_uppercase()))
-            .map(|d| {
-                if d.is_empty() || !d.chars().all(|c| c.is_digit(r)) {
-                    f64::NAN
-                } else {
-                    d.chars().fold(0.0, |n, c| {
-                        n * f64::from(r) + f64::from(c.to_digit(r).unwrap_or(0))
-                    })
-                }
-            })
-    };
-    if let Some(n) = radix("0x", 16)
-        .or_else(|| radix("0o", 8))
-        .or_else(|| radix("0b", 2))
-    {
-        return n;
-    }
-    match t.trim_start_matches(['+', '-']) {
-        "Infinity" if t.len() - "Infinity".len() <= 1 => {
-            return if t.starts_with('-') {
-                f64::NEG_INFINITY
-            } else {
-                f64::INFINITY
-            };
-        }
-        _ => {}
-    }
-    let ok = t
-        .bytes()
-        .all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E'));
-    if !ok {
-        return f64::NAN;
-    }
-    t.parse::<f64>().unwrap_or(f64::NAN)
-}
+pub(crate) use canopy_core::js::number_of as js_to_number;
 
-/// A number as `JSON.stringify` writes it: a whole one without a point.
-fn json_number(n: f64) -> Value {
-    if n.fract() == 0.0 && n.abs() < 9_007_199_254_740_992.0 {
-        json!(n as i64)
-    } else {
-        json!(n)
-    }
-}
+use canopy_core::js::num as json_number;
 
 /// `fail(errText(err))`.
 fn failed(e: AskError) -> String {
@@ -382,7 +332,7 @@ pub(crate) async fn people_cmd(
                 return Err(people_usage());
             }
             if !is_role(&role) {
-                return Err(format!("--role is one of {}", ROLES.join(", ")));
+                return Err(format!("--role is one of {}", role_names(", ")));
             }
             let mut ids: Vec<Value> = Vec::new();
             if !teams.is_empty() {
@@ -467,7 +417,7 @@ pub(crate) async fn people_cmd(
             let info = roster().await?;
             let p = person(&info, Some(&r))?;
             if verb == "role" && !is_role(&value) {
-                return Err(format!("a role is one of {}", ROLES.join(", ")));
+                return Err(format!("a role is one of {}", role_names(", ")));
             }
             let mut body = json!({ "id": p.get("id").cloned().unwrap_or(Value::Null) });
             match verb {

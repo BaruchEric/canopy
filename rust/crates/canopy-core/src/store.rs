@@ -86,14 +86,9 @@ pub fn load_config() -> std::io::Result<CanopyConfig> {
     }
 }
 
-/// A number as JavaScript's `String(n)` prints it, for the few places a
-/// config number lands in an argv.
+/// A number as JavaScript's `String(n)` prints it (`js::number_string`).
 pub fn js_number(n: f64) -> String {
-    if n.fract() == 0.0 && n.abs() < 1e21 {
-        format!("{}", n as i64)
-    } else {
-        format!("{n}")
-    }
+    crate::js::number_string(n)
 }
 
 /* ---------- the config's other fields, read from `raw` as `normalize` does ---------- */
