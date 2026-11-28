@@ -156,6 +156,15 @@ pub fn js_ws(c: char) -> bool {
     (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}'
 }
 
+/// `/^https?:\/\/[^/\s]+$/`: a bare http(s) origin, `\s` as JavaScript
+/// reads it. The CLI's verbs and a tenant's origins test against this one.
+pub fn is_bare_origin(s: &str) -> bool {
+    let rest = s
+        .strip_prefix("http://")
+        .or_else(|| s.strip_prefix("https://"));
+    rest.is_some_and(|r| !r.is_empty() && !r.chars().any(|c| c == '/' || js_ws(c)))
+}
+
 /// `s.trim()` as JavaScript trims.
 pub fn js_trim(s: &str) -> &str {
     s.trim_matches(js_ws)

@@ -72,6 +72,11 @@
 # is approved by curl as its loopback owner for the other, and the loop that
 # follows (still the TypeScript's) registers there and is stopped. Each
 # side's helper token goes to a config dir of its own.
+# coordinator, mcp, tenant and auth run last (their block says what each
+# step touches): a new goal the scratch server refuses for want of a
+# coordinator, an MCP session piped in on stdin that only reads or is
+# refused, tenants kept in scratch folders, and a second scratch server
+# that enforces who calls, for auth's sign-in, invite and sign-out.
 #
 # Both run against a scratch config dir, so nothing under ~/.config/canopy
 # is read or written.
@@ -88,6 +93,7 @@ scratch=$(mktemp -d)
 server=""
 cleanup() {
   if [ -n "$server" ]; then kill "$server" 2>/dev/null || true; fi
+  if [ -n "${enforcer:-}" ]; then kill "$enforcer" 2>/dev/null || true; fi
   if [ -n "${CANOPY_PARITY_KEEP:-}" ]; then
     echo "kept: $scratch"
   else
@@ -1257,3 +1263,202 @@ bun "$ts" source add /home/x/dev --host mini >/dev/null
 bun "$ts" source add --forgejo https://git.example --label Forge >/dev/null
 hcheck sources sources
 hcheck source source
+# ---- coordinator, mcp, tenant and auth ----
+
+# coordinator: the scratch server runs no coordinator, so a new goal is
+# refused before its form is read (409), and hold, resume and start name a
+# run that does not exist. Nothing starts or stops a coordinator.
+printf 'goal notes\n' >"$scratch/goal.md"
+hcheck coord coordinator
+hcheck coord-json coordinator --json
+hcheck coord-run coordinator c0ffee12
+hcheck coord-run-json coordinator c0ffee12 --json
+hcheck coord-hold coordinator hold c0ffee12
+hcheck coord-resume coordinator resume c0ffee12
+hcheck coord-start coordinator start c0ffee12
+hcheck coord-start-ids coordinator start c0ffee12 t1 t2
+hcheck coord-new coordinator new ship the cart --repo app --file "$scratch/goal.md" --model sonnet
+hcheck coord-new-named coordinator new ship it --backend "$CANOPY_API"
+hcheck coord-new-on coordinator new ship it --on scratch
+hcheck coord-new-nofile coordinator new ship it --file "$scratch/nosuch.md"
+hcheck coord-new-dir coordinator new ship it --file "$scratch"
+hcheck coord-new-usage coordinator new
+hcheck coord-new-flag coordinator new goal --wat x
+hcheck coord-new-value coordinator new goal --repo
+hcheck coord-usage coordinator hold
+hcheck coord-start-usage coordinator start
+hcheck coord-extra coordinator c1 c2
+hcheck coord-backend coordinator --backend
+hcheck coord-on-value coordinator --on
+hcheck coord-both coordinator --on x --backend http://a:1
+hcheck coord-on coordinator --on nosuch
+hcheck coord-on-self coordinator --on scratch
+hcheck coord-down coordinator --backend "$down"
+hcheck coord-hold-down coordinator hold c1 --backend "$down"
+hcheck coord-new-down coordinator new x --backend "$down"
+
+# mcp: the tools the loopback caller holds, a run's config file, and the
+# server on stdin with requests that only read or that the server refuses:
+# no wake is set, no run starts, nothing lands and no PR opens. Health is
+# left out, since a disk's free space moves between the two runs.
+printf '{}' >"$scratch/mcp-empty.json"
+printf '{"mcpServers":{"canopy":{"env":{"CANOPY_API":"%s","CANOPY_TOKEN":"bogus","CANOPY_RUN":"abcd1234"}}}}' "$CANOPY_API" >"$scratch/mcp-run.json"
+hcheck mcp-tools mcp tools
+hcheck mcp-usage mcp serve
+hcheck mcp-usage-extra mcp tools x
+hcheck mcp-backend mcp --backend
+hcheck mcp-run-config-value mcp --run-config
+hcheck mcp-down mcp tools --backend "$down"
+hcheck mcp-run-config-none mcp tools --run-config "$scratch/nosuch.json"
+hcheck mcp-run-config-dir mcp tools --run-config "$scratch"
+hcheck mcp-run-config-empty mcp tools --run-config "$scratch/mcp-empty.json"
+hcheck mcp-run-config mcp tools --run-config "$scratch/mcp-run.json"
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}'
+  printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+  printf '%s\n' 'log chatter' ''
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canopy_status","arguments":{}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"canopy_runs","arguments":{}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"canopy_runs","arguments":{"json":true}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"canopy_runs","arguments":{"id":"nosuch"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"canopy_queue","arguments":{}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"canopy_queue","arguments":{"repo":"app","json":true}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"canopy_say","arguments":{"id":"nosuch","text":"hi"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"canopy_land","arguments":{"run":"nosuch"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"canopy_pr","arguments":{"run":"nosuch"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"canopy_work_note","arguments":{"text":"x","id":"w-nosuch"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"canopy_wake","arguments":{}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"canopy_run_start","arguments":{}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"canopy_rm","arguments":{}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":"s","method":"ping"}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":17,"method":"resources/list"}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":18,"method":"initialize","params":{"protocolVersion":"2099-01-01"}}'
+  printf '%s' '{"jsonrpc":"2.0","id":19,"method":"ping"}'
+} >"$scratch/mcp-in.jsonl"
+IN=$scratch/mcp-in.jsonl scheck mcp-serve mcp
+IN=$scratch/mcp-in.jsonl scheck mcp-serve-run-config mcp --run-config "$scratch/mcp-run.json"
+
+# tenant: inside canopy's container add, up and remove stop at the host
+# check after their usage; on a host, the steps below stop at a refusal or
+# a dry run before anything is written or started. list reads tenants kept
+# in the CLIs' config dir and a scratch HOME, two that the scratch server
+# answers for (one served over https, asked on loopback) and one it does
+# not. register and unregister check their words and hand config.json's
+# write to the TypeScript CLI either way, so only the CLIs' scratch config
+# changes.
+th=$scratch/thome
+mkdir -p "$th/.local/share/canopy-tenants/rio" "$th/.local/share/canopy-tenants/gone" \
+  "$scratch/config/tenants/acme" "$scratch/config/tenants/junk" "$scratch/config/tenants/empty" "$scratch/troot"
+printf '{\n  "name": "acme",\n  "root": "/srv/acme",\n  "port": %s,\n  "host": "launchd",\n  "url": "http://127.0.0.1:%s",\n  "created": 1\n}\n' "$port" "$port" >"$scratch/config/tenants/acme/tenant.json"
+printf '{\n  "name": "rio",\n  "root": "/srv/rio",\n  "port": %s,\n  "host": "compose",\n  "url": "https://mini.example.ts.net:7881",\n  "created": 1\n}\n' "$port" >"$th/.local/share/canopy-tenants/rio/tenant.json"
+printf '{\n  "name": "gone",\n  "root": "/srv/gone",\n  "port": 7882,\n  "host": "compose",\n  "url": "http://127.0.0.1:1",\n  "created": 1\n}\n' >"$th/.local/share/canopy-tenants/gone/tenant.json"
+printf '{' >"$scratch/config/tenants/junk/tenant.json"
+if [ ! -e "$scratch/config/config.json" ]; then
+  printf '{"backends": [{"name": "mac", "tailnet": "http://mac.example:7850"}]}\n' >"$scratch/config/config.json"
+fi
+(
+  export HOME="$th"
+  hcheck tenant tenant
+  hcheck tenant-list tenant list
+  hcheck tenants-list tenants list
+  hcheck tenant-usage tenant frob
+  hcheck tenant-add-usage tenant add acme
+  hcheck tenant-add-root-usage tenant add --root "$scratch/troot"
+  hcheck tenant-add-extra tenant add acme extra --root "$scratch/troot"
+  hcheck tenant-add-dry tenant add newt --root "$scratch/troot" --dry-run
+  hcheck tenant-add-name tenant add Newt --root "$scratch/troot"
+  hcheck tenant-add-taken tenant add mac --root "$scratch/troot"
+  hcheck tenant-add-folder tenant add newt --root "$scratch/no-such-folder"
+  hcheck tenant-add-port tenant add newt --root "$scratch/troot" --port 7000
+  hcheck tenant-up-usage tenant up
+  hcheck tenant-up-none tenant up nosuch
+  hcheck tenant-remove-usage tenant remove a b
+  hcheck tenant-remove-none tenant remove nosuch --purge
+  hcheck tenant-register-usage tenant register acme
+  hcheck tenant-register-url tenant register acme http://x/y
+  hcheck tenant-register-port tenant register newt http://127.0.0.1:7850
+  hcheck tenant-register tenant register newt http://127.0.0.1:7899
+  hcheck tenant-unregister tenant unregister newt
+  hcheck tenant-unregister-own tenant unregister mac
+  hcheck tenant-unregister-usage tenant unregister
+)
+
+# auth: a second scratch server that enforces who calls and signs in no
+# loopback caller, with a config dir and a port of its own. Each side tells
+# the whole story in turn: nobody signed in, a wrong first code, a sign-in
+# with the first code the server printed last, the token's view, an invite
+# the TypeScript CLI mints for that side traded for a member's token in a
+# config dir of its own, the spent invite, and the owner signing out, which
+# makes the server print a new first code for the other side. Both sides'
+# token files land at the same paths. The pair code each sign-in shows,
+# the refused count (which the two sides add to in turn) and the side's
+# member are masked.
+eport=$("$bun" -e 'const s = Bun.serve({ port: 0, fetch: () => new Response() }); console.log(s.port); s.stop(true);')
+mkdir -p "$scratch/enforce/config" "$scratch/enforce/home" "$scratch/enforce/root" "$scratch/joiner"
+env -i HOME="$scratch/enforce/home" PATH="$(dirname "$bun"):/usr/local/bin:/usr/bin:/bin" SHELL=/bin/bash LANG=C.UTF-8 \
+  CANOPY_CONFIG_DIR="$scratch/enforce/config" CANOPY_CALLERS=enforce CANOPY_PREVIEW_PORTS=0 CANOPY_NO_DESKTOP=1 \
+  CANOPY_AGENT_SCAN=0 CANOPY_TAILCHAN_URL=off CANOPY_TMUX=0 \
+  "$bun" "$ts" ui "$scratch/enforce/root" --port "$eport" --no-open >"$scratch/enforce.log" 2>&1 &
+enforcer=$!
+E="http://127.0.0.1:$eport"
+for _ in $(seq 1 60); do
+  if curl -sf -o /dev/null "$E/api/auth"; then break; fi
+  sleep 0.5
+done
+if ! curl -sf -o /dev/null "$E/api/auth"; then
+  echo "the enforcing scratch server did not come up:" >&2
+  tail -20 "$scratch/enforce.log" >&2
+  exit 1
+fi
+firstcode() { grep -o 'first sign-in code [^ ]*' "$scratch/enforce.log" | tail -1 | awk '{print $4}'; }
+# arun <side> <step> <args...> - one CLI's step, kept as <side>.<step>
+arun() {
+  local side=$1 name=$2 out code
+  shift 2
+  out="$scratch/$side.$name"
+  if [ "$side" = ts ]; then
+    bun "$ts" "$@" </dev/null >"$out.1" 2>"$out.2" && code=0 || code=$?
+  else
+    "$rs" "$@" </dev/null >"$out.1" 2>"$out.2" && code=0 || code=$?
+  fi
+  { cat "$out.1"; echo "--- stderr"; cat "$out.2"; echo "--- exit $code"; } >"$out"
+}
+auth_side() {
+  local side=$1 invite
+  arun "$side" auth-none auth status --backend "$E"
+  arun "$side" auth-logout-none auth logout --backend "$E"
+  arun "$side" auth-mcp-none mcp tools --backend "$E"
+  arun "$side" auth-login-wrong auth login --backend "$E" --code WRONG-CODE
+  arun "$side" auth-login auth login --backend "$E" --code "$(firstcode)"
+  arun "$side" auth-status auth status --backend "$E"
+  arun "$side" auth-mcp mcp tools --backend "$E"
+  arun "$side" auth-coord coordinator --backend "$E"
+  invite=$(bun "$ts" people add "Sam-$side" --backend "$E" </dev/null | grep -o 'cnv_[A-Za-z0-9_-]*' | head -1)
+  CANOPY_CONFIG_DIR="$scratch/joiner" arun "$side" auth-join auth join "$invite" --backend "$E"
+  CANOPY_CONFIG_DIR="$scratch/joiner" arun "$side" auth-join-status auth status --backend "$E"
+  CANOPY_CONFIG_DIR="$scratch/joiner" arun "$side" auth-join-logout auth logout --backend "$E"
+  CANOPY_CONFIG_DIR="$scratch/joiner" arun "$side" auth-join-spent auth join "$invite" --backend "$E"
+  bun "$ts" people remove "Sam-$side" --backend "$E" </dev/null >/dev/null
+  arun "$side" auth-logout auth logout --backend "$E"
+  arun "$side" auth-after auth status --backend "$E"
+}
+auth_side ts
+auth_side rs
+for step in auth-none auth-logout-none auth-mcp-none auth-login-wrong auth-login auth-status auth-mcp auth-coord \
+  auth-join auth-join-status auth-join-logout auth-join-spent auth-logout auth-after; do
+  sed -E -i.bak -e 's/pair code [^:]+:/pair code <code>:/' -e 's/refused [0-9]+/refused <n>/' -e 's/Sam-(ts|rs)/Sam-<x>/g' \
+    "$scratch/ts.$step" "$scratch/rs.$step"
+  same "$step" "$scratch/ts.$step" "$scratch/rs.$step" "$step against an enforcing server"
+done
+hcheck auth-usage auth
+hcheck auth-usage-sub auth frob
+hcheck auth-join-usage auth join
+hcheck auth-join-extra auth join a b
+hcheck auth-status-scratch auth status
+hcheck auth-status-down auth status --backend "$down"
+hcheck auth-logout-down auth logout --backend "$down"
+hcheck auth-login-down auth login --backend "$down"
+hcheck auth-join-down auth join cnv_x --backend "$down"
+hcheck auth-logout-url auth logout --backend notaurl

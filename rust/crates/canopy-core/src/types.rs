@@ -255,6 +255,15 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// `isRunActive()`: a run that is working, waiting on someone or idle
+/// between turns, read off a run's JSON as `GET /api/runs` answers it.
+pub fn is_run_active(run: &serde_json::Value) -> bool {
+    matches!(
+        run.get("status").and_then(serde_json::Value::as_str),
+        Some("working" | "waiting" | "idle")
+    )
+}
+
 /// Keep awake's modes (`AWAKE_MODES`).
 pub const AWAKE_MODES: &[&str] = &["off", "always", "working"];
 

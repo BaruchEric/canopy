@@ -112,60 +112,6 @@ fn a_flag_given_several_times_is_every_value_taken_out_of_the_words() {
     assert_eq!(words, ["Rio", "--name", "x"]);
 }
 
-/// `statusWords()` from src/cli/auth.ts, which people.test.ts checks. It is
-/// auth's line, so it moves to auth's module when that verb is ported; until
-/// then this copy keeps the case.
-fn status_words(a: &Value) -> String {
-    let who = a
-        .get("person")
-        .filter(|p| canopy_core::js::truthy(Some(p)))
-        .map_or(String::new(), |p| {
-            format!("  {} ({})", field(p, "name"), field(p, "role"))
-        });
-    let holds = a
-        .get("rights")
-        .filter(|r| canopy_core::js::truthy(Some(r)))
-        .map_or(String::new(), |r| {
-            let j = canopy_core::js::join(r.as_array().map_or(&[][..], Vec::as_slice), ", ");
-            format!("  holds {}", if j.is_empty() { "nothing" } else { &j })
-        });
-    let scope = list_at(a, "scope");
-    let held = if scope.is_empty() {
-        String::new()
-    } else {
-        format!("  only in {}", canopy_core::js::join(scope, ", "))
-    };
-    let refused = a.get("refused").unwrap_or(&Value::Null);
-    format!(
-        "mode {}  you {}{who}{holds}{held}  refused {}",
-        field(a, "mode"),
-        field(a, "you"),
-        field(refused, "count")
-    )
-}
-
-#[test]
-fn auth_status_says_whose_the_token_is_and_what_it_holds_and_reads_an_older_backends_answer() {
-    assert_eq!(
-        status_words(
-            &json!({"mode": "enforce", "refused": {"count": 3}, "you": "cli", "youId": "c1", "person": {"id": "p-a", "name": "Avery", "role": "member"}, "rights": ["read", "plan", "operate"]})
-        ),
-        "mode enforce  you cli  Avery (member)  holds read, plan, operate  refused 3"
-    );
-    assert_eq!(
-        status_words(
-            &json!({"mode": "log", "refused": {"count": 0}, "you": "none", "youId": null})
-        ),
-        "mode log  you none  refused 0"
-    );
-    assert_eq!(
-        status_words(
-            &json!({"mode": "enforce", "refused": {"count": 0}, "you": "cli", "youId": "c2", "person": {"id": "p-g", "name": "Guest", "role": "viewer"}, "rights": ["read"], "scope": ["/srv/rio"]})
-        ),
-        "mode enforce  you cli  Guest (viewer)  holds read  only in /srv/rio  refused 0"
-    );
-}
-
 /// What the fake backend keeps: the roster, the log, and who is calling.
 #[derive(Default)]
 struct Backend {

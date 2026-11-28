@@ -82,11 +82,25 @@ impl Client {
         url: &str,
         timeout: Option<Duration>,
     ) -> reqwest::RequestBuilder {
+        let token = self.caller.caller_token(base, None);
+        self.request_as(method, url, timeout, token.as_deref())
+    }
+
+    /// `request` with the token given rather than looked up: `canopy mcp`
+    /// carries the session's own (`mcpToken`), and a tenant's `/api/about`
+    /// is asked with none, as the TypeScript's plain fetch asks it.
+    pub(crate) fn request_as(
+        &self,
+        method: Method,
+        url: &str,
+        timeout: Option<Duration>,
+        token: Option<&str>,
+    ) -> reqwest::RequestBuilder {
         let mut req = self.http.request(method, url);
         if let Some(t) = timeout {
             req = req.timeout(t);
         }
-        if let Some(token) = self.caller.caller_token(base, None) {
+        if let Some(token) = token {
             req = req.header("x-canopy-token", token);
         }
         req
@@ -605,14 +619,7 @@ pub fn form_query(pairs: &[(&str, &str)]) -> String {
 }
 
 /// `/^https?:\/\/[^/\s]+$/`: a bare http(s) origin.
-pub fn is_origin(s: &str) -> bool {
-    let rest = s
-        .strip_prefix("http://")
-        .or_else(|| s.strip_prefix("https://"));
-    rest.is_some_and(|r| {
-        !r.is_empty() && !r.chars().any(|c| c == '/' || canopy_core::pathx::js_ws(c))
-    })
-}
+pub use canopy_core::pathx::is_bare_origin as is_origin;
 
 #[cfg(test)]
 pub mod tests;

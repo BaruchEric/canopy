@@ -303,15 +303,6 @@ impl Real {
     }
 }
 
-/// `os.hostname()`: the machine's name, as `hostname` prints it.
-fn hostname() -> String {
-    std::process::Command::new("hostname")
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
-}
-
 impl ClipHost for Real {
     fn piped(&self) -> bool {
         !std::io::stdin().is_terminal()
@@ -333,7 +324,7 @@ impl ClipHost for Real {
         cli_from(
             env("CANOPY_REPO").as_deref(),
             env("CANOPY_RUN").as_deref(),
-            &hostname(),
+            &crate::pair::hostname(),
         )
     }
 

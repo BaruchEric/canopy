@@ -49,10 +49,7 @@ pub fn is_run_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// `isRunActive()` in core/types.ts: working, waiting or idle.
-pub fn is_run_active(run: &Value) -> bool {
-    matches!(str_at(run, "status"), Some("working" | "waiting" | "idle"))
-}
+pub use canopy_core::types::is_run_active;
 
 /// `runSubject()` in core/runname.ts: the run's name, else its note's first
 /// line, trimmed.

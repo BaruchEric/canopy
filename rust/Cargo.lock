@@ -138,9 +138,12 @@ dependencies = [
 name = "canopy-cli"
 version = "0.2.0"
 dependencies = [
+ "canopy-auth",
  "canopy-core",
  "jiff",
+ "regex",
  "reqwest",
+ "rustix",
  "rustls",
  "serde",
  "serde_json",
