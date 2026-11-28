@@ -20,8 +20,8 @@
 # The backend verbs (note, awake, issues, pr, prs, scenarios, sweep, kit,
 # loadouts, groups, work, land, queue, collisions, floorplan, archify,
 # diagnosis, understand, capacity, costs, plugins, people, clip, clips,
-# worktrees, workflow, health) talk to a scratch Bun server this script
-# starts on a free port with its own config dir and HOME, and to nothing
+# worktrees, workflow, health, run, runs) talk to a scratch Bun server this
+# script starts on a free port with its own config dir and HOME, and to nothing
 # else: CANOPY_API, CANOPY_TOKEN and CANOPY_BACKEND are cleared first, so a
 # canopy shell's settings never point either CLI at a real backend. Before
 # it starts, the script seeds that config dir and HOME with things to
@@ -925,3 +925,180 @@ gcheck health-init health init starter
 gcheck health-init-again health init starter
 gcheck health-lint-starter health lint starter
 gcheck health-init-empty health init empty
+
+# ---- run and runs: kept transcripts, refusals and reads ----
+# No step starts a run, a fork, a side question, a child or a flow. The
+# scratch server starts none, so its live list is always empty: ls says no
+# runs going, and name, stop, say, interrupt, side and model on an id find
+# no run. Every start names a repo the server does not scan (nosuch), so
+# even one a CLI failed to refuse would be refused by the server before
+# anything starts; a child names a parent that is not there, a pickup a
+# flow that is not there, and the rest go to a port nothing listens on or
+# are refused before the backend is asked. A fork asks only for a run that
+# does not exist; the kept runs work in gone/app, which the server does not
+# scan, so a fork of one would be refused too. The run log is seeded in
+# its own format, <config>/runs/<id>/run.json and wire.jsonl.gz, gzipped so
+# the server's recovery of open transcripts leaves it be: a finished run
+# with a name, a branch, a cost and a wire with an ask in it; a failed side
+# question that kept no steps, only tokens and a wire cut at its limit; and
+# a wire with no record, which the listing shows and show cannot find.
+# Each ended days ago, well inside the thirty days a transcript is kept, so
+# the ages hold still and prune removes nothing.
+runs="$seed/runs"
+mkdir -p "$runs/k1aaaaaa" "$runs/k2bbbbbb" "$runs/k3cccccc"
+now_s=$(date +%s)
+t0=$(((now_s - 216000) * 1000))
+t1=$(((now_s - 475200) * 1000))
+t2=$(((now_s - 1814400) * 1000))
+cat >"$runs/k1aaaaaa/run.json" <<JSON
+{"id": "k1aaaaaa", "repoId": "gone/app", "action": "ask", "verb": "ask", "progress": "", "expectsChange": true,
+ "chat": false, "harness": "claude", "note": "tidy the readme\nand the docs", "status": "done",
+ "startedAt": $t0, "endedAt": $((t0 + 125000)), "name": "tidy readme",
+ "branch": {"name": "run/tidy-k1aaaaaa", "target": "main", "base": "b0", "dir": "/nowhere/w", "origin": "o-k1", "state": "ready"},
+ "steps": [
+  {"id": "1", "at": $((t0 + 1500)), "kind": "note", "text": "on branch run/tidy-k1aaaaaa"},
+  {"id": "2", "at": $((t0 + 2000)), "kind": "text", "text": "Looking at the readme."},
+  {"id": "3", "at": $((t0 + 3000)), "kind": "tool", "tool": {"name": "Bash", "title": "git status", "status": "ok"}},
+  {"id": "4", "at": $((t0 + 3500)), "kind": "text", "text": "a subagent's word", "parent": "3"},
+  {"id": "5", "at": $((t0 + 6000)), "kind": "text", "text": "Done."}],
+ "prompt": null, "result": {"text": "ok", "durationMs": 125000, "turns": 3, "costUsd": 0.4251, "model": "opus"}}
+JSON
+cat >"$runs/k1aaaaaa/wire.jsonl" <<JSON
+{"canopy":"start","at":$t0,"run":"k1aaaaaa","repo":"gone/app","action":"ask","harness":"claude","argv":["claude","-p"]}
+{"canopy":"in","at":$((t0 + 1000)),"line":"{\"type\":\"user\",\"message\":{\"content\":\"tidy the readme\"}}"}
+{"canopy":"tick","at":$((t0 + 2000))}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Looking at the readme."}]}}
+{"canopy":"tick","at":$((t0 + 3000))}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git status"}}]}}
+{"canopy":"tick","at":$((t0 + 4000))}
+{"type":"control_request","request_id":"q1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"git status"}}}
+{"canopy":"in","at":$((t0 + 5000)),"line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"q1\",\"response\":{\"behavior\":\"allow\"}}}"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"clean"}]}}
+{"canopy":"tick","at":$((t0 + 6000))}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Done."}]}}
+{"canopy":"end","at":$((t0 + 125000)),"status":"done"}
+JSON
+cat >"$runs/k2bbbbbb/run.json" <<JSON
+{"id": "k2bbbbbb", "repoId": "gone/app", "action": "chat", "verb": "chat", "progress": "", "expectsChange": false,
+ "chat": true, "harness": "claude", "note": "", "status": "failed", "startedAt": $t1, "endedAt": $((t1 + 3000)),
+ "name": "retry default", "sideOf": {"run": "k1aaaaaa", "title": "tidy readme"}, "steps": [], "prompt": null,
+ "result": {"text": "", "durationMs": 3000, "turns": 1, "model": "sonnet",
+            "tokens": {"input": 12000, "cachedInput": 0, "output": 345, "reasoning": 0, "total": 12345}}}
+JSON
+cat >"$runs/k2bbbbbb/wire.jsonl" <<JSON
+{"canopy":"start","at":$t1,"run":"k2bbbbbb","repo":"gone/app","action":"chat","harness":"claude","argv":[]}
+{"canopy":"tick","at":$((t1 + 1000))}
+{"type":"assistant","message":{"content":[{"type":"text","text":"The default is three tries."}]}}
+{"canopy":"tick","at":$((t1 + 2000))}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Each waits twice as long."}]}}
+{"canopy":"cut","at":$((t1 + 3000)),"bytes":4096}
+JSON
+printf '{"canopy":"start","at":%s,"run":"k3cccccc","repo":"gone/old","action":"propose","harness":"codex","argv":[]}\n' \
+  "$t2" >"$runs/k3cccccc/wire.jsonl"
+for id in k1aaaaaa k2bbbbbb k3cccccc; do gzip -n "$runs/$id/wire.jsonl"; done
+touch -d "@$((t2 / 1000 + 43200))" "$runs/k3cccccc/wire.jsonl.gz"
+hcheck run-kept run
+hcheck run-kept-slash run --backend "$CANOPY_API/"
+hcheck run-show run show k1aaaaaa
+hcheck run-show-wire run show k1aaaaaa --wire
+hcheck run-show-side run show k2bbbbbb
+hcheck run-show-side-wire run show --wire k2bbbbbb
+hcheck run-show-head run show k3cccccc
+hcheck run-show-none run show nosuch
+hcheck run-show-bad run show x/y
+hcheck run-show-usage run show
+hcheck run-show-out run show k1aaaaaa --out f.md
+hcheck run-export run export k1aaaaaa
+hcheck run-export-side run export k2bbbbbb
+gcheck run-export-out run export k1aaaaaa --out run.md
+if cmp "$scratch/ts/run.md" "$scratch/rs/run.md"; then
+  echo "same (run-export-file): canopy run export k1aaaaaa --out run.md ($(wc -c <"$scratch/ts/run.md" | tr -d ' ') bytes)"
+else
+  echo "differs (run-export-file): canopy run export k1aaaaaa --out run.md" >&2
+  exit 1
+fi
+hcheck run-export-nodir run export k1aaaaaa --out "$scratch/nodir/run.md"
+hcheck run-export-dir run export k1aaaaaa --out "$scratch"
+hcheck run-export-flag run export k1aaaaaa --out --bad
+hcheck run-export-none run export nosuch
+hcheck run-export-usage run export
+hcheck run-ls run ls
+hcheck run-ls-token run ls --token bogus
+hcheck run-ls-usage run ls extra
+hcheck run-name-none run name nosuch slow build
+hcheck run-name-usage run name nosuch
+hcheck run-stop-none run stop nosuch
+hcheck run-stop-usage run stop nosuch extra
+hcheck run-say-none run say nosuch use bun here
+hcheck run-say-usage run say nosuch
+hcheck run-interrupt-none run interrupt nosuch do this instead
+hcheck run-side-none run side nosuch what does it default to
+hcheck run-side-model run side nosuch hi --model
+hcheck run-side-usage run side nosuch
+hcheck run-model-none run model nosuch sonnet
+hcheck run-model-usage run model nosuch
+hcheck run-fork-none run fork nosuch
+hcheck run-fork-at run fork k1aaaaaa --at 0
+hcheck run-fork-profile run fork k1aaaaaa --profile
+hcheck run-fork-note run fork k1aaaaaa -m
+hcheck run-fork-extra run fork k1aaaaaa extra
+hcheck run-fork-bad run fork x/y
+hcheck run-fork-usage run fork
+hcheck run-prune run prune
+hcheck run-prune-usage run prune extra
+hcheck run-bad-sub run --wire
+hcheck run-out-word run --out f
+hcheck run-origin run --backend http://x/y
+hcheck run-needs run --backend
+hcheck run-down run --backend "$down"
+hcheck run-show-down run show k1aaaaaa --backend "$down"
+hcheck run-export-down run export k1aaaaaa --backend "$down"
+hcheck run-ls-down run ls --backend "$down"
+# a start, refused before the backend is asked, or by a repo, a folder or
+# a backend that is not there
+hcheck run-usage run nosuch
+hcheck run-extra run nosuch ask more
+hcheck run-action run nosuch build
+hcheck run-times run nosuch ask --times 4
+hcheck run-times-word run nosuch ask --times two
+hcheck run-times-needs run nosuch ask --times
+hcheck run-auto-land run nosuch ask --auto-land
+hcheck run-tools run nosuch ask --tools --no-tools
+hcheck run-priority run nosuch ask --priority urgent
+hcheck run-reviewers run nosuch ask --times 2 --reviewers 3
+hcheck run-reviewers-one run nosuch ask --reviewers 2
+hcheck run-profiles run nosuch ask --times 2 --profiles a,b,c
+hcheck run-profiles-one run nosuch ask --profiles a
+hcheck run-name-blank run nosuch ask --name "  "
+hcheck run-name-group run nosuch ask --name x --times 2
+hcheck run-name-coord run nosuch coordinate --name x
+hcheck run-loadout-needs run nosuch ask --loadout
+hcheck run-loadout-group run nosuch ask --loadout docs --times 2
+hcheck run-note-needs run nosuch ask -m
+hcheck run-either run nosuch ask --backend "$CANOPY_API" --on x
+hcheck run-start-origin run nosuch ask --backend http://x/y
+hcheck run-on-none run nosuch ask --on nosuch
+hcheck run-repo-none run nosuch ask -m "look"
+hcheck run-repo-none-on run nosuch ask --on scratch
+hcheck run-repo-none-group run nosuch propose --times 2 --profiles ,fast --reviewers 2 --auto-land --pr
+hcheck run-repo-none-loadout run nosuch ask --loadout docs --priority low --no-tools --name "slow build"
+hcheck run-folder-none run "$scratch/no-such-folder" ask
+hcheck run-folder-unscanned run "$scratch/server" ask
+gcheck run-folder-dot run . ask
+hcheck run-start-down run nosuch ask --backend "$down"
+hcheck run-loadout-down run nosuch ask --loadout docs --backend "$down"
+hcheck run-pickup-none run pickup f-nosuch
+hcheck run-pickup-usage run pickup
+hcheck run-pickup-extra run pickup f-1 f-2
+hcheck run-pickup-on run pickup f-1 --on nosuch
+hcheck run-pickup-either run pickup f-1 --backend "$CANOPY_API" --on x
+hcheck run-pickup-down run pickup f-1 --backend "$down"
+hcheck runs-usage runs
+hcheck runs-child-usage runs child nosuch --note x
+hcheck runs-child-blank runs child nosuch --note " " --parent p
+hcheck runs-child-none runs child nosuch --note "a part" --parent nosuch --action propose
+hcheck runs-child-folder runs child "$scratch/no-such-folder" --note x --parent p
+hcheck runs-child-either runs child nosuch --note x --parent p --backend "$CANOPY_API" --on x
+hcheck runs-child-origin runs child nosuch --note x --parent p --backend http://x/y
+hcheck runs-child-on runs child nosuch --note x --parent p --on nosuch
+hcheck runs-child-down runs child nosuch --note x --parent p --backend "$down"

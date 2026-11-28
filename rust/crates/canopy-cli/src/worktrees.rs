@@ -8,8 +8,8 @@ use crate::ask::{
     Ask, AskError, Target, did_not_answer, encode_component, has, is_origin, shift, take,
 };
 use crate::out::Out;
+use crate::run::{folder_of, here, is_path_argument};
 use canopy_core::js::{field, list_at, num_at, str_at, truthy, truthy_at};
-use canopy_core::pathx::resolve;
 use canopy_core::treewords::tree_words;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
@@ -341,35 +341,13 @@ cw() {
 }
 "#;
 
-/// `isPathArgument()` in src/cli/run.ts.
-fn is_path_argument(v: &str) -> bool {
-    v == "."
-        || v.starts_with('/')
-        || v.starts_with("./")
-        || v.starts_with("../")
-        || v.starts_with('~')
-}
-
-/// `folderOf()` in src/cli/run.ts: a path argument as the real folder it
-/// names; fails when there is none.
-fn folder_of(arg: &str) -> Result<String, String> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "~".into());
-    let expanded = match arg.strip_prefix('~') {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{home}{rest}"),
-        _ => arg.to_string(),
-    };
-    std::fs::canonicalize(resolve(&expanded))
-        .map(|p| p.to_string_lossy().into_owned())
-        .map_err(|_| format!("no such folder: {arg}"))
-}
-
 /// `repoIdIn()`: a repo by its id or its folder's name, or by a path ("."
 /// or one that starts with /, ./, ../ or ~), which takes only the repo at
 /// that folder.
 pub fn repo_id_in(info: &Value, name: &str) -> Result<String, String> {
     let repos = list_at(info, "repos");
     if is_path_argument(name) {
-        let path = folder_of(name)?;
+        let path = folder_of(name, &here())?;
         return repos
             .iter()
             .find(|e| str_at(e, "repoPath") == Some(path.as_str()))
