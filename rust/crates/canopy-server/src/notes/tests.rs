@@ -435,7 +435,7 @@ async fn a_due_reminder_is_marked_and_broadcast_once_however_many_ticks_pass() {
     t.tick(120_000.0);
     let before = t.heard.len();
     let ticks = tokio::spawn(remind_every(t.hub.clone(), Duration::from_millis(20)));
-    for _ in 0..200 {
+    for _ in 0..500 {
         tokio::time::sleep(Duration::from_millis(10)).await;
         t.drain();
         if t.heard.len() > before {

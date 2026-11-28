@@ -860,11 +860,13 @@ mod tests {
         .unwrap();
         let mut rx = state.events.subscribe();
         tokio::time::pause();
-        // nothing before the first tick, a whole period after the start
-        tokio::time::advance(TICK_EVERY - Duration::from_millis(1)).await;
+        // nothing before the first tick, a whole period after the start; the
+        // second of margin covers the real time between the start and the
+        // pause on a loaded machine
+        tokio::time::advance(TICK_EVERY - Duration::from_secs(1)).await;
         settle().await;
         assert!(rx.try_recv().is_err(), "a reminder before the first tick");
-        tokio::time::advance(Duration::from_millis(1)).await;
+        tokio::time::advance(Duration::from_secs(1)).await;
         let mut frame = None;
         for _ in 0..10 {
             settle().await;

@@ -41,7 +41,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use canopy_core::cron::parse_when;
 use canopy_core::fserr::{bun_message, bun_rename_message};
-use canopy_core::js::num;
+use canopy_core::js::{num, pretty};
 use canopy_core::notes::{is_note_id, mint_note_id, note_text, parse_file, remind_due};
 use canopy_core::pathx::{join, js_trim};
 use canopy_core::types::now_ms;
@@ -135,7 +135,7 @@ fn write_file(dir: &str, file: &str, notes: &[Value]) -> Result<(), String> {
         std::process::id(),
         rand::rng().next_u32()
     );
-    let text = serde_json::to_string_pretty(notes).map_err(|e| e.to_string())?;
+    let text = pretty(notes);
     let r = std::fs::write(&tmp, format!("{text}\n"))
         .map_err(|e| bun_message(&e, "open", &tmp))
         .and_then(|()| std::fs::rename(&tmp, file).map_err(|e| bun_rename_message(&e, &tmp, file)));
