@@ -14,8 +14,11 @@ bun run test               # every *.test.ts under src and ui/src, 20 s a test (
 bun test src/core/git.test.ts          # one file
 bun test src/core/git.test.ts -t "name"  # one test by name
 bun run build              # vite builds of ui/ and its service worker into dist/web
+cd rust && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings   # the Rust port
+bash scripts/rust-parity.sh [folder]   # canopy-rs against the TypeScript CLI, byte for byte
 ```
 
+- The backend and CLI are being ported to Rust in `rust/` (docs/rust-port.md is the ledger and its rules). A change to a module the ledger marks ported or partial changes its Rust twin in the same commit, and the cargo gates pass too. `canopy-server` needs `CANOPY_CONFIG_DIR` and never takes port 7850.
 - All four gates (typecheck, lint, test, build) pass before work counts as done. The build matters: the server serves `dist/web`, so a stale build shows a stale UI.
 - Dev: `bun run dev` (API on :7850, restarts on change) plus `bun run dev:web` (Vite on :7851, proxying `/api` and `/library` to :7850).
 - Production locally: `bun run build && bun link`, then `canopy ui ~/dev`. On the Mac a launchd agent keeps a server on :7850.

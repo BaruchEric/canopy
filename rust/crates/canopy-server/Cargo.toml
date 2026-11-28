@@ -1,0 +1,27 @@
+[package]
+name = "canopy-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "canopy-server"
+path = "src/main.rs"
+
+[dependencies]
+canopy-core = { path = "../canopy-core" }
+canopy-auth = { path = "../canopy-auth" }
+axum = { version = "0.8.9", features = ["ws"] }
+tokio = { version = "1.54.1", features = ["full"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tower-http = { version = "0.7.1", features = ["fs"] }
+futures-util = "0.3.34"
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

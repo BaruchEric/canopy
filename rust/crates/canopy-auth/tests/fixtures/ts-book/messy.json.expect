@@ -1,0 +1,27 @@
+{
+  "checked": {
+    "id": "keepme01",
+    "kind": "page",
+    "label": "kept",
+    "created": 1700000000000,
+    "used": 1700000120000
+  },
+  "list": [
+    {
+      "id": "keepme01",
+      "kind": "page",
+      "label": "kept",
+      "created": 1700000000000,
+      "used": 1700000120000
+    },
+    {
+      "id": "numterm1",
+      "kind": "shell",
+      "label": "z",
+      "created": 1700000000000,
+      "used": 1700000000000,
+      "run": "r9",
+      "user": "p-zzzzzzzz"
+    }
+  ]
+}

@@ -12,3 +12,6 @@ __pycache__/
 # left here would ride to the other machine
 .env.*
 !.env.example
+
+# the Rust port's build output (rust/, docs/rust-port.md)
+rust/target/
