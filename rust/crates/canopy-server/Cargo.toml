@@ -24,6 +24,9 @@ sha1 = "0.10.7"
 tower-http = { version = "0.7.1", features = ["fs"] }
 futures-util = "0.3.34"
 tokio-stream = { version = "0.1.19", features = ["sync"] }
+pty-process = { version = "0.5.4", features = ["async"] }
+rustix = { version = "1.1.6", features = ["process"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect"] }

@@ -17,7 +17,9 @@ mod gated;
 mod harnesses;
 mod people;
 mod presence;
+mod pty;
 mod routes;
+mod terms;
 mod tree;
 
 use app::{AppState, Setup, about, read_config, rescan_every};
@@ -120,6 +122,10 @@ async fn main() -> std::process::ExitCode {
         }
     };
     eprintln!("canopy-server on http://{addr} for {root}");
+    terms::listening(
+        &args.host,
+        listener.local_addr().map_or(args.port, |a| a.port()),
+    );
     let keeper = Arc::new(gate::Gatekeeper::from_env(
         canopy_auth::CallerBook::open_default(),
         &args.host,
