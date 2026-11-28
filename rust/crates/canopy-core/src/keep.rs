@@ -157,6 +157,86 @@ pub fn lost_shells(kept: &[KeptShell], live: &[String]) -> Vec<KeptShell> {
     out
 }
 
+/// Drops a shell's record, its history and its replay copy (`forgetKept`).
+/// A name that is not a shell's, or a file already gone, is no error.
+pub fn forget_kept(config_dir: &str, id: &str) {
+    if !is_term_id(id) {
+        return;
+    }
+    let dir = join(config_dir, "shells");
+    for name in [
+        format!("{id}.json"),
+        format!("{id}.txt"),
+        format!("{id}.replay.txt"),
+    ] {
+        let _ = std::fs::remove_file(join(&dir, &name));
+    }
+}
+
+/// The harness an argv is, off its program and, for an interpreter, its
+/// script (`argvAgent`). Only the first two words count, so an editor
+/// opened on `/tmp/codex/notes` is no agent.
+pub fn argv_agent(argv: &[String]) -> Option<&'static str> {
+    use regex::Regex;
+    use std::sync::LazyLock;
+    static CODEX: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"/@openai/codex/|(^|/)codex(\.js)?$").unwrap());
+    static CLAUDE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"/@anthropic-ai/claude-code/|(^|/)claude$").unwrap());
+    static AGY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(^|/)agy(\.js)?$").unwrap());
+    for w in argv.iter().take(2) {
+        if CODEX.is_match(w) {
+            return Some("codex");
+        }
+        if CLAUDE.is_match(w) {
+            return Some("claude");
+        }
+        if AGY.is_match(w) {
+            return Some("antigravity");
+        }
+    }
+    None
+}
+
+/// The agent running in a pane (`agentIn`), off what tmux says about it
+/// and, when that is not enough, the argv of the processes under the pane.
+/// A plain shell reports its own name, which rules out a shell sitting in a
+/// folder called `claude-history`.
+pub fn agent_in(command: &str, title: &str, argvs: &[Vec<String>]) -> Option<&'static str> {
+    if crate::shellname::is_shell_command(command) {
+        return None;
+    }
+    let lower = js_trim(command).to_lowercase();
+    let name = lower.strip_prefix('-').unwrap_or(&lower);
+    let t = js_trim(title).to_lowercase();
+    let head = t
+        .strip_prefix('✳')
+        .map_or(t.as_str(), |r| r.trim_start_matches(|c: char| js_ws(c)));
+    if name.starts_with("claude") || head.starts_with("claude") {
+        return Some("claude");
+    }
+    if name.starts_with("codex") || head.starts_with("codex") {
+        return Some("codex");
+    }
+    if name.starts_with("agy") || head.starts_with("agy") || head.starts_with("antigravity") {
+        return Some("antigravity");
+    }
+    // Claude Code's process title is its version
+    let version = name.split('.').take(3).collect::<Vec<_>>();
+    if version.len() == 3
+        && version[..2]
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        && version[2]
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_digit())
+    {
+        return Some("claude");
+    }
+    argvs.iter().find_map(|a| argv_agent(a))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +279,146 @@ mod tests {
             lost.iter().map(|k| k.id.as_str()).collect::<Vec<_>>(),
             ["a", "b"]
         );
+    }
+
+    fn argvs(v: &[&[&str]]) -> Vec<Vec<String>> {
+        v.iter()
+            .map(|a| a.iter().map(|w| w.to_string()).collect())
+            .collect()
+    }
+
+    fn agent(command: &str, title: &str) -> Option<&'static str> {
+        agent_in(command, title, &[])
+    }
+
+    // agentIn
+    #[test]
+    fn reads_the_shapes_this_machine_actually_reports() {
+        assert_eq!(agent("2.1.278", "claude agents"), Some("claude"));
+        assert_eq!(agent("codex", "canopy"), Some("codex"));
+        assert_eq!(agent("agy", "canopy"), Some("antigravity"));
+        assert_eq!(agent("zsh", "Erics-MacBook-Pro.local"), None);
+    }
+
+    #[test]
+    fn either_field_naming_the_agent_is_enough() {
+        assert_eq!(agent("claude", ""), Some("claude"));
+        assert_eq!(agent("node", "Claude Code"), Some("claude"));
+        assert_eq!(agent("codex-exec", ""), Some("codex"));
+    }
+
+    #[test]
+    fn a_plain_shell_is_never_an_agent_whatever_the_folder_is_called() {
+        assert_eq!(agent("zsh", "claude-history"), None);
+        assert_eq!(agent("-bash", "codex"), None);
+        assert_eq!(agent("", ""), None);
+    }
+
+    #[test]
+    fn a_version_is_claude_code_anything_else_running_is_nobody_canopy_knows() {
+        assert_eq!(agent("2.1.278", "canopy"), Some("claude"));
+        assert_eq!(agent("vim", "README.md"), None);
+        assert_eq!(agent("git", ""), None);
+    }
+
+    // agentIn off the processes under the pane
+    #[test]
+    fn a_bun_installed_codex_runs_as_node_which_only_its_argv_tells() {
+        assert_eq!(agent("node", "app"), None);
+        assert_eq!(
+            agent_in(
+                "node",
+                "fix the scan | app",
+                &argvs(&[
+                    &["-bash"],
+                    &[
+                        "node",
+                        "/home/bun/.bun/install/global/node_modules/@openai/codex/bin/codex.js",
+                        "--no-daemon"
+                    ]
+                ])
+            ),
+            Some("codex")
+        );
+        assert_eq!(
+            agent_in(
+                "node",
+                "app",
+                &argvs(&[&["/home/bun/.bun/bin/codex", "resume"]])
+            ),
+            Some("codex")
+        );
+        assert_eq!(
+            agent_in(
+                "node",
+                "app",
+                &argvs(&[&["/home/bun/.bun/bin/agy", "--continue"]])
+            ),
+            Some("antigravity")
+        );
+        assert_eq!(
+            agent_in(
+                "node",
+                "app",
+                &argvs(&[&[
+                    "node",
+                    "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"
+                ]])
+            ),
+            Some("claude")
+        );
+    }
+
+    #[test]
+    fn claude_code_on_linux_its_own_name_and_its_asterisk_title() {
+        assert_eq!(agent("claude", "✳ Claude Code"), Some("claude"));
+        assert_eq!(agent("node", "✳ Claude Code"), Some("claude"));
+    }
+
+    #[test]
+    fn an_argument_that_only_mentions_an_agent_is_not_one_and_a_shell_is_never_one() {
+        assert_eq!(
+            agent_in("vim", "notes", &argvs(&[&["vim", "/tmp/codex/notes.md"]])),
+            None
+        );
+        assert_eq!(
+            agent_in(
+                "node",
+                "app",
+                &argvs(&[&["node", "server.js", "/srv/codex/x"]])
+            ),
+            None
+        );
+        assert_eq!(
+            agent_in(
+                "bash",
+                "app",
+                &argvs(&[&["node", "/x/@openai/codex/bin/codex.js"]])
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn forgetting_a_record_drops_its_three_files_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().to_str().unwrap();
+        let shells = dir.path().join("shells");
+        std::fs::create_dir_all(&shells).unwrap();
+        for f in ["json", "txt", "replay.txt"] {
+            std::fs::write(shells.join(format!("{ID}.{f}")), "x").unwrap();
+        }
+        std::fs::write(shells.join("other.json"), "x").unwrap();
+        forget_kept(cfg, "not-a-shell");
+        assert!(shells.join(format!("{ID}.json")).exists());
+        forget_kept(cfg, ID);
+        forget_kept(cfg, ID);
+        let left: Vec<String> = std::fs::read_dir(&shells)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, ["other.json"]);
     }
 
     #[test]

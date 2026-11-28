@@ -6,8 +6,9 @@
 //! (runs, flows, fleets, jobs, helpers, agent pulses) are state the Bun
 //! server holds for the work it runs; this port runs none yet, so they
 //! answer what a Bun server that runs nothing answers. Where that answer
-//! would not be true (shells under tmux, the kept runs), the route answers
-//! 501, and so does any other method on these paths.
+//! would not be true (the kept runs), the route answers 501, and so does
+//! any other method on these paths. The shells and the kept shells are
+//! `terms.rs`'s.
 
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
@@ -16,10 +17,9 @@ use axum::routing::{MethodRouter, get};
 use axum::{Extension, Json, Router};
 use canopy_auth::is_loopback;
 use canopy_core::backends::{config_self, normalize_backends, self_name};
-use canopy_core::keep::{KEEP_DAYS, expired_shells, list_kept, lost_shells};
 use canopy_core::launch::normalize_launchers;
 use canopy_core::route::Routing;
-use canopy_core::store::{flag, workspaces};
+use canopy_core::store::workspaces;
 use canopy_core::types::now_ms;
 use serde_json::{Value, json};
 use std::net::SocketAddr;
@@ -79,30 +79,6 @@ async fn agents(State(s): State<Arc<AppState>>) -> Result<Json<Value>, Refusal> 
     Ok(Json(Routing::from_config(&config(&s).await?).routes()))
 }
 
-/// The records on disk past neither retention window and answered by no
-/// live shell (`refreshKept`). The Bun server deletes the expired records
-/// as it reads; this port leaves them, and only leaves them out. Where tmux
-/// runs, the live shells it holds would be subtracted, and this port does
-/// not read them yet.
-async fn kept(State(s): State<Arc<AppState>>, method: Method, uri: Uri) -> Response {
-    if s.gates.tmux {
-        return not_ported(method, uri).await;
-    }
-    let raw = match config(&s).await {
-        Ok(raw) => raw,
-        Err(e) => return e.into_response(),
-    };
-    let all = list_kept(&s.config_dir);
-    let gone = expired_shells(&all, now_ms() as f64, KEEP_DAYS);
-    let left: Vec<_> = all.into_iter().filter(|k| !gone.contains(&k.id)).collect();
-    // no shell is live here: tmux sessions are not ported yet
-    let kept: Vec<Value> = lost_shells(&left, &[])
-        .into_iter()
-        .map(|k| k.json)
-        .collect();
-    Json(json!({ "keeping": flag(&raw, "keepShells", false), "kept": kept })).into_response()
-}
-
 /// `GET /api/runs`: no live run here. `?kept=1` is the runs kept in the run
 /// log, which this port does not read yet.
 async fn runs(method: Method, uri: Uri) -> Response {
@@ -110,15 +86,6 @@ async fn runs(method: Method, uri: Uri) -> Response {
         .find(|(k, _)| k == "kept")
         .is_some_and(|(_, v)| v == "1");
     if kept {
-        return not_ported(method, uri).await;
-    }
-    Json(json!([])).into_response()
-}
-
-/// `GET /api/terms`: the shells. Without tmux there are none; with it they
-/// are its sessions, which this port does not list yet.
-async fn terms(State(s): State<Arc<AppState>>, method: Method, uri: Uri) -> Response {
-    if s.gates.tmux {
         return not_ported(method, uri).await;
     }
     Json(json!([])).into_response()
@@ -292,7 +259,6 @@ pub fn first_load() -> Router<Arc<AppState>> {
         .route("/api/workspaces", read(workspaces_route))
         .route("/api/launchers", read(launchers))
         .route("/api/agents", read(agents))
-        .route("/api/terms/kept", read(kept))
         .route("/api/people", read(people))
         .route("/api/client", read(client))
         .route("/api/verdict", read(verdict))
@@ -301,7 +267,6 @@ pub fn first_load() -> Router<Arc<AppState>> {
         .route("/api/flows", read(flows))
         .route("/api/fleets", read(flows))
         .route("/api/jobs", read(none))
-        .route("/api/terms", read(terms))
         .route("/api/helpers", read(none))
         .route("/api/devices", read(devices))
         .route(

@@ -364,6 +364,7 @@ pub fn router(state: Arc<AppState>, keeper: Arc<Gatekeeper>, web: &str) -> Route
         .merge(crate::settings_reads::routes())
         .merge(crate::work_reads::routes())
         .merge(crate::notes::routes())
+        .merge(crate::terms::routes(&state, &keeper))
         .route("/api/{*rest}", axum::routing::any(gated::fallback))
         .fallback_service(page)
         .with_state(state)
@@ -600,15 +601,15 @@ mod tests {
         };
         let s = serve_with(CallersMode::Log, &[], tmux).await;
         let addr = s.addr.as_str();
-        for path in [
-            "/api/terms",
-            "/api/terms/kept",
-            "/api/runs?kept=1",
-            "/api/verdict",
-            "/api/agents/pulse",
-        ] {
+        for path in ["/api/runs?kept=1", "/api/verdict", "/api/agents/pulse"] {
             let r = get(addr, path, 1 << 14).await;
             assert!(r.starts_with("HTTP/1.1 501"), "{path}: {r}");
+        }
+        // the shells under tmux are read (terms.rs): a tmux server on the
+        // scratch config dir that has not started holds none
+        for path in ["/api/terms", "/api/terms/kept"] {
+            let r = get(addr, path, 1 << 14).await;
+            assert!(r.starts_with("HTTP/1.1 200"), "{path}: {r}");
         }
         // flow records on disk would come back as the Bun server's flows
         let flows = s._root.path().join("config/flows");

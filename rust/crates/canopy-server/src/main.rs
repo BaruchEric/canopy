@@ -20,8 +20,10 @@ mod harnesses;
 mod notes;
 mod people;
 mod presence;
+mod pty;
 mod routes;
 mod settings_reads;
+mod terms;
 mod tree;
 mod work_reads;
 
@@ -125,6 +127,10 @@ async fn main() -> std::process::ExitCode {
         }
     };
     eprintln!("canopy-server on http://{addr} for {root}");
+    terms::listening(
+        &args.host,
+        listener.local_addr().map_or(args.port, |a| a.port()),
+    );
     let keeper = Arc::new(gate::Gatekeeper::from_env(
         canopy_auth::CallerBook::open_default(),
         &args.host,

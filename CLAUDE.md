@@ -17,6 +17,7 @@ bun run build              # vite builds of ui/ and its service worker into dist
 cd rust && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings   # the Rust port
 bash scripts/rust-parity.sh [folder]   # canopy-rs against the TypeScript CLI, byte for byte
 bash scripts/rust-server-parity.sh     # canopy-server's first-load routes against a scratch Bun server
+bash scripts/rust-shell-parity.sh      # a shell on tmux through each server, step by step (needs tmux)
 ```
 
 - The backend and CLI are being ported to Rust in `rust/` (docs/rust-port.md has the ledger and its rules). Bun still runs everything that ships, so a TypeScript change needs no Rust change in the same commit. When one turns a cargo test red (the git parsers, the push and pull messages, the scan walk, the tree's lines, the callers gate, the CLI's COMMANDS list, the words of `note`, `awake`, `issues`, `pr`, `scenarios`, `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `floorplan`, `archify`, `diagnosis`, `understand`, `capacity`, `costs`, `plugins`, `people`, `clip`, `worktrees`, `fr`, `workflow` and `health`, the workflow parser, a first-load route's answer, notes or screen layouts read back), that is drift the port fixes, not the session that made it. canopy-rs reads `src/core/help.ts` when it builds, so a help change reaches both CLIs. `canopy-server` needs `CANOPY_CONFIG_DIR` and never takes port 7850.
