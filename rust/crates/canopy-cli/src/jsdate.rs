@@ -40,6 +40,18 @@ pub fn locale_string_in(ms: f64, tz: &TimeZone) -> String {
     )
 }
 
+/// `new Date(v).toLocaleString()` for a JSON field: null as the epoch, a
+/// boolean as 0 or 1, and anything not a number as "Invalid Date".
+pub fn date_of(v: Option<&serde_json::Value>) -> String {
+    use serde_json::Value;
+    match v {
+        Some(Value::Null) => locale_string(0.0),
+        Some(Value::Number(n)) => locale_string(n.as_f64().unwrap_or(f64::NAN)),
+        Some(Value::Bool(b)) => locale_string(if *b { 1.0 } else { 0.0 }),
+        _ => "Invalid Date".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

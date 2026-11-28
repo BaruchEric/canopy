@@ -1,7 +1,10 @@
 //! One request to a canopy backend, as `ask()` in src/cli/health.ts sends
 //! it: at the first of the backend's addresses that answers, with the
 //! caller's token, no redirect followed, and a refusal by the backend taken
-//! as the answer rather than a reason to try the next address. Also the
+//! as the answer rather than a reason to try the next address. Also
+//! `fetch`, one request as a verb with its own `fetch()` sends it (secrets,
+//! incubator, ranger): one address, its status and body as they come, a
+//! JSON body or a multipart form; a fake answers it through `ask`. And the
 //! small argument helpers the HTTP verbs share (`take`, `has`) and the
 //! backend list (`targetsOf`).
 
@@ -227,6 +230,24 @@ pub(crate) trait Ask {
     /// answer (an event stream). A fake has none.
     fn client(&self) -> Option<&Client> {
         None
+    }
+
+    /// One `fetch()` as a verb with its own sends it (secrets, incubator,
+    /// ranger): one address, its status and body taken as they come, no
+    /// address tried after it. Err is Bun's words for why nothing answered.
+    /// A fake answers through `ask`, as `fetch_through_ask` says.
+    async fn fetch(
+        &self,
+        method: &str,
+        base: &str,
+        path: &str,
+        body: Option<Body<'_>>,
+        timeout: Option<Duration>,
+    ) -> Result<Fetched, String> {
+        match self.client() {
+            Some(c) => c.fetch(method, base, path, body, timeout).await,
+            None => fetch_through_ask(self, method, base, path, body).await,
+        }
     }
 }
 
@@ -600,6 +621,197 @@ pub fn is_origin(s: &str) -> bool {
     rest.is_some_and(|r| {
         !r.is_empty() && !r.chars().any(|c| c == '/' || canopy_core::pathx::js_ws(c))
     })
+}
+
+/// What one `fetch()` answered: its status and its body's text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fetched {
+    pub status: u16,
+    pub text: String,
+}
+
+impl Fetched {
+    /// `res.ok`.
+    pub fn ok(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+
+    /// `await res.json()`: the body as JSON, None where Bun's parse throws.
+    pub fn json(&self) -> Option<Value> {
+        serde_json::from_str(&self.text).ok()
+    }
+}
+
+/// One field of a multipart form, in the order `FormData` sends it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Part {
+    Text {
+        name: String,
+        value: String,
+    },
+    File {
+        name: String,
+        filename: String,
+        mime: String,
+        bytes: Vec<u8>,
+    },
+}
+
+/// A request body as a verb with its own `fetch()` sends it.
+#[derive(Debug, Clone, Copy)]
+pub enum Body<'a> {
+    Json(&'a Value),
+    Form(&'a [Part]),
+}
+
+/// A form's fields as a fake reads them: each name's values in order, a
+/// file as `file:<name>:<text>`, the record the TypeScript tests keep.
+pub fn form_record(parts: &[Part]) -> Value {
+    let mut out = serde_json::Map::new();
+    for p in parts {
+        let (name, value) = match p {
+            Part::Text { name, value } => (name, value.clone()),
+            Part::File {
+                name,
+                filename,
+                bytes,
+                ..
+            } => (
+                name,
+                format!("file:{filename}:{}", String::from_utf8_lossy(bytes)),
+            ),
+        };
+        if let Value::Array(list) = out
+            .entry(name.clone())
+            .or_insert_with(|| Value::Array(vec![]))
+        {
+            list.push(Value::String(value));
+        }
+    }
+    Value::Object(out)
+}
+
+/// A fake's `fetch`: its `ask` answer as a 200, a refusal as its status
+/// with `{error}`, a want of a right as a 403, and an unreachable backend
+/// as the failure. A form goes to the fake as `{"form": form_record}`.
+async fn fetch_through_ask<A: Ask + ?Sized>(
+    a: &A,
+    method: &str,
+    base: &str,
+    path: &str,
+    body: Option<Body<'_>>,
+) -> Result<Fetched, String> {
+    let sent = match body {
+        Some(Body::Json(v)) => Some(v.clone()),
+        Some(Body::Form(parts)) => Some(serde_json::json!({ "form": form_record(parts) })),
+        None => None,
+    };
+    let refused = |status: u16, error: String| Fetched {
+        status,
+        text: serde_json::json!({ "error": error }).to_string(),
+    };
+    match a
+        .ask(&Target::home(base), method, path, sent.as_ref())
+        .await
+    {
+        Ok(v) => Ok(Fetched {
+            status: 200,
+            text: v.to_string(),
+        }),
+        Err(AskError::Refused { message, status }) => Ok(refused(status, message)),
+        Err(AskError::Denied(m)) => Ok(refused(403, m)),
+        Err(AskError::Unreachable(m)) => Err(m),
+    }
+}
+
+/// `"` and line breaks in a form field's name, as Bun's FormData escapes
+/// them.
+fn form_name(s: &str) -> String {
+    s.replace('"', "%22")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+}
+
+/// A form as `multipart/form-data`: the boundary and the body's bytes.
+fn multipart(parts: &[Part]) -> (String, Vec<u8>) {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let boundary = format!("----CanopyFormBoundary{stamp:x}{:x}", std::process::id());
+    let mut out: Vec<u8> = Vec::new();
+    for p in parts {
+        out.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        match p {
+            Part::Text { name, value } => {
+                out.extend_from_slice(
+                    format!(
+                        "Content-Disposition: form-data; name=\"{}\"\r\n\r\n",
+                        form_name(name)
+                    )
+                    .as_bytes(),
+                );
+                out.extend_from_slice(value.as_bytes());
+            }
+            Part::File {
+                name,
+                filename,
+                mime,
+                bytes,
+            } => {
+                out.extend_from_slice(
+                    format!(
+                        "Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\nContent-Type: {mime}\r\n\r\n",
+                        form_name(name),
+                        form_name(filename)
+                    )
+                    .as_bytes(),
+                );
+                out.extend_from_slice(bytes);
+            }
+        }
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (boundary, out)
+}
+
+impl Client {
+    /// `fetch(base + path, {method, redirect: "manual", headers:
+    /// callerHeaders(base), body})`, with a timeout only where the
+    /// TypeScript sets an `AbortSignal.timeout`.
+    pub async fn fetch(
+        &self,
+        method: &str,
+        base: &str,
+        path: &str,
+        body: Option<Body<'_>>,
+        timeout: Option<Duration>,
+    ) -> Result<Fetched, String> {
+        let method = Method::from_bytes(method.as_bytes()).unwrap_or(Method::GET);
+        let full = format!("{base}{path}");
+        let mut req = self.request(method, base, &full, timeout);
+        match body {
+            Some(Body::Json(v)) => {
+                req = req
+                    .header("content-type", "application/json")
+                    .body(v.to_string());
+            }
+            Some(Body::Form(parts)) => {
+                let (boundary, bytes) = multipart(parts);
+                req = req
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(bytes);
+            }
+            None => {}
+        }
+        let res = req.send().await.map_err(|e| fetch_words(&e, &full))?;
+        let status = res.status().as_u16();
+        let text = res.text().await.map_err(|e| fetch_words(&e, &full))?;
+        Ok(Fetched { status, text })
+    }
 }
 
 #[cfg(test)]
