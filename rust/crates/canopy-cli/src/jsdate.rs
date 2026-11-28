@@ -5,6 +5,16 @@
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
+/// `new Date(ms).toISOString()`: UTC to the millisecond. None for a time
+/// JavaScript cannot hold, where it throws.
+pub fn iso_string(ms: f64) -> Option<String> {
+    if !ms.is_finite() {
+        return None;
+    }
+    let ts = Timestamp::from_millisecond(ms.trunc() as i64).ok()?;
+    Some(ts.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+}
+
 /// `new Date(ms).toLocaleString()` in the system's zone.
 pub fn locale_string(ms: f64) -> String {
     locale_string_in(ms, &TimeZone::system())

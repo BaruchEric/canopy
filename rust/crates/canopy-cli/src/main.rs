@@ -6,8 +6,9 @@
 //! `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `queue`,
 //! `collisions`, `floorplan`, `archify`, `diagnosis`, `understand`,
 //! `capacity`, `costs`, `plugins`, `people`, `clip`, `clips`, `worktrees`,
-//! `workflow` and `health` over HTTP, `fr` on a repo's own git, and every
-//! verb's `--help`, with output byte for byte the TypeScript CLI's.
+//! `workflow`, `health`, `auth`, `coordinator` and `mcp` (an MCP server on
+//! stdio) over HTTP, `tenant` on this host, `fr` on a repo's own git, and
+//! every verb's `--help`, with output byte for byte the TypeScript CLI's.
 //! `HTTP_VERBS` lists the HTTP verbs and `fr`: each gets `--backend` in
 //! its own arguments, as in index.ts, and `fr` refuses it with its usage.
 //! `--token` is read for every verb, as index.ts reads it. Every other
@@ -21,9 +22,12 @@
 mod api;
 mod archify;
 mod ask;
+mod auth;
 mod awake;
+mod canopymcp;
 mod capacity;
 mod clips;
+mod coordinator;
 mod costs;
 mod diagnosis;
 mod floorplan;
@@ -37,14 +41,17 @@ mod kit;
 mod land;
 mod loadouts;
 mod mapsection;
+mod mcp;
 mod notes;
 mod out;
+mod pair;
 mod people;
 mod plugins;
 mod prs;
 mod render;
 mod scenarios;
 mod sweep;
+mod tenant;
 mod understand;
 mod work;
 mod workflow;
@@ -198,6 +205,11 @@ const HTTP_VERBS: &[&str] = &[
     "fr",
     "workflow",
     "health",
+    "auth",
+    "tenant",
+    "tenants",
+    "coordinator",
+    "mcp",
 ];
 
 /// `flag()` in index.ts: take a bare flag out of the arguments.
@@ -213,7 +225,7 @@ fn flag(args: &mut Vec<String>, name: &str) -> bool {
 
 /// `opt()` in index.ts: take a flag and the word after it, whatever that
 /// word is; a flag with nothing after it stays where it is.
-fn opt(args: &mut Vec<String>, name: &str) -> Option<String> {
+pub(crate) fn opt(args: &mut Vec<String>, name: &str) -> Option<String> {
     let i = args.iter().position(|a| a == name)?;
     if i + 1 >= args.len() {
         return None;
@@ -568,6 +580,39 @@ async fn http_verb(
             };
             health::health_cmd(rest, &caller, &client, &mut o, &env).await
         }
+        "auth" => {
+            // a login's pair code goes out the moment it is known
+            let say = |line: String| println!("{line}");
+            let env = auth::AuthEnv::new(render::Paint { color: use_color() }, &say);
+            auth::auth_cmd(rest, &caller, &client, &mut o, &env).await
+        }
+        "coordinator" => coordinator::coordinator_cmd(rest, &caller, &client, &mut o).await,
+        "tenant" | "tenants" => {
+            let host = tenant::Real {
+                client: ask::Client::new(caller.clone()),
+            };
+            tenant::tenant_cmd(rest, &host, &mut o).await
+        }
+        "mcp" => {
+            // each reply is a line of its own, written as it is made
+            let mut write = |line: String| {
+                use std::io::Write as _;
+                let mut stdout = std::io::stdout().lock();
+                let _ = writeln!(stdout, "{line}");
+                let _ = stdout.flush();
+            };
+            let env = mcp::McpEnv::from_process();
+            mcp::mcp_cmd(
+                rest,
+                &caller,
+                &client,
+                &mut o,
+                env,
+                tokio::io::stdin(),
+                &mut write,
+            )
+            .await
+        }
         _ => land::land_cmd(verb, rest, &caller, &client, &mut o).await,
     };
     finish_out(o, r)
@@ -847,6 +892,38 @@ mod tests {
                 rest: args(&["--backend", "http://x:1"]),
                 token: Some("t".into()),
                 home_base: Some("http://x:1".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn auth_tenant_coordinator_and_mcp_run_here() {
+        for verb in ["auth", "tenant", "tenants", "coordinator", "mcp"] {
+            assert!(
+                matches!(plan(&args(&[verb])), Plan::Http { verb: v, .. } if v == verb),
+                "{verb}"
+            );
+        }
+        assert_eq!(
+            plan(&args(&[
+                "auth",
+                "login",
+                "--backend",
+                "http://b:1",
+                "--token",
+                "t"
+            ])),
+            Plan::Http {
+                verb: "auth".into(),
+                rest: args(&["login", "--backend", "http://b:1"]),
+                token: Some("t".into()),
+                home_base: Some("http://b:1".into()),
+            }
+        );
+        assert_eq!(
+            plan(&args(&["mcp", "--help"])),
+            Plan::Help {
+                verb: Some("mcp".into())
             }
         );
     }

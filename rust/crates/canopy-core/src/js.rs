@@ -227,6 +227,20 @@ pub fn pretty<T: serde::Serialize + ?Sized>(v: &T) -> String {
     serde_json::to_string_pretty(v).unwrap_or_default()
 }
 
+/// `JSON.stringify(v)`: compact, a whole number read as a double (`1.0`)
+/// written with no point, as JavaScript writes it.
+pub fn stringify(v: &Value) -> String {
+    fn js(v: &Value) -> Value {
+        match v {
+            Value::Number(n) if n.is_f64() => num(n.as_f64().unwrap_or(f64::NAN)),
+            Value::Array(a) => Value::Array(a.iter().map(js).collect()),
+            Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), js(x))).collect()),
+            other => other.clone(),
+        }
+    }
+    serde_json::to_string(&js(v)).unwrap_or_default()
+}
+
 /// `Object.keys()`: the keys that read as array indexes first, by number,
 /// then the rest in the order the JSON gave them. Anything but an object
 /// has none.
