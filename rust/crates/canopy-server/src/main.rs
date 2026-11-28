@@ -1,9 +1,10 @@
 //! `canopy-server`, the start of the Rust port of the Bun server
 //! (`src/server/index.ts`). It scans the folders it is given and serves
 //! the built page (`dist/web`) with the reads the page makes on its first
-//! load (`routes.rs` and `settings_reads.rs` list them), the tree,
-//! `/api/about`, `/api/sources` and the `/api/events` stream with the
-//! devices on it (`presence.rs`).
+//! load (`routes.rs`, `settings_reads.rs` and `work_reads.rs` list them),
+//! the tree, `/api/about`, `/api/sources` and the `/api/events` stream with
+//! the devices on it (`presence.rs`). Quick notes are its own, writes and
+//! reminders included (`notes.rs`).
 //! The rest of the API answers 501;
 //! docs/rust-port.md has the ledger.
 //!
@@ -16,6 +17,7 @@ mod app;
 mod gate;
 mod gated;
 mod harnesses;
+mod notes;
 mod people;
 mod presence;
 mod routes;

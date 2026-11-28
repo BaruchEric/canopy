@@ -18,6 +18,7 @@ pub mod floorplan;
 pub mod flowgraph;
 pub mod flowmodes;
 pub mod fr;
+pub mod fserr;
 pub mod gates;
 pub mod git;
 pub mod gitwrite;

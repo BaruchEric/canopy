@@ -22,6 +22,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::gate::{self, GateCaller, Gatekeeper};
 use crate::gated::{self, Gates};
 use crate::harnesses::backend_caps;
+use crate::notes::{Notes, TICK_EVERY, remind_every};
 use crate::people::People;
 use crate::presence::{Presence, TELL_AFTER, parse_stream};
 use crate::routes::client_key;
@@ -65,6 +66,8 @@ pub struct AppState {
     pub gates: Gates,
     /// the pages' event streams and the browsers they say they are
     pub presence: Presence,
+    /// quick notes, whose reminders `start` sets on the trigger tick
+    pub notes: Arc<Notes>,
 }
 
 /// The config as the Bun server reads it.
@@ -150,6 +153,8 @@ impl AppState {
             return Err(e);
         }
         let (events, _) = broadcast::channel(64);
+        let notes = Arc::new(Notes::new(&s.config_dir, events.clone()));
+        tokio::spawn(remind_every(notes.clone(), TICK_EVERY));
         Ok(Self {
             root: s.root,
             config_dir: s.config_dir,
@@ -163,6 +168,7 @@ impl AppState {
             gateway: default_gateway(),
             gates: s.gates,
             presence: Presence::default(),
+            notes,
         })
     }
 
@@ -357,6 +363,7 @@ pub fn router(state: Arc<AppState>, keeper: Arc<Gatekeeper>, web: &str) -> Route
         .merge(first_load())
         .merge(crate::settings_reads::routes())
         .merge(crate::work_reads::routes())
+        .merge(crate::notes::routes())
         .route("/api/{*rest}", axum::routing::any(gated::fallback))
         .fallback_service(page)
         .with_state(state)
@@ -760,5 +767,134 @@ mod tests {
                 .await
                 .starts_with("HTTP/1.1 405")
         );
+    }
+
+    async fn send(addr: &str, method: &str, path: &str, body: &str) -> String {
+        let raw = format!(
+            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        s.write_all(raw.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        s.read_to_string(&mut answer).await.unwrap();
+        answer
+    }
+
+    #[tokio::test]
+    async fn the_notes_routes_answer_over_the_socket_with_the_scans_repos() {
+        let s = serve(CallersMode::Log, &[]).await;
+        let addr = s.addr.as_str();
+        let root = s._root.path().to_str().unwrap().to_string();
+        let added = send(
+            addr,
+            "POST",
+            "/api/notes",
+            &format!(r#"{{"text":"x","repo":"{root}/a/repo"}}"#),
+        )
+        .await;
+        assert!(added.starts_with("HTTP/1.1 200"), "{added}");
+        assert_eq!(body(&added)["repoId"], "a/repo");
+        let id = body(&added)["id"].as_str().unwrap().to_string();
+        assert!(canopy_core::notes::is_note_id(&id));
+        let list = body(&get(addr, "/api/notes", 1 << 14).await);
+        assert_eq!(list["notes"][0]["id"], id.as_str());
+        for path in ["/api/notes/", "/api/notes/other"] {
+            let r = get(addr, path, 1 << 14).await;
+            assert!(
+                r.starts_with("HTTP/1.1 404") && r.contains("not found"),
+                "{path}: {r}"
+            );
+        }
+        let done = send(
+            addr,
+            "POST",
+            "/api/notes/done",
+            &format!(r#"{{"id":"{id}"}}"#),
+        )
+        .await;
+        assert!(done.starts_with("HTTP/1.1 200"), "{done}");
+        let gone = send(addr, "DELETE", &format!("/api/notes?id={id}"), "").await;
+        assert!(
+            gone.starts_with("HTTP/1.1 200") && gone.contains(r#"{"ok":true}"#),
+            "{gone}"
+        );
+        assert_eq!(
+            body(&get(addr, "/api/notes", 1 << 14).await),
+            json!({ "notes": [] })
+        );
+    }
+
+    /// Lets the spawned tasks run, file work included, without moving a
+    /// paused clock: a yield never parks the runtime long enough to advance
+    /// it, and the thread's sleep passes no tokio time.
+    async fn settle() {
+        for _ in 0..40 {
+            tokio::task::yield_now().await;
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_due_reminder_is_marked_and_broadcast_once_on_the_trigger_tick() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("a/repo/.git")).unwrap();
+        let config = root.path().join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let seeded = r#"[{"id":"n-dueaaaaa","text":"call the bank","createdAt":1,"due":1000},{"id":"n-plainaaa","text":"a thought","createdAt":2}]"#;
+        std::fs::write(config.join("notes.json"), seeded).unwrap();
+        let config_dir = config.to_str().unwrap().to_string();
+        let state = AppState::start(Setup {
+            root: root.path().to_str().unwrap().into(),
+            config_dir: config_dir.clone(),
+            about: about("/r"),
+            config: Box::new(|| Ok(CanopyConfig::default())),
+            harnesses: Box::new(|| vec!["claude"]),
+            people: Arc::new(People::new(&config_dir)),
+            gates: Gates {
+                tmux: false,
+                chan: false,
+                voice: false,
+                evaluator: false,
+            },
+        })
+        .await
+        .unwrap();
+        let mut rx = state.events.subscribe();
+        tokio::time::pause();
+        // nothing before the first tick, a whole period after the start; the
+        // second of margin covers the real time between the start and the
+        // pause on a loaded machine
+        tokio::time::advance(TICK_EVERY - Duration::from_secs(1)).await;
+        settle().await;
+        assert!(rx.try_recv().is_err(), "a reminder before the first tick");
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let mut frame = None;
+        for _ in 0..10 {
+            settle().await;
+            if let Ok(f) = rx.try_recv() {
+                frame = Some(f);
+                break;
+            }
+        }
+        let frame: Value = serde_json::from_str(&frame.expect("no notes frame")).unwrap();
+        assert_eq!(frame["type"], "notes");
+        let reminded = frame["notes"][0]["remindedAt"].clone();
+        assert!(reminded.as_f64().is_some_and(|t| t > 1000.0), "{frame}");
+        assert!(frame["notes"][1].get("remindedAt").is_none());
+        let file: Value =
+            serde_json::from_str(&std::fs::read_to_string(config.join("notes.json")).unwrap())
+                .unwrap();
+        assert_eq!(file, frame["notes"]);
+        // the next ticks find it delivered
+        for _ in 0..3 {
+            tokio::time::advance(TICK_EVERY).await;
+            settle().await;
+        }
+        assert!(rx.try_recv().is_err(), "delivered more than once");
+        let again: Value =
+            serde_json::from_str(&std::fs::read_to_string(config.join("notes.json")).unwrap())
+                .unwrap();
+        assert_eq!(again[0]["remindedAt"], reminded);
     }
 }
