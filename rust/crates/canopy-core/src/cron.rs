@@ -2,9 +2,9 @@
 //! ranger's wakes, the part a wake read back off disk needs (a line read
 //! into its sets, `parseCron`; the `@` words written out, `expandCron`;
 //! whether a line reads, `isCron`), and a one-shot time as typed
-//! (`parseWhen`), what a note's reminder and a wake are set by. When a line
-//! next fires (`nextFire`), `leadingWhen` and `lastClock` are not ported
-//! yet.
+//! (`parseWhen`), what a note's reminder and a wake are set by, and the
+//! time a command line starts with (`leadingWhen`). When a line next fires
+//! (`nextFire`) and `lastClock` are not ported yet.
 //!
 //! The sets keep the order the line names their values in, as a
 //! JavaScript `Set` does. Local time is the zone `TZ` names, else the
@@ -185,6 +185,26 @@ static CLOCK: LazyLock<Regex> = LazyLock::new(|| {
     ))
     .expect("CLOCK")
 });
+
+/// `ISO_WHEN`: a date and a time as `leadingWhen` takes them, its offset
+/// optional.
+static ISO_WHEN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?$").unwrap()
+});
+
+/// `leadingWhen()`: the time a command line starts with, in a form the
+/// server reads, and the words after it. `in 30m`, `at 14:00` and
+/// `2026-10-11 09:00` run to more than one word unquoted, so the longest
+/// run of up to three leading words that has a time's shape wins.
+pub fn leading_when(words: &[String]) -> Option<(String, Vec<String>)> {
+    for n in (1..=words.len().min(3)).rev() {
+        let when = words[..n].join(" ");
+        if IN.is_match(&when) || CLOCK.is_match(&when) || ISO_WHEN.is_match(&when) {
+            return Some((when, words[n..].to_vec()));
+        }
+    }
+    None
+}
 
 /// What `parseWhen` hands to `new Date()`: a date and a time at the front.
 static ISO_FRONT: LazyLock<Regex> =

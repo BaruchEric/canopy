@@ -262,6 +262,21 @@ pub fn keys(o: Option<&Value>) -> Vec<&String> {
     out
 }
 
+/// A literal for a regex with its letters matched in either case, ASCII
+/// only, as a JavaScript `i` flag without `u` folds them: Rust's `(?i)`
+/// would also take `ſ` for `s` and the Kelvin sign for `k`.
+pub fn ascii_ci(word: &str) -> String {
+    word.chars()
+        .map(|c| {
+            if c.is_ascii_alphabetic() {
+                format!("[{}{}]", c.to_ascii_lowercase(), c.to_ascii_uppercase())
+            } else {
+                regex::escape(&c.to_string())
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

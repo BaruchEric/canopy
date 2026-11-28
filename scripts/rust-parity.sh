@@ -20,8 +20,9 @@
 # The backend verbs (note, awake, issues, pr, prs, scenarios, sweep, kit,
 # loadouts, groups, work, land, queue, collisions, floorplan, archify,
 # diagnosis, understand, capacity, costs, plugins, people, clip, clips,
-# worktrees, workflow, health, run, runs) talk to a scratch Bun server this
-# script starts on a free port with its own config dir and HOME, and to nothing
+# worktrees, workflow, health, run, runs, secrets, incubator, new, ranger)
+# talk to a scratch Bun server this script starts on a free port with its
+# own config dir and HOME, and to nothing
 # else: CANOPY_API, CANOPY_TOKEN and CANOPY_BACKEND are cleared first, so a
 # canopy shell's settings never point either CLI at a real backend. Before
 # it starts, the script seeds that config dir and HOME with things to
@@ -77,6 +78,14 @@
 # coordinator, an MCP session piped in on stdin that only reads or is
 # refused, tenants kept in scratch folders, and a second scratch server
 # that enforces who calls, for auth's sign-in, invite and sign-out.
+# secrets, incubator, new and ranger use the same server. Its secrets
+# reader keeps a key in its scratch config dir: off the Mac, the TypeScript
+# CLI makes one under a scratch passphrase and both CLIs replace, unlock and
+# forget it there (never a real store, and no keychain); pin writes each
+# side's own config dir. The incubator takes back four seeded projects, none
+# queued, and has no stages, so nothing starts: each step is a listing, a
+# refusal, or a stop of a project already stopped. The ranger stays off: its
+# status, and refusals only.
 #
 # Both run against a scratch config dir, so nothing under ~/.config/canopy
 # is read or written.
@@ -433,6 +442,47 @@ printf -- '---\nname: broken\n---\n\n## Do\n\nx\n' >"$scratch/config/workflows/b
 printf -- '---\nblurb: q\nlisted: false\n---\n\n## Q\n\nq\n' >"$scratch/config/workflows/quiet.md"
 cp "$scratch/config/workflows/fan.md" "$scratch/flows/fan.md"
 sed 's/when: verdict done, check pass/when: judge meets/' "$scratch/flows/fan.md" >"$scratch/flows/bad.md"
+# incubator: four projects for the server to take back, none queued, so
+# the queue starts nothing (and the scratch server has no stages anyway):
+# one waiting on clarify's questions, one parked, one whose hand-off waits
+# for a yes, and one stopped. Each record names the realpath'd root the
+# server stamps its own with.
+sprout() {
+  mkdir -p "$seed/incubator/$1"
+  cat >"$seed/incubator/$1/sprout.json"
+}
+sroot="$real/server/root"
+sprout sp_0000000000a1 <<JSON
+{"id": "sp_0000000000a1", "slug": "coins", "title": "a coin counter", "status": "clarifying", "repoId": "_incubator/coins",
+ "seedPath": "$sroot/_incubator/coins", "prepared": true, "inputs": [], "clarified": false, "reclarify": false,
+ "questions": [{"question": "Who counts?", "header": "who", "options": [{"label": "staff", "description": "the attendant"}, {"label": "owner", "description": ""}], "multiSelect": false},
+               {"question": "Which coins?", "header": "coins", "options": [{"label": "quarters", "description": ""}, {"label": "dimes", "description": ""}], "multiSelect": true},
+               {"question": "Anything else?", "header": "else", "options": [], "multiSelect": false}],
+ "questionsAt": 1764300000000, "flows": [], "spent": {"runs": 1, "workMs": 90000},
+ "createdAt": 1764300000000, "updatedAt": 1764300000000, "root": "$sroot"}
+JSON
+sprout sp_0000000000a2 <<JSON
+{"id": "sp_0000000000a2", "slug": "menu", "title": "a menu board", "status": "parked", "parked": "Accept did not accept the work",
+ "repoId": "_incubator/menu", "seedPath": "$sroot/_incubator/menu", "prepared": true, "inputs": [], "clarified": true, "reclarify": false,
+ "pick": {"kind": "new", "host": "vercel", "why": "nothing close exists"}, "flows": [], "spent": {"runs": 4, "workMs": 1500000},
+ "createdAt": 1764300001000, "updatedAt": 1764300001000, "root": "$sroot"}
+JSON
+sprout sp_0000000000a3 <<JSON
+{"id": "sp_0000000000a3", "slug": "dark-mode", "title": "dark mode for clms", "status": "approving",
+ "repoId": "_incubator/dark-mode", "seedPath": "$sroot/_incubator/dark-mode", "prepared": true, "inputs": [], "clarified": true, "reclarify": false,
+ "pick": {"kind": "extend", "host": "vercel", "why": "the app exists", "target": "web-apps/clms"},
+ "handOff": {"head": "0123456789abcdef0123456789abcdef01234567", "base": "fedcba9876543210fedcba9876543210fedcba98",
+             "remote": "https://github.com/eric/clms.git", "branch": "new/dark-mode",
+             "commits": [{"sha": "0123456789abcdef", "subject": "add the toggle"}], "moreCommits": 1,
+             "files": [{"path": "src/theme.ts", "added": 30, "removed": 2}, {"path": "logo.png", "added": null, "removed": null}], "moreFiles": 0,
+             "flagged": ["vercel.json: deploy config"], "at": 1764300002000},
+ "flows": [], "spent": {"runs": 6, "workMs": 2400000}, "createdAt": 1764300002000, "updatedAt": 1764300002000, "root": "$sroot"}
+JSON
+sprout sp_0000000000a4 <<JSON
+{"id": "sp_0000000000a4", "slug": "old", "title": "an old idea", "status": "stopped",
+ "repoId": "_incubator/old", "seedPath": "$sroot/_incubator/old", "prepared": true, "inputs": [], "clarified": true, "reclarify": false,
+ "flows": [], "spent": {"runs": 1, "workMs": 30000}, "createdAt": 1764299999000, "updatedAt": 1764299999000, "root": "$sroot"}
+JSON
 env -i HOME="$scratch/server/home" PATH="$(dirname "$bun"):/usr/local/bin:/usr/bin:/bin" SHELL=/bin/bash LANG=C.UTF-8 \
   CANOPY_CONFIG_DIR="$scratch/server/config" CANOPY_LOOPBACK_AUTH=1 CANOPY_PREVIEW_PORTS=0 CANOPY_NO_DESKTOP=1 \
   CANOPY_AGENT_SCAN=0 CANOPY_TAILCHAN_URL=off CANOPY_TMUX=0 KIT_CLAUDE="$fake_claude" \
@@ -1462,3 +1512,147 @@ hcheck auth-logout-down auth logout --backend "$down"
 hcheck auth-login-down auth login --backend "$down"
 hcheck auth-join-down auth join cnv_x --backend "$down"
 hcheck auth-logout-url auth logout --backend notaurl
+# ---- secrets, incubator, new and ranger ----
+# secrets: the scratch server runs a reader of its own (no secrets service
+# socket), with no pinned key, so its list says why it has nothing and a
+# propose stops before any file is scanned. Its key store is the scratch
+# config dir: off the Mac (whose server would keep a passphrase in the login
+# Keychain), the TypeScript CLI makes a key there with a scratch
+# passphrase, both CLIs replace it in turn (the random recipient masked),
+# then refuse a second key, take a wrong passphrase, unlock and forget. pin
+# writes each side's own config dir, compared byte for byte; recover goes
+# to the TypeScript CLI whole.
+printf 'scratch passphrase 1\nscratch passphrase 1\n' >"$scratch/pass.txt"
+printf 'scratch passphrase 1\nscratch passphrase 2\n' >"$scratch/pass-differ.txt"
+printf 'short\nshort\n' >"$scratch/pass-short.txt"
+printf 'not the passphrase\n' >"$scratch/pass-wrong.txt"
+hcheck secrets secrets
+hcheck secrets-list-json secrets list --json
+hcheck secrets-status secrets status
+hcheck secrets-status-json secrets --json status
+hcheck secrets-usage secrets what
+hcheck secrets-backend secrets --backend "$down"
+(export CANOPY_API=$down && hcheck secrets-down secrets status)
+scheck secrets-unlock-none secrets unlock
+hcheck secrets-unlock-flag secrets unlock --what
+hcheck secrets-key-flag secrets key --what
+IN=$scratch/pass-differ.txt scheck secrets-key-differ secrets key
+IN=$scratch/pass-short.txt scheck secrets-key-short secrets key
+hcheck secrets-propose-usage secrets propose
+hcheck secrets-propose-offset secrets propose --all --offset -1
+hcheck secrets-propose-match secrets propose --match
+hcheck secrets-propose-all secrets propose --all
+hcheck secrets-propose-dry secrets propose --match x --dry-run --json
+hcheck secrets-pin-usage secrets pin
+hcheck secrets-pin-short secrets pin short
+hcheck secrets-recover secrets recover
+if [ "$(uname)" != Darwin ]; then
+  bun "$ts" secrets key <"$scratch/pass.txt" >/dev/null
+  IN=$scratch/pass.txt scheck secrets-key-has secrets key
+  IN=$scratch/pass.txt MASK='s/age1[a-z0-9]+/<age>/' scheck secrets-key-replace secrets key --replace
+  IN=$scratch/pass-wrong.txt scheck secrets-unlock-wrong secrets unlock
+  IN=$scratch/pass.txt scheck secrets-unlock secrets unlock
+  IN=$scratch/pass.txt scheck secrets-unlock-keep secrets unlock --keep
+  hcheck secrets-status-open secrets status
+  hcheck secrets-forget secrets forget
+fi
+# pincheck <name> <args...> - each CLI with a config dir of its own, then
+# the secrets-config.json each wrote, its bytes and its mode
+pincheck() {
+  local name=$1 side out code
+  shift
+  for side in ts rs; do
+    mkdir -p "$scratch/pin-$side"
+    out="$scratch/$side.$name"
+    if [ "$side" = ts ]; then
+      CANOPY_CONFIG_DIR="$scratch/pin-$side" bun "$ts" "$@" >"$out.1" 2>"$out.2" && code=0 || code=$?
+    else
+      CANOPY_CONFIG_DIR="$scratch/pin-$side" "$rs" "$@" >"$out.1" 2>"$out.2" && code=0 || code=$?
+    fi
+    { cat "$out.1"; echo "--- stderr"; cat "$out.2"; echo "--- exit $code"; ls -l "$scratch/pin-$side/secrets-config.json" | cut -c1-10; } >"$out"
+  done
+  same "$name" "$scratch/ts.$name" "$scratch/rs.$name" "$*"
+  if cmp "$scratch/pin-ts/secrets-config.json" "$scratch/pin-rs/secrets-config.json"; then
+    echo "same ($name-file): secrets-config.json ($(wc -c <"$scratch/pin-ts/secrets-config.json" | tr -d ' ') bytes)"
+  else
+    echo "differs ($name-file): secrets-config.json" >&2
+    exit 1
+  fi
+}
+pincheck secrets-pin secrets pin AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= --remote "$scratch/nosuch/secrets.git"
+pincheck secrets-pin-again secrets pin BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
+
+# incubator: the four seeded projects listed, shown and refused; nothing
+# here answers clarify, resumes, stops a live project, says yes to a
+# hand-off or adds input that goes in. add's form is parsed by the server
+# before it refuses the stopped and the approving project. pick-check reads
+# a seed's .canopy/ in each side's own copy. new stops at where stages run,
+# since the scratch server has none.
+printf 'count the quarters\n' >"$scratch/memo.md"
+hcheck incubator incubator
+hcheck incubator-json incubator list --json
+hcheck incubator-show-questions incubator show sp_0000000000a1
+hcheck incubator-show-parked incubator show sp_0000000000a2
+hcheck incubator-show-handoff incubator show sp_0000000000a3
+hcheck incubator-show-ended incubator show sp_0000000000a4
+hcheck incubator-show-json incubator show sp_0000000000a3 --json
+hcheck incubator-show-none incubator show sp_000000000fff
+hcheck incubator-show-usage incubator show
+hcheck incubator-answer-count incubator answer sp_0000000000a1 1 2 3 4
+hcheck incubator-answer-quiet incubator answer sp_0000000000a2 1
+hcheck incubator-answer-usage incubator answer sp_0000000000a1
+hcheck incubator-answer-flag incubator answer sp_0000000000a1 --skp
+hcheck incubator-answer-both incubator answer sp_0000000000a1 x --skip
+hcheck incubator-resume-live incubator resume sp_0000000000a1
+hcheck incubator-stop-ended incubator stop sp_0000000000a4
+hcheck incubator-dismiss-live incubator dismiss sp_0000000000a1
+hcheck incubator-handoff-head incubator handoff sp_0000000000a3 --yes zz
+hcheck incubator-handoff-usage incubator handoff sp_0000000000a3
+hcheck incubator-handoff-none incubator handoff sp_0000000000a1 --yes 0123456
+hcheck incubator-add-ended incubator add sp_0000000000a4 also --url https://example.com/x --file "$scratch/memo.md"
+hcheck incubator-add-approving incubator add sp_0000000000a3 words
+hcheck incubator-add-none incubator add sp_000000000fff words
+hcheck incubator-add-usage incubator add sp_0000000000a1
+hcheck incubator-add-missing incubator add sp_0000000000a1 --file "$scratch/nosuch.md"
+hcheck incubator-usage incubator what
+hcheck incubator-list-extra incubator list extra
+hcheck incubator-needs incubator --backend
+hcheck incubator-origin incubator --backend http://x/y
+hcheck incubator-down incubator --backend "$down"
+gcheck incubator-pick-missing incubator pick-check
+both 'mkdir .canopy && printf "{\"kind\": \"new\", \"host\": \"mini\", \"why\": \"small\"}\n" >.canopy/pick.json'
+gcheck incubator-pick-parked incubator pick-check
+both 'printf "{\"kind\": \"renovate\", \"host\": \"vercel\", \"why\": \"w\", \"target\": \"https://github.com/a/b\", \"license\": \"AGPL-3.0\"}\n" >.canopy/pick.json'
+gcheck incubator-pick-license incubator pick-check
+both 'printf "{nope\n" >.canopy/pick.json'
+gcheck incubator-pick-broken incubator pick-check
+both 'printf "{\"kind\": \"new\", \"host\": \"vercel\", \"why\": \"nothing close exists\"}\n" >.canopy/pick.json'
+gcheck incubator-pick-research incubator pick-check
+both 'printf "# research\n" >.canopy/research.md'
+gcheck incubator-pick-ok incubator pick-check
+both 'rm -r .canopy'
+hcheck new-usage new
+hcheck new-stages-off new "a coin counter" --file "$scratch/memo.md"
+hcheck new-repo new https://github.com/a/b
+hcheck new-flag new x --fiel y
+hcheck new-file-missing new x --file "$scratch/nosuch.md"
+hcheck new-origin new x --backend mini
+hcheck new-down new x --backend "$down"
+
+# ranger: its state, and only what refuses: restart and fresh while it is
+# off, a wake that is not there, and the usages. Nothing turns it on, sends
+# it a message or sets a wake.
+hcheck ranger ranger
+hcheck ranger-status ranger status
+hcheck ranger-restart ranger restart
+hcheck ranger-fresh ranger fresh
+hcheck ranger-unwake-none ranger unwake nosuch
+hcheck ranger-unwake-usage ranger unwake
+hcheck ranger-say-usage ranger say "  "
+hcheck ranger-wake-usage ranger wake
+hcheck ranger-wake-time ranger wake in 30m
+hcheck ranger-wake-cron ranger wake --cron "0 8 * * *"
+hcheck ranger-usage ranger what
+hcheck ranger-backend ranger --backend
+hcheck ranger-origin ranger --backend http://x/y
+hcheck ranger-down ranger --backend "$down"

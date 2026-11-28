@@ -174,16 +174,8 @@ pub fn filter_checks(checks: &[Value], f: &ListFilter) -> Vec<Value> {
         .collect()
 }
 
-/// `clock()`: `new Date(v).toLocaleString()`, null as the epoch and
-/// anything not a number as "Invalid Date".
-fn clock(v: Option<&Value>) -> String {
-    match v {
-        Some(Value::Null) => crate::jsdate::locale_string(0.0),
-        Some(Value::Number(n)) => crate::jsdate::locale_string(n.as_f64().unwrap_or(f64::NAN)),
-        Some(Value::Bool(b)) => crate::jsdate::locale_string(if *b { 1.0 } else { 0.0 }),
-        _ => "Invalid Date".into(),
-    }
-}
+/// `clock()`: `new Date(v).toLocaleString()`, in jsdate.rs.
+use crate::jsdate::date_of as clock;
 
 /// `showLines()`: one check at length: what it is, how it heals, what it
 /// has been through.

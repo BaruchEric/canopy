@@ -133,6 +133,12 @@ impl AppState {
     /// The first tree built; a launch root that will not scan fails the
     /// start, as the Bun server's does.
     pub async fn start(s: Setup) -> Result<Self, String> {
+        Self::start_with_tick(s, TICK_EVERY).await
+    }
+
+    /// `start` with the reminders looked at every `tick` (the trigger
+    /// engine's 30 seconds in `start`; a test's own period).
+    pub async fn start_with_tick(s: Setup, tick: std::time::Duration) -> Result<Self, String> {
         let cfg = (s.config)()?;
         let backend = backend_caps(&(s.harnesses)());
         let result = build_tree(
@@ -154,7 +160,7 @@ impl AppState {
         }
         let (events, _) = broadcast::channel(64);
         let notes = Arc::new(Notes::new(&s.config_dir, events.clone()));
-        tokio::spawn(remind_every(notes.clone(), TICK_EVERY));
+        tokio::spawn(remind_every(notes.clone(), tick));
         Ok(Self {
             root: s.root,
             config_dir: s.config_dir,
@@ -826,14 +832,18 @@ mod tests {
         );
     }
 
-    /// Lets the spawned tasks run, file work included, without moving a
-    /// paused clock: a yield never parks the runtime long enough to advance
-    /// it, and the thread's sleep passes no tokio time.
-    async fn settle() {
-        for _ in 0..40 {
-            tokio::task::yield_now().await;
-            std::thread::sleep(std::time::Duration::from_millis(5));
+    /// The next notes frame the stream carries within `wait` of real time,
+    /// past any other frame.
+    async fn notes_frame(rx: &mut broadcast::Receiver<String>, wait: Duration) -> Option<String> {
+        let deadline = std::time::Instant::now() + wait;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
+                Ok(Ok(f)) if f.contains(r#""type":"notes""#) => return Some(f),
+                Ok(Err(broadcast::error::RecvError::Closed)) => return None,
+                _ => {}
+            }
         }
+        None
     }
 
     #[tokio::test]
@@ -845,41 +855,38 @@ mod tests {
         let seeded = r#"[{"id":"n-dueaaaaa","text":"call the bank","createdAt":1,"due":1000},{"id":"n-plainaaa","text":"a thought","createdAt":2}]"#;
         std::fs::write(config.join("notes.json"), seeded).unwrap();
         let config_dir = config.to_str().unwrap().to_string();
-        let state = AppState::start(Setup {
-            root: root.path().to_str().unwrap().into(),
-            config_dir: config_dir.clone(),
-            about: about("/r"),
-            config: Box::new(|| Ok(CanopyConfig::default())),
-            harnesses: Box::new(|| vec!["claude"]),
-            people: Arc::new(People::new(&config_dir)),
-            gates: Gates {
-                tmux: false,
-                chan: false,
-                voice: false,
-                evaluator: false,
+        // start() looks every TICK_EVERY; this runs the same loop on a short
+        // real period, since a paused clock raced with the loop's first poll
+        let tick = Duration::from_millis(200);
+        let state = AppState::start_with_tick(
+            Setup {
+                root: root.path().to_str().unwrap().into(),
+                config_dir: config_dir.clone(),
+                about: about("/r"),
+                config: Box::new(|| Ok(CanopyConfig::default())),
+                harnesses: Box::new(|| vec!["claude"]),
+                people: Arc::new(People::new(&config_dir)),
+                gates: Gates {
+                    tmux: false,
+                    chan: false,
+                    voice: false,
+                    evaluator: false,
+                },
             },
-        })
+            tick,
+        )
         .await
         .unwrap();
         let mut rx = state.events.subscribe();
-        tokio::time::pause();
-        // nothing before the first tick, a whole period after the start; the
-        // second of margin covers the real time between the start and the
-        // pause on a loaded machine
-        tokio::time::advance(TICK_EVERY - Duration::from_secs(1)).await;
-        settle().await;
-        assert!(rx.try_recv().is_err(), "a reminder before the first tick");
-        tokio::time::advance(Duration::from_secs(1)).await;
-        let mut frame = None;
-        for _ in 0..10 {
-            settle().await;
-            if let Ok(f) = rx.try_recv() {
-                frame = Some(f);
-                break;
-            }
-        }
-        let frame: Value = serde_json::from_str(&frame.expect("no notes frame")).unwrap();
-        assert_eq!(frame["type"], "notes");
+        // nothing before the first tick, a whole period after the start
+        assert!(
+            notes_frame(&mut rx, tick / 4).await.is_none(),
+            "a reminder before the first tick"
+        );
+        let frame = notes_frame(&mut rx, Duration::from_secs(15))
+            .await
+            .expect("no notes frame");
+        let frame: Value = serde_json::from_str(&frame).unwrap();
         let reminded = frame["notes"][0]["remindedAt"].clone();
         assert!(reminded.as_f64().is_some_and(|t| t > 1000.0), "{frame}");
         assert!(frame["notes"][1].get("remindedAt").is_none());
@@ -888,11 +895,10 @@ mod tests {
                 .unwrap();
         assert_eq!(file, frame["notes"]);
         // the next ticks find it delivered
-        for _ in 0..3 {
-            tokio::time::advance(TICK_EVERY).await;
-            settle().await;
-        }
-        assert!(rx.try_recv().is_err(), "delivered more than once");
+        assert!(
+            notes_frame(&mut rx, tick * 4).await.is_none(),
+            "delivered more than once"
+        );
         let again: Value =
             serde_json::from_str(&std::fs::read_to_string(config.join("notes.json")).unwrap())
                 .unwrap();

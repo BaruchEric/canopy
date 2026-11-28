@@ -516,3 +516,66 @@ where
         })
     }
 }
+
+#[tokio::test]
+async fn fetch_takes_one_address_as_it_answers_and_sends_a_form_as_multipart() {
+    let stub = Stub::start(|s| match s.path.as_str() {
+        "/made" => json_answer(201, json!({"id": "x"})),
+        "/moved" => (302, vec![("location".into(), "/x".into())], String::new()),
+        _ => (200, vec![], s.body.clone()),
+    })
+    .await;
+    let c = client();
+    let body = json!({"a": 1});
+    let made = c
+        .fetch("POST", &stub.url, "/made", Some(Body::Json(&body)), None)
+        .await;
+    assert_eq!(
+        made,
+        Ok(Fetched {
+            status: 201,
+            text: r#"{"id":"x"}"#.into()
+        })
+    );
+    assert!(made.unwrap().ok());
+    let moved = c
+        .fetch("GET", &stub.url, "/moved", None, None)
+        .await
+        .unwrap();
+    assert_eq!((moved.status, moved.ok(), moved.json()), (302, false, None));
+    let form = [
+        Part::Text {
+            name: "text".into(),
+            value: "a \"coin\" counter".into(),
+        },
+        Part::File {
+            name: "file".into(),
+            filename: "memo.md".into(),
+            mime: "text/markdown".into(),
+            bytes: b"count".to_vec(),
+        },
+    ];
+    let echoed = c
+        .fetch("POST", &stub.url, "/form", Some(Body::Form(&form)), None)
+        .await
+        .unwrap();
+    let boundary = echoed.text.lines().next().unwrap().to_string();
+    assert!(boundary.starts_with("------CanopyFormBoundary"));
+    assert_eq!(
+        echoed.text,
+        format!(
+            "{boundary}\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\na \"coin\" counter\r\n\
+             {boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"memo.md\"\r\nContent-Type: text/markdown\r\n\r\ncount\r\n\
+             {boundary}--\r\n"
+        )
+    );
+    assert_eq!(
+        form_record(&form),
+        json!({"text": ["a \"coin\" counter"], "file": ["file:memo.md:count"]})
+    );
+    let down = c.fetch("GET", "http://127.0.0.1:1", "/x", None, None).await;
+    assert_eq!(
+        down,
+        Err("ECONNREFUSED: Unable to connect. Is the computer able to access the url?".into())
+    );
+}

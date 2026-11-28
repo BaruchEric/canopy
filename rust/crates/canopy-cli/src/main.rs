@@ -6,19 +6,20 @@
 //! `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `queue`,
 //! `collisions`, `floorplan`, `archify`, `diagnosis`, `understand`,
 //! `capacity`, `costs`, `plugins`, `people`, `clip`, `clips`, `worktrees`,
-//! `workflow`, `health`, `run`, `runs`, `auth`, `coordinator` and `mcp` (an
-//! MCP server on stdio) over HTTP, `tenant` on this host, `fr` on a repo's
-//! own git, `library` (the Library's Python adapter, and `library sync`
-//! over HTTP), `helper`'s arguments, refusals and `--pair` (its loop still
-//! goes to the TypeScript), `push test|ls` (web push, over HTTP), the bare
-//! `source` listing, and every verb's `--help`, with output byte for byte
-//! the TypeScript CLI's.
+//! `workflow`, `health`, `run`, `runs`, `auth`, `coordinator`, `secrets`,
+//! `new`, `incubator`, `ranger` and `mcp` (an MCP server on stdio) over
+//! HTTP, `tenant` on this host, `fr` on a repo's own git, `library` (the
+//! Library's Python adapter, and `library sync` over HTTP), `helper`'s
+//! arguments, refusals and `--pair` (its loop still goes to the
+//! TypeScript), `push test|ls` (web push, over HTTP), the bare `source`
+//! listing, and every verb's `--help`, with output byte for byte the
+//! TypeScript CLI's.
 //! `HTTP_VERBS` lists the HTTP verbs and `fr`: each gets `--backend` in
 //! its own arguments, as in index.ts, and `fr` refuses it with its usage.
 //! `--token` is read for every verb, as index.ts reads it. Every other
 //! verb, and a local verb with a flag the port does not read yet
-//! (`--backend` on tree or status, or in front of the repo, `commit --ai`),
-//! still goes
+//! (`--backend` on tree or status, or in front of the repo, `commit --ai`,
+//! `secrets recover`), still goes
 //! to the TypeScript CLI (`bun bin/canopy.ts`) until it is ported, so the
 //! binary can stand in for `canopy` today. docs/rust-port.md has the
 //! ledger.
@@ -40,6 +41,7 @@ mod groups;
 mod health;
 mod help;
 mod helper;
+mod incubator;
 mod issues;
 mod jsdate;
 mod kit;
@@ -49,15 +51,18 @@ mod libsync;
 mod loadouts;
 mod mapsection;
 mod mcp;
+mod newargs;
 mod notes;
 mod out;
 mod pair;
 mod people;
 mod plugins;
 mod prs;
+mod ranger;
 mod render;
 mod run;
 mod scenarios;
+mod secrets;
 mod sources;
 mod sweep;
 mod tenant;
@@ -237,6 +242,10 @@ const HTTP_VERBS: &[&str] = &[
     "tenants",
     "coordinator",
     "mcp",
+    "secrets",
+    "new",
+    "incubator",
+    "ranger",
 ];
 
 /// `flag()` in index.ts: take a bare flag out of the arguments.
@@ -317,6 +326,13 @@ fn plan(args: &[String]) -> Plan {
             return Plan::Help {
                 verb: rest.first().cloned(),
             };
+        }
+        // secrets recover opens and reseals values with age, which is not
+        // ported, so it goes to the TypeScript CLI whole
+        Some("secrets")
+            if rest.iter().find(|a| *a != "--json").map(String::as_str) == Some("recover") =>
+        {
+            return Plan::Delegate;
         }
         Some(verb) if HTTP_VERBS.contains(&verb) => {
             return Plan::Http {
@@ -680,6 +696,27 @@ async fn http_verb(
             )
             .await
         }
+        "secrets" => {
+            let mut lines = secrets::HiddenLines::default();
+            let mut read = |prompt: &str| lines.read(prompt);
+            let p = render::Paint { color: use_color() };
+            secrets::secrets_cmd(rest, &caller, &client, &mut read, &mut o, p).await
+        }
+        "new" => {
+            let p = render::Paint { color: use_color() };
+            incubator::new_cmd(rest, &caller, &client, &mut o, &|n| render::say_err(n), p).await
+        }
+        "incubator" => {
+            let cwd = std::env::current_dir()
+                .map(|d| d.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| ".".into());
+            let p = render::Paint { color: use_color() };
+            incubator::incubator_cmd(rest, &caller, &client, &mut o, &cwd, p).await
+        }
+        "ranger" => {
+            let p = render::Paint { color: use_color() };
+            ranger::ranger_cmd(rest, &caller, &client, &mut o, p).await
+        }
         _ => land::land_cmd(verb, rest, &caller, &client, &mut o).await,
     };
     finish_out(o, r)
@@ -850,8 +887,8 @@ mod tests {
             "the token goes, as index.ts takes it"
         );
         assert_eq!(plan(&args(&["tree", "a", "b"])), Plan::Delegate);
-        assert_eq!(plan(&args(&["secrets"])), Plan::Delegate);
-        assert_eq!(plan(&args(&["secrets", "--token", "t"])), Plan::Delegate);
+        assert_eq!(plan(&args(&["peers"])), Plan::Delegate);
+        assert_eq!(plan(&args(&["peers", "--token", "t"])), Plan::Delegate);
         assert_eq!(plan(&args(&["version", "--json"])), Plan::Delegate);
         assert_eq!(
             plan(&args(&["tree", "--backend", "http://x"])),
@@ -867,7 +904,7 @@ mod tests {
         assert_eq!(plan(&args(&["tree", "--help"])), help(Some("tree")));
         assert_eq!(plan(&args(&["runs", "start", "-h"])), help(Some("runs")));
         assert_eq!(
-            plan(&args(&["secrets", "x", "--", "-h"])),
+            plan(&args(&["peers", "x", "--", "-h"])),
             Plan::Delegate,
             "after -- it belongs to another program"
         );
@@ -963,9 +1000,38 @@ mod tests {
                 "{verb}"
             );
         }
-        for verb in ["secrets", "peers"] {
-            assert_eq!(plan(&args(&[verb])), Plan::Delegate, "{verb}");
+        assert_eq!(plan(&args(&["peers"])), Plan::Delegate);
+    }
+
+    #[test]
+    fn secrets_new_incubator_and_ranger_run_here_and_secrets_recover_goes_to_typescript() {
+        for verb in ["secrets", "new", "incubator", "ranger"] {
+            assert!(
+                matches!(plan(&args(&[verb])), Plan::Http { verb: v, .. } if v == verb),
+                "{verb}"
+            );
         }
+        assert!(matches!(
+            plan(&args(&["secrets", "--json", "status"])),
+            Plan::Http { .. }
+        ));
+        assert_eq!(
+            plan(&args(&["secrets", "recover", "x", "--out", "d"])),
+            Plan::Delegate
+        );
+        assert_eq!(
+            plan(&args(&["secrets", "--json", "--token", "t", "recover"])),
+            Plan::Delegate
+        );
+        assert_eq!(
+            plan(&args(&["new", "x", "--backend", "http://b:1"])),
+            Plan::Http {
+                verb: "new".into(),
+                rest: args(&["x", "--backend", "http://b:1"]),
+                token: None,
+                home_base: Some("http://b:1".into()),
+            }
+        );
     }
 
     #[test]
