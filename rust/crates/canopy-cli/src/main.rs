@@ -3,9 +3,12 @@
 //! It answers `canopy [dir]`, `canopy tree`, `canopy status`, `canopy
 //! version`, `canopy commit`, `canopy push` and `canopy pull` itself, the
 //! backend verbs `note`, `awake`, `issues`, `pr`, `prs`, `scenarios`,
-//! `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `queue` and
-//! `collisions` over HTTP (`HTTP_VERBS`), and every verb's `--help`, with
-//! output byte for byte the TypeScript CLI's.
+//! `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `queue`,
+//! `collisions`, `workflow` and `health` over HTTP, `fr` on a repo's own
+//! git, and every verb's `--help`, with output byte for byte the
+//! TypeScript CLI's. `HTTP_VERBS` lists the HTTP verbs and `fr`: each
+//! gets `--backend` in its own arguments, as in index.ts, and `fr` refuses
+//! it with its usage.
 //! `--token` is read for every verb, as index.ts reads it. Every other
 //! verb, and a local verb with a flag the port does not read yet
 //! (`--backend` on a local verb, `commit --ai`, `push test|ls`), still goes
@@ -16,7 +19,9 @@
 mod api;
 mod ask;
 mod awake;
+mod fr;
 mod groups;
+mod health;
 mod help;
 mod issues;
 mod jsdate;
@@ -29,6 +34,7 @@ mod prs;
 mod scenarios;
 mod sweep;
 mod work;
+mod workflow;
 
 use canopy_core::git::{StatusOptions, get_status};
 use canopy_core::gitwrite::{GitError, commit, drop_stale_copies, pull, push};
@@ -165,6 +171,9 @@ const HTTP_VERBS: &[&str] = &[
     "land",
     "queue",
     "collisions",
+    "fr",
+    "workflow",
+    "health",
 ];
 
 /// `flag()` in index.ts: take a bare flag out of the arguments.
@@ -452,6 +461,23 @@ async fn http_verb(
                 .unwrap_or_else(|_| ".".into());
             work::work_cmd(rest, &caller, &client, &mut o, &cwd).await
         }
+        "fr" => {
+            let cwd = std::env::current_dir()
+                .map(|d| d.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| ".".into());
+            let env = |k: &str| std::env::var(k).ok();
+            fr::fr_cmd(rest, &cwd, &env, now_ms(), &mut o).await
+        }
+        "workflow" => workflow::workflow_cmd(rest, &caller, &client, &mut o).await,
+        "health" => {
+            let say = |line: String| println!("{line}");
+            let env = health::HealthEnv {
+                paint: health::Paint { color: use_color() },
+                now: now_ms() as f64,
+                live: &say,
+            };
+            health::health_cmd(rest, &caller, &client, &mut o, &env).await
+        }
         _ => land::land_cmd(verb, rest, &caller, &client, &mut o).await,
     };
     finish_out(o, r)
@@ -666,6 +692,31 @@ mod tests {
         for verb in ["run", "runs", "capacity", "secrets", "people"] {
             assert_eq!(plan(&args(&[verb])), Plan::Delegate, "{verb}");
         }
+    }
+
+    #[test]
+    fn fr_workflow_and_health_run_here_with_their_own_backend_flag() {
+        for verb in ["fr", "workflow", "health"] {
+            assert!(
+                matches!(plan(&args(&[verb])), Plan::Http { verb: v, .. } if v == verb),
+                "{verb}"
+            );
+        }
+        assert_eq!(
+            plan(&args(&[
+                "health",
+                "--backend",
+                "http://x:1",
+                "--token",
+                "t"
+            ])),
+            Plan::Http {
+                verb: "health".into(),
+                rest: args(&["--backend", "http://x:1"]),
+                token: Some("t".into()),
+                home_base: Some("http://x:1".into()),
+            }
+        );
     }
 
     #[test]

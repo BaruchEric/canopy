@@ -7,27 +7,37 @@
 # newest commit was, is masked: a scan of a big folder takes long enough
 # for it to tick over between the two runs (treelines tests cover it).
 #
-# The git verbs (commit, push, pull) never touch a real repo: each CLI gets
-# its own copy of the same scratch repos (a bare origin and clones of it),
-# built with pinned names and dates so their commit hashes match, and each
-# step runs on both copies in turn, the scratch path masked.
+# The git verbs (commit, push, pull, fr) never touch a real repo: each CLI
+# gets its own copy of the same scratch repos (a bare origin and clones of
+# it), built with pinned names and dates so their commit hashes match, and
+# each step runs on both copies in turn, the scratch path masked. fr reads
+# and reserves feature numbers in a scratch repo with its own bare origin,
+# and checks a list that gives one number twice; it never runs on canopy's
+# checkout. canopy health init writes its starter file into each copy.
 #
 # Help: every verb's --help, and help <verb>, read from the same help.ts.
 #
 # The backend verbs (note, awake, issues, pr, prs, scenarios, sweep, kit,
-# loadouts, groups, work, land, queue, collisions) talk to a scratch Bun
-# server this script starts on a free port with its own config dir and
-# HOME, and to nothing else: CANOPY_API, CANOPY_TOKEN and CANOPY_BACKEND
-# are cleared first, so a canopy shell's settings never point either CLI at
-# a real backend. Before it starts, the script seeds that config dir and
-# HOME with things to list: a scratch repo with one command scenario,
-# kit.json's loadouts, two work items, a finished group and a ready run
-# whose repo does not exist. Only calls that change nothing outside that
-# server run: notes and work notes on its own store, keep awake's status
-# (never a new mode), a scenario that runs `true` in the scratch repo, a
-# sweep with nothing to close, and pr, land and group picks with ids that
-# do not exist or a run the server cannot land. Nothing starts a run, a
-# coordinator or an incubator stage. A note's id, which each side mints,
+# loadouts, groups, work, land, queue, collisions, workflow, health) talk
+# to a scratch Bun server this script starts on a free port with its own
+# config dir and HOME, and to nothing else: CANOPY_API, CANOPY_TOKEN and
+# CANOPY_BACKEND are cleared first, so a canopy shell's settings never
+# point either CLI at a real backend. Before it starts, the script seeds
+# that config dir and HOME with things to list: a scratch repo with one
+# command scenario, health checks the server finds down or off, a workflow
+# of its own and modes over the bundled ones, kit.json's loadouts, two work
+# items, a finished group and a ready run whose repo does not exist; and
+# the CLIs' own config dir with user workflows, one broken and one
+# unlisted, which workflow list and show read when no --repo is given
+# (workflow check, health lint and health init read local files and ask no
+# server). Only calls that change nothing outside that server run: notes
+# and work notes on its own store, keep awake's status (never a new mode),
+# a scenario that runs `true` in the scratch repo, a sweep with nothing to
+# close, workflow listings, drawings and checks of scratch files, health
+# listings and refusals (never a heal, an add or a remove that goes
+# through), and pr, land and group picks with ids that do
+# not exist or a run the server cannot land. Nothing starts a run, a flow,
+# a coordinator or an incubator stage. A note's id, which each side mints,
 # is masked.
 #
 # Both run against a scratch config dir, so nothing under ~/.config/canopy
@@ -167,6 +177,28 @@ both 'git clone -q origin.git mac && printf "a\nb\nnew line\nc\n" >mac/f.txt && 
 gcheck push-stale push work
 gcheck push-drop-stale push work --drop-stale
 
+# fr: a list that gives FR-001 and FR-003, with its own bare origin for the
+# reservations, and one that gives FR-002 twice
+both 'git init -q --bare fr-origin.git
+  git init -q fr && printf "# Feature requests\n\n## Open\n\n### FR-001 · one\n\n### FR-003 · three\n" >fr/FEATURES.md
+  git -C fr add FEATURES.md && git -C fr commit -q -m list && git -C fr remote add origin ../fr-origin.git && git -C fr push -q origin main
+  git init -q fr-twice && printf "### FR-002 · a\n\n### FR-002 · b\n" >fr-twice/FEATURES.md
+  git -C fr-twice add FEATURES.md && git -C fr-twice commit -q -m twice && mkdir no-git'
+gcheck fr-usage fr what
+gcheck fr-backend fr --backend http://127.0.0.1:1
+gcheck fr-no-git fr -C no-git
+gcheck fr-none fr -C fr
+gcheck fr-next fr next -C fr
+gcheck fr-check fr check -C fr
+gcheck fr-check-twice fr check -C fr-twice
+gcheck fr-reserve fr reserve -m "a new thing" -C fr
+gcheck fr-reserve-json fr reserve --json -C fr
+gcheck fr-list fr list -C fr
+gcheck fr-list-json fr list --json -C fr
+both 'printf "\n### FR-004 · a new thing\n" >>fr/FEATURES.md && git -C fr commit -qam "list FR-004" && git -C fr push -q origin main'
+gcheck fr-listed fr -C fr
+gcheck fr-listed-all fr --all -C fr
+
 # ---- the backend verbs, against a scratch server ----
 
 bun=$(command -v bun)
@@ -211,6 +243,66 @@ cat >"$seed/landing/groups/g-0123abcd.json" <<'JSON'
  "expectedMembers": 2, "members": [{"run": "run-1", "origin": "o-1", "profile": "fast"}, {"run": "run-2", "origin": "o-2", "profile": null}],
  "state": "picked", "autoLand": false, "winner": "o-1", "pickedBy": "eric", "startedAt": 1764300000000, "endedAt": 1764303600000}
 JSON
+# health and workflow: checks the server finds down or off (nothing listens
+# on port 1, there is no dev task, and a command check in a repo that is
+# not the user's never runs), a bad entry, the repo's own workflow drawn as
+# a graph, and modes over a bundled workflow with a step that is not there,
+# committed so the server reads them at HEAD; a user workflow on the server
+mkdir -p "$scratch/server/root/app/.canopy/workflows" "$seed/workflows"
+cat >"$scratch/server/root/app/.canopy/health.json" <<'JSON'
+{"checks": [
+  {"name": "site", "kind": "http", "url": "http://127.0.0.1:1/health", "expect": 204},
+  {"name": "db", "kind": "port", "port": 1, "every": 300},
+  {"name": "dev", "kind": "task", "task": "dev", "heal": "none", "every": 300},
+  {"name": "smoke", "kind": "command", "run": "true", "fix": "true", "heal": "none", "while": "dev"},
+  {"name": "Bad Name", "kind": "port", "port": 2}
+]}
+JSON
+cat >"$scratch/server/root/app/.canopy/workflows/tidy.md" <<'MD'
+---
+blurb: tidy the repo
+---
+
+## Sweep
+tools: git-commit
+
+sweep
+
+## Lint
+after: Sweep
+tools: read
+gate: verdict
+
+lint
+
+## Docs
+after: Sweep
+check: true
+retries: 1
+back: Sweep
+
+docs
+
+## Ship
+after: Lint, Docs
+when: verdict done, check pass
+mode: manual
+
+ship
+MD
+cat >"$scratch/server/root/app/.canopy/workflows.json" <<'JSON'
+{"modes": {"tidy": {"Ship": "auto", "Gone": "manual"}, "*": {"Commit": "manual"}}}
+JSON
+printf -- '---\nblurb: served\n---\n\n## Do\n\nDo it.\n' >"$seed/workflows/served.md"
+git -C "$scratch/server/root/app" add .canopy
+git -C "$scratch/server/root/app" commit -q -m checks
+# the CLIs' own user workflows: a graph, a broken file and an unlisted one
+mkdir -p "$scratch/config/workflows" "$scratch/flows"
+cp "$scratch/server/root/app/.canopy/workflows/tidy.md" "$scratch/config/workflows/fan.md"
+printf -- '---\nname: broken\n---\n\n## Do\n\nx\n' >"$scratch/config/workflows/broken.md"
+printf -- '---\nblurb: q\nlisted: false\n---\n\n## Q\n\nq\n' >"$scratch/config/workflows/quiet.md"
+cp "$scratch/config/workflows/fan.md" "$scratch/flows/fan.md"
+sed 's/when: verdict done, check pass/when: judge meets/' "$scratch/flows/fan.md" >"$scratch/flows/bad.md"
 env -i HOME="$scratch/server/home" PATH="$(dirname "$bun"):/usr/local/bin:/usr/bin:/bin" SHELL=/bin/bash LANG=C.UTF-8 \
   CANOPY_CONFIG_DIR="$scratch/server/config" CANOPY_LOOPBACK_AUTH=1 CANOPY_PREVIEW_PORTS=0 CANOPY_NO_DESKTOP=1 \
   CANOPY_AGENT_SCAN=0 CANOPY_TAILCHAN_URL=off CANOPY_TMUX=0 \
@@ -349,3 +441,74 @@ hcheck land-all land --all nosuch
 hcheck land-followup-usage land followup
 hcheck land-down land x --backend "$down"
 hcheck land-approve land run-1
+
+# workflow: this machine's bundled and user files, a scratch file checked,
+# and the server's list for the scratch repo with its modes
+hcheck workflow-usage workflow
+hcheck workflow-bad workflow draw
+hcheck workflow-list workflow list
+hcheck workflow-show workflow show ship
+hcheck workflow-show-dot workflow show ship --dot
+hcheck workflow-show-user workflow show fan
+hcheck workflow-show-broken workflow show broken
+hcheck workflow-show-unlisted workflow show quiet
+hcheck workflow-show-none workflow show nope
+hcheck workflow-show-usage workflow show
+hcheck workflow-check workflow check "$scratch/flows/fan.md"
+hcheck workflow-check-bad workflow check "$scratch/flows/bad.md"
+hcheck workflow-check-none workflow check "$scratch/flows/none.md"
+hcheck workflow-check-usage workflow check a b
+hcheck workflow-check-repo workflow check x --repo app
+hcheck workflow-repo workflow list --repo app
+hcheck workflow-repo-show workflow show tidy --repo app
+hcheck workflow-repo-dot workflow show tidy --repo app --dot
+hcheck workflow-repo-ship workflow show ship --repo app
+hcheck workflow-repo-path workflow list --repo "$scratch/server/root/app"
+hcheck workflow-repo-folder workflow list --repo "$scratch/no-such-folder"
+hcheck workflow-repo-none workflow list --repo nosuch
+hcheck workflow-repo-needs workflow list --repo
+hcheck workflow-down workflow list --repo app --backend "$down"
+
+# health: the scratch repo's checks, which the server found down or off
+# long before now, so their states hold still; canopy's own pieces are left
+# out, since a disk's free space moves between the two runs
+hcheck health-repo health --repo app
+hcheck health-repo-json health list --repo app --json
+hcheck health-repo-bad health --repo app --bad
+hcheck health-repo-none health --repo nosuch
+hcheck health-nothing-down health --repo nosuch --bad
+hcheck health-show health show repo:app:site
+hcheck health-show-json health show repo:app:db --json
+hcheck health-show-off health show repo:app:smoke
+hcheck health-show-none health show nope
+hcheck health-show-usage health show
+hcheck health-heal-none health heal nope
+hcheck health-heal-usage health heal
+hcheck health-checks health checks app
+hcheck health-checks-json health checks app --json
+hcheck health-checks-path health checks "$scratch/server/root/app"
+hcheck health-checks-none health checks nosuch
+hcheck health-checks-usage health checks
+hcheck health-rm-repo health rm app site
+hcheck health-rm-none health rm app nope
+hcheck health-rm-usage health rm app
+hcheck health-add-kind health add app web
+hcheck health-add-value health add app web --port
+hcheck health-add-flag health add app web --port 80 --nope
+hcheck health-add-name health add app "Bad Name" --port 80
+hcheck health-add-port health add app web --port 70000
+hcheck health-add-usage health add app
+hcheck health-usage health what
+hcheck health-extra health list extra
+hcheck health-on health --on nosuch
+hcheck health-origin health --backend http://x/y
+hcheck health-down health --backend "$down"
+hcheck health-down-json health --json --backend "$down"
+hcheck health-watch-down health watch --backend "$down"
+hcheck health-lint health lint "$scratch/server/root/app"
+hcheck health-lint-none health lint "$scratch/no-such-folder"
+both 'mkdir starter && printf "{\"scripts\": {\"dev\": \"vite\"}}\n" >starter/package.json'
+gcheck health-init health init starter
+gcheck health-init-again health init starter
+gcheck health-lint-starter health lint starter
+gcheck health-init-empty health init empty
