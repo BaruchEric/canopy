@@ -3,8 +3,11 @@
 //! (`looksSecret`, `looksSecretFile`), what a pipe's bytes are (`textHead`,
 //! `sniffType`), what a clip is (`clipKind`, `fileKind`, `kindOf`, `clipKey`),
 //! the newest-first order (`sortClips`) and the words of a line (`clipLine`,
-//! `agoWord`, `sizeWord`). Clips are the JSON the backend sends. The record's
-//! parsing, keeping and pruning stay in the TypeScript server.
+//! `agoWord`, `sizeWord`). Clips are the JSON the backend sends. For
+//! canopy-server's `GET /api/clips` it reads the file's records back as the
+//! server does (`parseClip`, `parseClips`, `parseDevice`, `parseFile`,
+//! `fileName`, `mediaType`, `clipLabel`, `pruneClips`); keeping a new clip
+//! (`putClip`, `takeClip`) stays in the TypeScript server.
 //!
 //! The patterns follow JavaScript's regex rules, not Rust's: `\b` and `\w`
 //! are ASCII there, `\s` is JavaScript's whitespace (`JS_S`), `/i` folds
@@ -13,9 +16,10 @@
 
 use crate::js::to_fixed;
 use crate::pathx::{JS_S, js_len, js_squash_ws, js_trim, js_trim_end, js_ws};
+use crate::screenlayouts::js_num;
 use crate::store::js_number;
 use regex::Regex;
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 use std::cmp::Ordering;
 use std::sync::LazyLock;
 
@@ -435,6 +439,226 @@ pub fn ago_word(at: f64, now: f64) -> String {
     }
 }
 
+/* ---------- the record as the server reads clips.json back ---------- */
+
+/// `CLIP_CHARS`: the longest text a clip keeps.
+pub const CLIP_CHARS: usize = 16_000;
+/// `CLIP_KEEP`: how many unpinned clips are kept.
+pub const CLIP_KEEP: usize = 200;
+/// `CLIP_DAYS`: how long an unpinned clip is kept.
+pub const CLIP_DAYS: f64 = 14.0;
+/// `CLIP_FROM_CHARS`: the longest label (a clip's place, a device's name).
+pub const CLIP_FROM_CHARS: usize = 80;
+/// `CLIP_FILES_BUDGET`: the bytes the kept files may take together.
+pub const CLIP_FILES_BUDGET: f64 = 512.0 * 1024.0 * 1024.0;
+/// `CLIP_NAME_CHARS`: the longest file name kept.
+pub const CLIP_NAME_CHARS: usize = 160;
+const DAY: f64 = 24.0 * 60.0 * 60_000.0;
+
+/// `isClipId()`: `c-` and eight base32 characters.
+pub fn is_clip_id(v: &str) -> bool {
+    v.len() == 10
+        && v.starts_with("c-")
+        && v.bytes()
+            .skip(2)
+            .all(|b| matches!(b, b'a'..=b'z' | b'2'..=b'7'))
+}
+
+/// `sourceOf()`: a kept source, with the old `clipboard` read as `device`.
+pub fn source_of(v: &Value) -> Option<&'static str> {
+    match v.as_str()? {
+        "clipboard" | "device" => Some("device"),
+        "shell" => Some("shell"),
+        "canopy" => Some("canopy"),
+        "page" => Some("page"),
+        "cli" => Some("cli"),
+        _ => None,
+    }
+}
+
+/// `clipLabel()`: one line, trimmed, capped; None when nothing is left.
+pub fn clip_label(v: &Value) -> Option<String> {
+    let s = js_slice(js_trim(&js_squash_ws(v.as_str()?)), CLIP_FROM_CHARS);
+    (!s.is_empty()).then_some(s)
+}
+
+/// `timeOf()`: a positive finite number.
+fn time_of(v: Option<&Value>) -> Option<f64> {
+    v.and_then(Value::as_f64)
+        .filter(|n| n.is_finite() && *n > 0.0)
+}
+
+/// `Number.isInteger()` of a JSON value.
+fn whole(v: Option<&Value>) -> Option<f64> {
+    v.and_then(Value::as_f64)
+        .filter(|n| n.is_finite() && n.fract() == 0.0)
+}
+
+/// `parseDevice()`: a device as kept, or None when it is not one.
+pub fn parse_device(v: &Value) -> Option<Value> {
+    let id = v.as_object()?.get("id")?.as_str()?;
+    let hex16 = id.len() == 16 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if !hex16 {
+        return None;
+    }
+    let name = clip_label(v.get("name").unwrap_or(&Value::Null))?;
+    let platform = v
+        .get("platform")
+        .and_then(Value::as_str)
+        .filter(|p| (1..=16).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_lowercase()))
+        .unwrap_or("other");
+    Some(json!({ "id": id, "name": name, "platform": platform }))
+}
+
+/// `fileName()`: a file's name as kept, no folders, no control characters,
+/// capped without leaving half of a two-unit character; `file` when nothing
+/// is left.
+pub fn file_name(v: &Value) -> String {
+    let raw = v.as_str().unwrap_or("");
+    let base = raw.rsplit(['/', '\\']).next().unwrap_or("");
+    let bare: String = base
+        .chars()
+        .filter(|c| !matches!(*c as u32, 0..=0x1f | 0x7f))
+        .collect();
+    let mut units: Vec<u16> = js_trim(&bare)
+        .encode_utf16()
+        .take(CLIP_NAME_CHARS)
+        .collect();
+    if units.last().is_some_and(|u| (0xD800..=0xDBFF).contains(u)) {
+        units.pop();
+    }
+    let clean = String::from_utf16_lossy(&units);
+    if clean.is_empty() || clean == "." || clean == ".." {
+        "file".into()
+    } else {
+        clean
+    }
+}
+
+static MEDIA_TYPE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[a-z0-9][A-Za-z0-9_.+-]*/[A-Za-z0-9_.+-]+$").unwrap());
+
+/// `mediaType()`: lower case, parameters dropped; octet-stream when it is
+/// not a media type.
+pub fn media_type(v: &Value) -> String {
+    let t = v
+        .as_str()
+        .map(|s| js_trim(s.split(';').next().unwrap_or("")).to_lowercase())
+        .unwrap_or_default();
+    if MEDIA_TYPE.is_match(&t) && js_len(&t) <= 100 {
+        t
+    } else {
+        "application/octet-stream".into()
+    }
+}
+
+/// `parseFile()`: a file as kept, or None when it is not one.
+pub fn parse_file(v: &Value) -> Option<Value> {
+    let o = v.as_object()?;
+    let sha = o.get("sha")?.as_str()?;
+    if sha.len() != 64 || !sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return None;
+    }
+    let size = whole(o.get("size")).filter(|n| *n >= 0.0)?;
+    Some(json!({
+        "name": file_name(o.get("name").unwrap_or(&Value::Null)),
+        "type": media_type(o.get("type").unwrap_or(&Value::Null)),
+        "size": js_num(size),
+        "sha": sha,
+    }))
+}
+
+/// `parseClip()`: one record of the file as a clip, in the TypeScript's key
+/// order, or None when it is not one.
+pub fn parse_clip(v: &Value) -> Option<Value> {
+    let o = v.as_object()?;
+    let source = source_of(o.get("source").unwrap_or(&Value::Null))?;
+    let id = o.get("id")?.as_str().filter(|id| is_clip_id(id))?;
+    let text = o.get("text")?.as_str().filter(|t| !t.is_empty())?;
+    let at = time_of(o.get("at"))?;
+    let count = whole(o.get("count")).filter(|n| *n > 0.0).unwrap_or(1.0);
+    let mut clip = Map::new();
+    clip.insert("id".into(), json!(id));
+    clip.insert("text".into(), json!(js_slice(text, CLIP_CHARS)));
+    clip.insert("source".into(), json!(source));
+    clip.insert(
+        "createdAt".into(),
+        js_num(time_of(o.get("createdAt")).unwrap_or(at)),
+    );
+    clip.insert("at".into(), js_num(at));
+    clip.insert("count".into(), js_num(count));
+    if let Some(from) = clip_label(o.get("from").unwrap_or(&Value::Null)) {
+        clip.insert("from".into(), json!(from));
+    }
+    if let Some(device) = parse_device(o.get("device").unwrap_or(&Value::Null)) {
+        clip.insert("device".into(), device);
+    }
+    if o.get("pinned") == Some(&Value::Bool(true)) {
+        clip.insert("pinned".into(), json!(true));
+    }
+    if o.get("cut") == Some(&Value::Bool(true)) || js_len(text) > CLIP_CHARS {
+        clip.insert("cut".into(), json!(true));
+    }
+    if let Some(file) = parse_file(o.get("file").unwrap_or(&Value::Null)) {
+        clip.insert("text".into(), file["name"].clone());
+        clip.shift_remove("cut");
+        clip.insert("file".into(), file);
+    }
+    Some(Value::Object(clip))
+}
+
+/// `parseClips()`: the file's array read back, newest first; a record that
+/// is not a clip is dropped, and so is any second copy of an id.
+pub fn parse_clips(v: &Value) -> Vec<Value> {
+    let Some(items) = v.as_array() else {
+        return vec![];
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<Value> = items
+        .iter()
+        .filter_map(parse_clip)
+        .filter(|c| seen.insert(crate::js::field(c, "id")))
+        .collect();
+    out.sort_by(clip_order);
+    out
+}
+
+/// `pruneClips()`: the clips kept at `now`, every pinned one and the newest
+/// `CLIP_KEEP` unpinned ones copied within `CLIP_DAYS`, their files together
+/// within `budget`; and the ids left out.
+pub fn prune_clips(clips: &[Value], now: f64, budget: f64) -> (Vec<Value>, Vec<String>) {
+    let mut sorted = clips.to_vec();
+    sorted.sort_by(clip_order);
+    let mut gone = vec![];
+    let mut kept = 0usize;
+    let mut bytes = 0.0;
+    let out: Vec<Value> = sorted
+        .into_iter()
+        .filter(|c| {
+            if c.get("pinned") == Some(&Value::Bool(true)) {
+                return true;
+            }
+            let size = file_of(c)
+                .and_then(|f| f.get("size"))
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            let at = c.get("at").and_then(Value::as_f64).unwrap_or(f64::NAN);
+            if now - at > CLIP_DAYS * DAY || kept >= CLIP_KEEP || bytes + size > budget {
+                gone.push(crate::js::field(c, "id"));
+                return false;
+            }
+            kept += 1;
+            bytes += size;
+            true
+        })
+        .collect();
+    if gone.is_empty() {
+        (clips.to_vec(), gone)
+    } else {
+        (out, gone)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,5 +885,180 @@ mod tests {
         assert_eq!(size_word(14_000.0), "14 KB");
         assert_eq!(size_word(2.4 * 1024.0 * 1024.0), "2.4 MB");
         assert_eq!(size_word(25.0 * 1024.0 * 1024.0), "25 MB");
+    }
+
+    const DEVICE: &str = r#"{"id": "0123456789abcdef", "name": "Mac, Chrome", "platform": "mac"}"#;
+
+    fn device() -> Value {
+        serde_json::from_str(DEVICE).unwrap()
+    }
+
+    /// `clip()` in clips.test.ts: a text clip kept at 1000 under `id`.
+    fn clip(id: &str, over: Value) -> Value {
+        let mut c = json!({ "id": id, "text": id, "source": "canopy", "createdAt": 1000, "at": 1000, "count": 1 });
+        for (k, v) in over.as_object().unwrap() {
+            c[k] = v.clone();
+        }
+        c
+    }
+
+    fn ids(clips: &[Value]) -> Vec<String> {
+        clips
+            .iter()
+            .map(|c| c["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_label_is_one_trimmed_line_capped_or_nothing() {
+        assert_eq!(
+            clip_label(&json!("  canopy\n main ")).as_deref(),
+            Some("canopy main")
+        );
+        assert_eq!(
+            clip_label(&json!("x".repeat(200))).map(|s| s.len()),
+            Some(80)
+        );
+        assert_eq!(clip_label(&json!("   ")), None);
+        assert_eq!(clip_label(&json!(4)), None);
+    }
+
+    #[test]
+    fn a_device_needs_a_16_hex_id_and_a_name_an_odd_platform_reads_as_other() {
+        assert_eq!(parse_device(&device()), Some(device()));
+        let mut odd = device();
+        odd["platform"] = json!("Mac OS!");
+        let mut other = device();
+        other["platform"] = json!("other");
+        assert_eq!(parse_device(&odd), Some(other));
+        let mut bad = device();
+        bad["id"] = json!("nope");
+        assert_eq!(parse_device(&bad), None);
+        let mut blank = device();
+        blank["name"] = json!(" ");
+        assert_eq!(parse_device(&blank), None);
+    }
+
+    #[test]
+    fn reads_the_files_array_newest_first_dropping_what_is_not_a_clip_and_any_second_copy_of_an_id()
+    {
+        let v = json!([
+            { "id": "c-aaaaaaaa", "text": "old", "source": "shell", "at": 10, "createdAt": 5, "count": 2, "from": "atlas", "device": device(), "pinned": true },
+            { "id": "c-bbbbbbbb", "text": "new", "source": "cli", "at": 30 },
+            { "id": "c-cccccccc", "text": "bad source", "source": "mail", "at": 20 },
+            { "id": "c-dddddddd", "text": "", "source": "page", "at": 20 },
+            { "id": "n-eeeeeeee", "text": "a note id", "source": "page", "at": 20 },
+            { "id": "c-aaaaaaaa", "text": "again", "source": "page", "at": 40 },
+            "nothing",
+        ]);
+        assert_eq!(
+            parse_clips(&v),
+            vec![
+                json!({ "id": "c-bbbbbbbb", "text": "new", "source": "cli", "createdAt": 30, "at": 30, "count": 1 }),
+                json!({ "id": "c-aaaaaaaa", "text": "old", "source": "shell", "createdAt": 5, "at": 10, "count": 2, "from": "atlas", "device": device(), "pinned": true }),
+            ]
+        );
+        // the key order is the TypeScript's, so the JSON reads the same
+        assert_eq!(
+            serde_json::to_string(&parse_clips(&v)[0]).unwrap(),
+            r#"{"id":"c-bbbbbbbb","text":"new","source":"cli","createdAt":30,"at":30,"count":1}"#
+        );
+        assert_eq!(parse_clips(&json!({ "clips": [] })), Vec::<Value>::new());
+    }
+
+    #[test]
+    fn unpinned_clips_older_than_the_age_go_pinned_ones_stay_nothing_gone_is_the_same_list() {
+        let now = 100.0 * DAY;
+        let old = now - (CLIP_DAYS + 1.0) * DAY;
+        let list = vec![
+            clip("c-aaaaaaaa", json!({ "at": old })),
+            clip("c-bbbbbbbb", json!({ "at": old, "pinned": true })),
+            clip("c-cccccccc", json!({ "at": now - DAY })),
+        ];
+        let (kept, gone) = prune_clips(&list, now, CLIP_FILES_BUDGET);
+        assert_eq!(gone, vec!["c-aaaaaaaa"]);
+        assert_eq!(ids(&kept), vec!["c-cccccccc", "c-bbbbbbbb"]);
+        let fresh = vec![clip("c-cccccccc", json!({ "at": now }))];
+        assert_eq!(prune_clips(&fresh, now, CLIP_FILES_BUDGET).0, fresh);
+    }
+
+    fn file(sha: &str, size: u64) -> Value {
+        json!({ "name": "shot.png", "type": "image/png", "size": size, "sha": sha.repeat(64) })
+    }
+
+    #[test]
+    fn past_the_byte_budget_the_oldest_unpinned_files_go_the_text_and_the_pinned_stay() {
+        let clips = vec![
+            clip("c-aaaaaaaa", json!({ "at": 9000, "file": file("a", 400) })),
+            clip("c-bbbbbbbb", json!({ "at": 8000, "text": "words" })),
+            clip("c-cccccccc", json!({ "at": 7000, "file": file("c", 400) })),
+            clip(
+                "c-dddddddd",
+                json!({ "at": 6000, "file": file("d", 400), "pinned": true }),
+            ),
+            clip("c-eeeeeeee", json!({ "at": 5000, "file": file("e", 100) })),
+        ];
+        let (kept, gone) = prune_clips(&clips, 10_000.0, 600.0);
+        assert_eq!(gone, vec!["c-cccccccc"]);
+        assert_eq!(
+            ids(&kept),
+            vec!["c-aaaaaaaa", "c-bbbbbbbb", "c-dddddddd", "c-eeeeeeee"]
+        );
+    }
+
+    #[test]
+    fn a_kept_record_with_a_file_reads_back_with_its_name_as_its_text_the_old_device_source_reads_as_device()
+     {
+        let f = "f".repeat(64);
+        let c = parse_clip(
+            &json!({ "id": "c-aaaaaaaa", "text": "x", "source": "clipboard", "at": 5, "file": { "name": "a/b.pdf", "type": "Application/PDF; q=1", "size": 3, "sha": f } }),
+        );
+        assert_eq!(
+            c,
+            Some(
+                json!({ "id": "c-aaaaaaaa", "text": "b.pdf", "source": "device", "createdAt": 5, "at": 5, "count": 1, "file": { "name": "b.pdf", "type": "application/pdf", "size": 3, "sha": f } })
+            )
+        );
+        let short = parse_clip(
+            &json!({ "id": "c-aaaaaaaa", "text": "x", "source": "device", "at": 5, "file": { "name": "a", "size": 3, "sha": "short" } }),
+        );
+        assert_eq!(short.unwrap().get("file"), None);
+    }
+
+    #[test]
+    fn names_types_and_sizes_as_kept() {
+        let name = |s: &str| file_name(&json!(s));
+        assert_eq!(name("C:\\Users\\e\\shot 1.png"), "shot 1.png");
+        assert_eq!(name("../../etc/passwd"), "passwd");
+        assert_eq!(name("a\u{0}b\nc"), "abc");
+        assert_eq!(name(".."), "file");
+        assert_eq!(file_name(&Value::Null), "file");
+        // the cap never leaves half of a two-unit character at the end
+        let a = |n: usize| "a".repeat(n);
+        assert_eq!(
+            name(&format!("{}\u{1F600}.png", a(CLIP_NAME_CHARS - 1))),
+            a(CLIP_NAME_CHARS - 1)
+        );
+        assert_eq!(
+            name(&format!("{}\u{1F600}.png", a(CLIP_NAME_CHARS - 2))),
+            format!("{}\u{1F600}", a(CLIP_NAME_CHARS - 2))
+        );
+        assert_eq!(media_type(&json!("IMAGE/PNG")), "image/png");
+        assert_eq!(media_type(&json!("text/html; charset=utf-8")), "text/html");
+        assert_eq!(media_type(&json!("nonsense")), "application/octet-stream");
+    }
+
+    #[test]
+    fn a_clip_id_is_c_and_eight_base32_characters() {
+        assert!(is_clip_id("c-abcdefg2"));
+        for bad in [
+            "n-abcdefgh",
+            "c-ABCDEFGH",
+            "c-abcdefg1",
+            "c-abcdefg",
+            "c-abcdefghi",
+        ] {
+            assert!(!is_clip_id(bad), "{bad}");
+        }
     }
 }
