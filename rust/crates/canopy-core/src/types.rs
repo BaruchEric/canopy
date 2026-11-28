@@ -300,6 +300,14 @@ pub fn awake_words(info: &AwakeInfo) -> String {
     }
 }
 
+/// `OPENER_IDS`: the openers canopy knows, in types.ts's order.
+pub const OPENER_IDS: [&str; 6] = ["kitty", "terminal", "code", "finder", "agent", "herdr"];
+
+/// `isOpenerId()` (src/core/openers.ts): whether a word names an opener.
+pub fn is_opener_id(v: &str) -> bool {
+    OPENER_IDS.contains(&v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +419,13 @@ mod tests {
             serde_json::to_value(SpecState::NotAdopted).unwrap(),
             json!("not-adopted")
         );
+    }
+
+    /// openers.test.ts
+    #[test]
+    fn agent_and_herdr_are_opener_ids() {
+        assert!(is_opener_id("agent"));
+        assert!(is_opener_id("herdr"));
+        assert!(!is_opener_id("emacs"));
     }
 }

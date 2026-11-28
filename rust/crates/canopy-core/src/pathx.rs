@@ -192,6 +192,27 @@ pub fn js_squash_ws(s: &str) -> String {
 /// A regex class for JavaScript's `\s`, to splice into a pattern.
 pub const JS_S: &str = r"[[\s\x{FEFF}]&&[^\x{85}]]";
 
+/// What Node's fs functions say when a call fails: `"ENOENT: no such file
+/// or directory, realpath '/x'"`, the code, its words, the call and the
+/// path, as Bun words them. An error with no code Node names keeps Rust's
+/// own words.
+pub fn fs_error_words(e: &std::io::Error, syscall: &str, path: &str) -> String {
+    use rustix::io::Errno;
+    let words = match Errno::from_io_error(e) {
+        Some(Errno::NOENT) => ("ENOENT", "no such file or directory"),
+        Some(Errno::ACCESS) => ("EACCES", "permission denied"),
+        Some(Errno::NOTDIR) => ("ENOTDIR", "not a directory"),
+        Some(Errno::LOOP) => ("ELOOP", "too many symbolic links encountered"),
+        Some(Errno::NAMETOOLONG) => ("ENAMETOOLONG", "name too long"),
+        _ => return e.to_string(),
+    };
+    if path.is_empty() {
+        format!("{}: {}, {syscall}", words.0, words.1)
+    } else {
+        format!("{}: {}, {syscall} '{path}'", words.0, words.1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

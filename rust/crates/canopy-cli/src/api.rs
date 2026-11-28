@@ -8,7 +8,7 @@
 //! hand it a scratch config dir and token without touching the process's
 //! environment.
 
-use canopy_core::pathx::{join, js_trim};
+use canopy_core::pathx::{basename, dirname, join, js_trim};
 use canopy_core::store::config_dir;
 use reqwest::Url;
 
@@ -61,6 +61,18 @@ impl Caller {
         };
         let host = u.host_str().unwrap_or("");
         Some(join(&self.config_dir, &format!("token-{host}-{port}")))
+    }
+
+    /// `helperTokenFile()`: where `canopy helper --pair` keeps the helper's
+    /// own token for a backend, beside the CLI's (`token-helper-<host>-<port>`).
+    /// None where `token_file` is.
+    pub fn helper_token_file(&self, base: &str) -> Option<String> {
+        let file = self.token_file(base)?;
+        let name = basename(&file);
+        Some(join(
+            &dirname(&file),
+            &format!("token-helper-{}", &name["token-".len()..]),
+        ))
     }
 
     /// `callerToken()`: the backend's own token file first for any base; the
@@ -165,6 +177,18 @@ mod tests {
             format!("{cfg}/token-canopy.example.ca-443")
         );
         assert_eq!(c.token_file("not a url"), None);
+    }
+
+    /// auth.test.ts
+    #[test]
+    fn helper_token_file_is_named_for_the_helper_host_and_port() {
+        let (_d, c) = scratch();
+        let cfg = &c.config_dir;
+        assert_eq!(
+            c.helper_token_file("http://mini:7850/").unwrap(),
+            format!("{cfg}/token-helper-mini-7850")
+        );
+        assert_eq!(c.helper_token_file("http://"), None);
     }
 
     #[test]

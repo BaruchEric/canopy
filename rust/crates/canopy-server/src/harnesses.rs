@@ -8,7 +8,6 @@ use canopy_core::exec::{ExecOptions, exec};
 use canopy_core::harness::{HARNESSES, harness};
 use canopy_core::host::shell_quote;
 use serde_json::{Value, json};
-use std::os::unix::fs::PermissionsExt;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -21,15 +20,8 @@ const PROBE_MARK: &str = "canopy-has:";
 const HARNESS_DIRS: [&str; 3] = [".local/bin", ".bun/bin", ".npm-global/bin"];
 const SYSTEM_DIRS: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
 
-/// `Bun.which`: an executable file of that name on PATH.
-pub(crate) fn which(binary: &str) -> Option<String> {
-    let path = std::env::var("PATH").ok()?;
-    path.split(':').filter(|d| !d.is_empty()).find_map(|d| {
-        let full = canopy_core::pathx::join(d, binary);
-        let m = std::fs::metadata(&full).ok()?;
-        (m.is_file() && m.permissions().mode() & 0o111 != 0).then_some(full)
-    })
-}
+/// `Bun.which`, kept in canopy-core for the CLI's Library too.
+pub(crate) use canopy_core::exec::which;
 
 /// Where a harness's binary is: on PATH, or where its installers put it.
 pub fn find_binary(binary: &str) -> Option<String> {
