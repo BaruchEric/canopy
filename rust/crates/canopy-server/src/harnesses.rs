@@ -22,7 +22,7 @@ const HARNESS_DIRS: [&str; 3] = [".local/bin", ".bun/bin", ".npm-global/bin"];
 const SYSTEM_DIRS: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
 
 /// `Bun.which`: an executable file of that name on PATH.
-fn which(binary: &str) -> Option<String> {
+pub(crate) fn which(binary: &str) -> Option<String> {
     let path = std::env::var("PATH").ok()?;
     path.split(':').filter(|d| !d.is_empty()).find_map(|d| {
         let full = canopy_core::pathx::join(d, binary);

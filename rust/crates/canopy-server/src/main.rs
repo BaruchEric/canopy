@@ -11,6 +11,7 @@
 
 mod app;
 mod gate;
+mod gated;
 mod harnesses;
 mod people;
 mod routes;
@@ -88,6 +89,7 @@ async fn main() -> std::process::ExitCode {
         config: Box::new(read_config),
         harnesses: Box::new(move || login.list()),
         people: people.clone(),
+        gates: gated::Gates::from_env(),
     };
     let state = match AppState::start(setup).await {
         Ok(s) => Arc::new(s),

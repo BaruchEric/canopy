@@ -1,8 +1,10 @@
-//! Quick notes and reminders (FR-020, `src/core/notes.ts`): the record and
-//! the pure rules the CLI lists them by. The server half (the store, the
-//! delivery of a reminder) is not ported yet.
+//! Quick notes and reminders (FR-020, `src/core/notes.ts`): the record, the
+//! pure rules the CLI lists them by, and the file's records read back as the
+//! server reads them. The rest of the server half (the writes, the delivery
+//! of a reminder) is not ported yet.
 
 use serde::Deserialize;
+use serde_json::{Map, Value};
 
 /// One note, as `GET /api/notes` sends it. Times are unix ms.
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
@@ -87,9 +89,75 @@ pub fn due_word(due: f64, now: f64) -> String {
     format!("{} ago", span(-diff))
 }
 
+/// `isNoteId()`: `n-` and eight base32 letters.
+pub fn is_note_id(v: &str) -> bool {
+    v.len() == 10
+        && v.starts_with("n-")
+        && v.bytes()
+            .skip(2)
+            .all(|c| c.is_ascii_lowercase() || (b'2'..=b'7').contains(&c))
+}
+
+/// `timeOf()`: a positive finite number, kept as it was written.
+fn time_of(v: Option<&Value>) -> Option<Value> {
+    let v = v?;
+    let n = v.as_f64()?;
+    (n.is_finite() && n > 0.0).then(|| v.clone())
+}
+
+/// `parseNote()`: one record of the file as a note, its fields in the order
+/// the TypeScript sets them, or None when it is not one.
+pub fn parse_note(v: &Value) -> Option<Value> {
+    let o = v.as_object()?;
+    let id = o.get("id")?.as_str().filter(|s| is_note_id(s))?;
+    let text = o.get("text")?.as_str()?;
+    let created = time_of(o.get("createdAt"))?;
+    let mut n = Map::new();
+    n.insert("id".into(), id.into());
+    n.insert("text".into(), text.into());
+    n.insert("createdAt".into(), created);
+    if let Some(r) = o
+        .get("repoId")
+        .and_then(Value::as_str)
+        .filter(|r| !r.is_empty())
+    {
+        n.insert("repoId".into(), r.into());
+    }
+    for k in ["due", "remindedAt", "doneAt"] {
+        if let Some(t) = time_of(o.get(k)) {
+            n.insert(k.into(), t);
+        }
+    }
+    Some(Value::Object(n))
+}
+
+/// `parseNotes()`: the file's array read back; a record that is not a note
+/// is dropped, never the file.
+pub fn parse_notes(v: &Value) -> Vec<Value> {
+    v.as_array()
+        .map(|a| a.iter().filter_map(parse_note).collect())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_record_is_a_note_only_with_an_id_text_and_a_time() {
+        let file: Value = serde_json::from_str(
+            r#"[{"doneAt":5,"id":"n-abcdefgh","text":"t","createdAt":1764300000000,"repoId":"","due":-1,"extra":1},
+                {"id":"n-ABCDEFGH","text":"t","createdAt":1},
+                {"id":"n-abcdefg2","text":"t"},
+                {"id":"n-abcdefg3","text":"t","createdAt":2.5,"repoId":"r","remindedAt":3}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&parse_notes(&file)).unwrap(),
+            r#"[{"id":"n-abcdefgh","text":"t","createdAt":1764300000000,"doneAt":5},{"id":"n-abcdefg3","text":"t","createdAt":2.5,"repoId":"r","remindedAt":3}]"#
+        );
+        assert!(parse_notes(&serde_json::json!({})).is_empty());
+    }
 
     const NOW: f64 = 1_762_000_000_000.0;
 

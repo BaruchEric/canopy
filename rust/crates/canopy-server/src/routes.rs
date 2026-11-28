@@ -1,7 +1,7 @@
 //! The read routes the page calls on its first load (src/server/index.ts),
 //! in two kinds. The config's own lists (backends, workspaces, launchers,
-//! agent routing, kept shells, people) are read the way the Bun server
-//! reads them. The live lists (runs, flows, fleets, jobs, shells, helpers,
+//! agent routing, kept shells, people, quick notes) are read the way the
+//! Bun server reads them. The live lists (runs, flows, fleets, jobs, shells, helpers,
 //! devices, agent pulses) are state the Bun server holds in memory for the
 //! work it runs; this port runs none yet, so they answer what a Bun server
 //! that runs nothing answers. Any other method on these paths answers 501.
@@ -165,8 +165,30 @@ async fn people(
     Json(s.people.info(caller.as_ref(), now_ms() as f64))
 }
 
+/// `GET /api/notes`: `<config>/notes.json` read back. No file is no notes,
+/// and so is a file that is not JSON; a file that will not read is an
+/// error, as in the Bun server, which must not write one note over the rest.
+async fn notes(State(s): State<Arc<AppState>>) -> Result<Json<Value>, Refusal> {
+    let file = format!("{}/notes.json", s.config_dir);
+    let notes = match std::fs::read_to_string(&file) {
+        Ok(raw) => serde_json::from_str::<Value>(&raw)
+            .map(|v| canopy_core::notes::parse_notes(&v))
+            .unwrap_or_default(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
+        Err(e) => {
+            let error = format!("{e}, open '{file}'");
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error })),
+            ));
+        }
+    };
+    Ok(Json(json!({ "notes": notes })))
+}
+
 pub fn first_load() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/api/notes", read(notes))
         .route("/api/backends", read(backends))
         .route("/api/workspaces", read(workspaces_route))
         .route("/api/launchers", read(launchers))

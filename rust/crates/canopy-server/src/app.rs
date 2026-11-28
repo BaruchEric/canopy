@@ -18,9 +18,10 @@ use tokio_stream::wrappers::BroadcastStream;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::gate::{self, Gatekeeper};
+use crate::gated::{self, Gates};
 use crate::harnesses::backend_caps;
 use crate::people::People;
-use crate::routes::{first_load, not_ported};
+use crate::routes::first_load;
 use crate::tree::build_tree;
 
 type ConfigFn = dyn Fn() -> Result<CanopyConfig, String> + Send + Sync;
@@ -39,6 +40,8 @@ pub struct Setup {
     /// the harnesses this backend offers now
     pub harnesses: Box<HarnessesFn>,
     pub people: Arc<People>,
+    /// what this machine has for the routes it gates
+    pub gates: Gates,
 }
 
 pub struct AppState {
@@ -55,6 +58,7 @@ pub struct AppState {
     /// the container's default gateway, which docker's proxy hands every
     /// client as its address (Linux only)
     pub gateway: Option<String>,
+    pub gates: Gates,
 }
 
 /// The config as the Bun server reads it.
@@ -151,6 +155,7 @@ impl AppState {
             events,
             people: s.people,
             gateway: default_gateway(),
+            gates: s.gates,
         })
     }
 
@@ -270,7 +275,7 @@ pub fn router(state: Arc<AppState>, keeper: Arc<Gatekeeper>, web: &str) -> Route
         .route("/api/sources", get(sources))
         .route("/api/events", get(events))
         .merge(first_load())
-        .route("/api/{*rest}", axum::routing::any(not_ported))
+        .route("/api/{*rest}", axum::routing::any(gated::fallback))
         .fallback_service(page)
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(keeper, gate::check))
@@ -314,6 +319,11 @@ mod tests {
                 config: Box::new(|| Ok(CanopyConfig::default())),
                 harnesses: Box::new(|| vec!["claude"]),
                 people: Arc::new(People::new(&config_dir)),
+                gates: Gates {
+                    tmux: false,
+                    chan: false,
+                    voice: false,
+                },
             })
             .await
             .unwrap(),
