@@ -661,7 +661,7 @@ bun run dev        # API on :7850
 bun run dev:web    # Vite dev server on :7851 (proxies /api)
 bun run typecheck && bun run lint && bun run test && bun run build
 cd rust && cargo test --workspace   # the Rust port of the backend and CLI (docs/rust-port.md)
-bash scripts/rust-parity.sh ~/dev   # canopy-rs and the TypeScript CLI print the same tree
+bash scripts/rust-parity.sh ~/dev   # canopy-rs and the TypeScript CLI print the same tree, and the same commit, push and pull output on scratch repos
 bun run floorplan:update   # pull a newer Floorplan into lib/floorplan, canopy's edits merged in (lib/floorplan/VENDOR.md)
 bun scripts/floorplan-update.ts --check   # one line on whether a newer Floorplan is out; the health check floorplan runs it every 6 h
 bun run understand:update   # pull a newer Understand-Anything into lib/understand-anything, canopy's edits merged in (lib/understand-anything/VENDOR.md)

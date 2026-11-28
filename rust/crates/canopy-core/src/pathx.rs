@@ -155,6 +155,11 @@ pub fn js_trim_start(s: &str) -> &str {
     s.trim_start_matches(js_ws)
 }
 
+/// `s.trimEnd()` as JavaScript trims.
+pub fn js_trim_end(s: &str) -> &str {
+    s.trim_end_matches(js_ws)
+}
+
 /// A regex class for JavaScript's `\s`, to splice into a pattern.
 pub const JS_S: &str = r"[[\s\x{FEFF}]&&[^\x{85}]]";
 

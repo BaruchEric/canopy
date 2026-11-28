@@ -4,13 +4,16 @@
 
 pub mod exec;
 pub mod git;
+pub mod gitwrite;
 pub mod host;
 pub mod meta;
 pub mod pathx;
+pub mod peers;
 pub mod remote;
 pub mod scan;
 pub mod seedgit;
 pub mod spec;
+pub mod stalecopy;
 pub mod store;
 pub mod treelines;
 pub mod types;

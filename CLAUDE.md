@@ -18,7 +18,7 @@ cd rust && cargo test --workspace && cargo clippy --workspace --all-targets -- -
 bash scripts/rust-parity.sh [folder]   # canopy-rs against the TypeScript CLI, byte for byte
 ```
 
-- The backend and CLI are being ported to Rust in `rust/` (docs/rust-port.md has the ledger and its rules). Bun still runs everything that ships, so a TypeScript change needs no Rust change in the same commit. When one turns a cargo test red (the git parsers, the scan walk, the tree's lines, the callers gate, the CLI's COMMANDS list), that is drift the port fixes, not the session that made it. `canopy-server` needs `CANOPY_CONFIG_DIR` and never takes port 7850.
+- The backend and CLI are being ported to Rust in `rust/` (docs/rust-port.md has the ledger and its rules). Bun still runs everything that ships, so a TypeScript change needs no Rust change in the same commit. When one turns a cargo test red (the git parsers, the push and pull messages, the scan walk, the tree's lines, the callers gate, the CLI's COMMANDS list), that is drift the port fixes, not the session that made it. `canopy-server` needs `CANOPY_CONFIG_DIR` and never takes port 7850.
 - All four gates (typecheck, lint, test, build) pass before work counts as done. The build matters: the server serves `dist/web`, so a stale build shows a stale UI.
 - Dev: `bun run dev` (API on :7850, restarts on change) plus `bun run dev:web` (Vite on :7851, proxying `/api` and `/library` to :7850).
 - Production locally: `bun run build && bun link`, then `canopy ui ~/dev`. On the Mac a launchd agent keeps a server on :7850.

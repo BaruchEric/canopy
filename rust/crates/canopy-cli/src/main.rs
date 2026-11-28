@@ -1,13 +1,18 @@
 //! `canopy-rs`, the Rust port of the `canopy` CLI (`src/cli/index.ts`).
 //!
-//! It answers `canopy [dir]`, `canopy tree`, `canopy status` and `canopy
-//! version` itself, with output byte for byte the TypeScript CLI's. Every
-//! other verb, and any of those four with a flag, still goes to the
-//! TypeScript CLI (`bun bin/canopy.ts`) until it is ported, so the binary
-//! can stand in for `canopy` today. docs/rust-port.md has the ledger.
+//! It answers `canopy [dir]`, `canopy tree`, `canopy status`, `canopy
+//! version`, `canopy commit`, `canopy push` and `canopy pull` itself, with
+//! output byte for byte the TypeScript CLI's. Every other verb, and any of
+//! these with a flag the port does not read yet (`--help`, `--token`,
+//! `--backend`, `commit --ai`, `push test|ls`), still goes to the TypeScript
+//! CLI (`bun bin/canopy.ts`) until it is ported, so the binary can stand in
+//! for `canopy` today. docs/rust-port.md has the ledger.
 
+use canopy_core::git::{StatusOptions, get_status};
+use canopy_core::gitwrite::{GitError, commit, drop_stale_copies, pull, push};
 use canopy_core::pathx::resolve;
 use canopy_core::scan::{DEFAULT_IGNORE, ScanOptions, scan};
+use canopy_core::stalecopy::newest_stale;
 use canopy_core::store::load_config;
 use canopy_core::treelines::{Seg, Tone, tree_lines};
 use canopy_core::types::now_ms;
@@ -83,30 +88,124 @@ pub const COMMANDS: &[&str] = &[
     "-V",
 ];
 
-/// What the Rust binary does with an argument list.
+/// What the Rust binary does with an argument list. A repo is the word as
+/// typed, None when it was left out (a usage error, said at run time).
 #[derive(Debug, PartialEq, Eq)]
 enum Plan {
-    Tree { dir: String, dirty_only: bool },
+    Tree {
+        dir: String,
+        dirty_only: bool,
+    },
     Version,
+    Commit {
+        repo: Option<String>,
+        message: Option<String>,
+        all: bool,
+        push: bool,
+    },
+    Push {
+        repo: Option<String>,
+        drop_stale: bool,
+    },
+    Pull {
+        repo: Option<String>,
+    },
     Delegate,
 }
+
+/// `flag()` in index.ts: take a bare flag out of the arguments.
+fn flag(args: &mut Vec<String>, name: &str) -> bool {
+    match args.iter().position(|a| a == name) {
+        Some(i) => {
+            args.remove(i);
+            true
+        }
+        None => false,
+    }
+}
+
+/// `opt()` in index.ts: take a flag and the word after it, whatever that
+/// word is; a flag with nothing after it stays where it is.
+fn opt(args: &mut Vec<String>, name: &str) -> Option<String> {
+    let i = args.iter().position(|a| a == name)?;
+    if i + 1 >= args.len() {
+        return None;
+    }
+    let value = args.remove(i + 1);
+    args.remove(i);
+    Some(value)
+}
+
+/// `asksHelp()` in core/help.ts: --help or -h before any `--`.
+fn asks_help(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|a| *a != "--")
+        .any(|a| a == "--help" || a == "-h")
+}
+
+/// `PUSH_WORDS` in cli/push.ts: web push's test and list, not a repo.
+const PUSH_WORDS: &[&str] = &["test", "ls"];
 
 fn plan(args: &[String]) -> Plan {
     let (cmd, rest) = match args.first() {
         Some(a) if COMMANDS.contains(&a.as_str()) => (Some(a.as_str()), &args[1..]),
         _ => (None, args),
     };
-    // a flag (--help, --token, --backend, ...) changes what the verb does
-    // in ways only the TypeScript CLI knows yet
-    if rest.iter().any(|a| a.starts_with('-')) {
+    let flagged = |a: &[String]| a.iter().any(|w| w.starts_with('-'));
+    // a verb's help, a caller token or another backend: only the TypeScript
+    // CLI knows those yet
+    if (cmd.is_some() && asks_help(rest)) || rest.iter().any(|a| a == "--token" || a == "--backend")
+    {
         return Plan::Delegate;
     }
     match cmd {
-        None | Some("tree") | Some("status") if rest.len() <= 1 => Plan::Tree {
+        None | Some("tree") | Some("status") if rest.len() <= 1 && !flagged(rest) => Plan::Tree {
             dir: rest.first().cloned().unwrap_or_else(|| ".".into()),
             dirty_only: cmd == Some("status"),
         },
-        Some("version" | "--version" | "-V") => Plan::Version,
+        Some("version" | "--version" | "-V") if !flagged(rest) => Plan::Version,
+        Some("commit") => {
+            // flags first, in index.ts's order, so `--all <repo>` never
+            // reads "--all" as the repo
+            let mut a = rest.to_vec();
+            let all = flag(&mut a, "--all");
+            let push = flag(&mut a, "--push");
+            let ai = flag(&mut a, "--ai");
+            let message = match opt(&mut a, "-m") {
+                Some(m) => Some(m),
+                None => opt(&mut a, "--message"),
+            };
+            // --ai asks an agent for the message, which is not ported yet
+            if ai || flagged(&a) {
+                return Plan::Delegate;
+            }
+            Plan::Commit {
+                repo: a.first().cloned(),
+                message,
+                all,
+                push,
+            }
+        }
+        Some("push") => {
+            if rest
+                .first()
+                .is_some_and(|w| PUSH_WORDS.contains(&w.as_str()))
+            {
+                return Plan::Delegate;
+            }
+            let mut a = rest.to_vec();
+            let drop_stale = flag(&mut a, "--drop-stale");
+            if flagged(&a) {
+                return Plan::Delegate;
+            }
+            Plan::Push {
+                repo: a.first().cloned(),
+                drop_stale,
+            }
+        }
+        Some("pull") if !flagged(rest) => Plan::Pull {
+            repo: rest.first().cloned(),
+        },
         _ => Plan::Delegate,
     }
 }
@@ -152,6 +251,86 @@ async fn tree(dir: &str, dirty_only: bool) -> Result<(), String> {
     Ok(())
 }
 
+fn git_err(e: GitError) -> String {
+    e.message().to_string()
+}
+
+/// `canopy commit <repo> [-m msg] [--all] [--push]`, in index.ts's order:
+/// the usage, the status read, the message, then something staged.
+async fn commit_cmd(
+    repo: Option<String>,
+    message: Option<String>,
+    all: bool,
+    push_after: bool,
+) -> Result<(), String> {
+    let repo = resolve(&repo.ok_or("usage: canopy commit <repo>")?);
+    let st = get_status(&repo, &StatusOptions::default()).await?;
+    let Some(message) = message.filter(|m| !m.is_empty()) else {
+        return Err("pass -m \"message\" or --ai".into());
+    };
+    let staged = st.files.iter().any(|f| f.index != "." && !f.untracked);
+    if !staged && !all {
+        return Err("nothing staged — pass --all to stage everything".into());
+    }
+    println!("{}", commit(&repo, &message, all).await.map_err(git_err)?);
+    if push_after {
+        println!("{}", push(&repo).await.map_err(git_err)?);
+    }
+    Ok(())
+}
+
+/// `canopy push <repo> [--drop-stale]`. With --drop-stale, a push refused
+/// over an upstream amend (FR-048) drops the stale copy and pushes what is
+/// left; without it the refusal says how.
+async fn push_cmd(repo: Option<String>, drop_stale: bool) -> Result<(), String> {
+    let arg = repo.ok_or("usage: canopy push <repo> [--drop-stale]")?;
+    let repo = resolve(&arg);
+    match push(&repo).await {
+        Ok(out) => println!("{out}"),
+        Err(GitError::StaleCopy { message, offer }) => {
+            if !drop_stale {
+                return Err(format!(
+                    "{message}\n\nRun canopy push {arg} --drop-stale to drop it."
+                ));
+            }
+            let moved = drop_stale_copies(&repo, &newest_stale(&offer.copies), &offer.onto)
+                .await
+                .map_err(git_err)?;
+            println!("{}", moved.out);
+            if moved.kept > 0 {
+                println!("{}", push(&repo).await.map_err(git_err)?);
+            }
+        }
+        Err(e) => return Err(git_err(e)),
+    }
+    Ok(())
+}
+
+async fn pull_cmd(repo: Option<String>) -> Result<(), String> {
+    let repo = resolve(&repo.ok_or("usage: canopy pull <repo>")?);
+    println!("{}", pull(&repo).await.map_err(git_err)?);
+    Ok(())
+}
+
+/// What bin/canopy.ts does with a command's error: its words on stderr and
+/// exit 1. Bun's console.error paints a string red when stderr is a
+/// terminal and NO_COLOR is unset or empty, so this does too.
+fn finish(r: Result<(), String>) -> ExitCode {
+    match r {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            let red = std::io::stderr().is_terminal()
+                && std::env::var("NO_COLOR").map_or(true, |v| v.is_empty());
+            if red {
+                eprintln!("\x1b[0m\x1b[31m{e}\x1b[0m");
+            } else {
+                eprintln!("{e}");
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Hand the arguments to the TypeScript CLI and take its exit code.
 fn delegate(args: &[String]) -> ExitCode {
     let entry = std::env::var("CANOPY_TS_CLI")
@@ -174,13 +353,15 @@ async fn main() -> ExitCode {
             println!("canopy {}", version_line(&read_build(&canopy_dir())));
             ExitCode::SUCCESS
         }
-        Plan::Tree { dir, dirty_only } => match tree(&dir, dirty_only).await {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("{e}");
-                ExitCode::FAILURE
-            }
-        },
+        Plan::Tree { dir, dirty_only } => finish(tree(&dir, dirty_only).await),
+        Plan::Commit {
+            repo,
+            message,
+            all,
+            push,
+        } => finish(commit_cmd(repo, message, all, push).await),
+        Plan::Push { repo, drop_stale } => finish(push_cmd(repo, drop_stale).await),
+        Plan::Pull { repo } => finish(pull_cmd(repo).await),
     }
 }
 
@@ -229,6 +410,72 @@ mod tests {
         assert_eq!(plan(&args(&["tree", "a", "b"])), Plan::Delegate);
         assert_eq!(plan(&args(&["runs"])), Plan::Delegate);
         assert_eq!(plan(&args(&["help"])), Plan::Delegate);
+        assert_eq!(plan(&args(&["version", "--json"])), Plan::Delegate);
+    }
+
+    #[test]
+    fn commit_reads_its_flags_as_index_ts_does() {
+        let commit =
+            |repo: Option<&str>, message: Option<&str>, all: bool, push: bool| Plan::Commit {
+                repo: repo.map(String::from),
+                message: message.map(String::from),
+                all,
+                push,
+            };
+        assert_eq!(
+            plan(&args(&["commit", "--all", "r", "-m", "fix it"])),
+            commit(Some("r"), Some("fix it"), true, false)
+        );
+        assert_eq!(
+            plan(&args(&["commit", "-m", "-starts-with-dash", "--push", "r"])),
+            commit(Some("r"), Some("-starts-with-dash"), false, true)
+        );
+        assert_eq!(
+            plan(&args(&["commit", "r", "--message", "m"])),
+            commit(Some("r"), Some("m"), false, false)
+        );
+        // -m wins and --message is left behind, which only the TS reads
+        assert_eq!(
+            plan(&args(&["commit", "r", "-m", "a", "--message", "b"])),
+            Plan::Delegate
+        );
+        assert_eq!(plan(&args(&["commit"])), commit(None, None, false, false));
+        assert_eq!(plan(&args(&["commit", "r", "--ai"])), Plan::Delegate);
+        assert_eq!(plan(&args(&["commit", "r", "-m", "-h"])), Plan::Delegate);
+        assert_eq!(
+            plan(&args(&["commit", "r", "--token", "t"])),
+            Plan::Delegate
+        );
+        assert_eq!(plan(&args(&["commit", "r", "-m"])), Plan::Delegate);
+    }
+
+    #[test]
+    fn push_and_pull_take_a_repo_and_web_push_goes_to_typescript() {
+        assert_eq!(
+            plan(&args(&["push", "r", "--drop-stale"])),
+            Plan::Push {
+                repo: Some("r".into()),
+                drop_stale: true
+            }
+        );
+        assert_eq!(
+            plan(&args(&["push"])),
+            Plan::Push {
+                repo: None,
+                drop_stale: false
+            }
+        );
+        assert_eq!(plan(&args(&["push", "test"])), Plan::Delegate);
+        assert_eq!(plan(&args(&["push", "ls"])), Plan::Delegate);
+        assert_eq!(plan(&args(&["push", "r", "--force"])), Plan::Delegate);
+        assert_eq!(
+            plan(&args(&["pull", "r"])),
+            Plan::Pull {
+                repo: Some("r".into())
+            }
+        );
+        assert_eq!(plan(&args(&["pull", "r", "--rebase"])), Plan::Delegate);
+        assert_eq!(plan(&args(&["pull", "--help"])), Plan::Delegate);
     }
 
     #[test]

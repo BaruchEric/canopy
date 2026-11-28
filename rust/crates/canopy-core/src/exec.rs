@@ -155,11 +155,33 @@ async fn idle_watch(idle_ms: u64, last: Arc<AtomicU64>, start: Instant) {
     }
 }
 
+/// Start the command in a session of its own, as Bun's `detached` does for
+/// the TypeScript's exec: the leader of a new process group, which the
+/// timeout ends whole, and with no controlling terminal, so a credential or
+/// passphrase prompt on /dev/tty fails at once ("could not read Username")
+/// where a background group of the user's terminal would stop on SIGTTIN
+/// until the timeout. std's `CommandExt::setsid` is unstable (rust#105376),
+/// hence the one `unsafe` in the workspace.
+#[allow(unsafe_code)]
+fn new_session(c: &mut Command) {
+    // SAFETY: the closure runs in the forked child before exec and calls
+    // only setsid(2), which is async-signal-safe and touches nothing the
+    // parent shares.
+    unsafe {
+        c.pre_exec(|| {
+            rustix::process::setsid()
+                .map(|_| ())
+                .map_err(std::io::Error::from)
+        });
+    }
+}
+
 /// Run a command, capture output. Never fails: errors land in code/stderr.
 ///
-/// With a timeout the command runs in a process group of its own and the
-/// timeout ends the whole group, so what it started (git fetch's per-remote
-/// child, a test runner) cannot hold the pipes. A process that leaves the
+/// With a timeout the command runs in a session and process group of its
+/// own (`new_session`) and the timeout ends the whole group, so what it
+/// started (git fetch's per-remote child, a test runner) cannot hold the
+/// pipes. A process that leaves the
 /// group and keeps a pipe (a daemon) stops being waited on after
 /// `KILL_GRACE`. An aborted signal and `idle_ms` of silence end it the same way.
 pub async fn exec<S: AsRef<str>>(cmd: &[S], opts: &ExecOptions) -> ExecResult {
@@ -192,7 +214,7 @@ pub async fn exec<S: AsRef<str>>(cmd: &[S], opts: &ExecOptions) -> ExecResult {
     let timed = opts.timeout_ms.filter(|t| *t > 0);
     let idle = opts.idle_ms.filter(|t| *t > 0);
     if timed.is_some() || opts.signal.is_some() || idle.is_some() {
-        c.process_group(0);
+        new_session(&mut c);
     }
     let mut child = match c.spawn() {
         Ok(ch) => ch,
@@ -513,6 +535,26 @@ mod tests {
                 .code,
             4
         );
+    }
+
+    #[tokio::test]
+    async fn a_timed_command_has_no_terminal_to_prompt_on() {
+        // Without a terminal of its own this proves nothing and passes. Under
+        // one (a shell, `script`), the untimed child shares it and the timed
+        // one, in a session of its own, has none to open.
+        let probe = sv(&["sh", "-c", ": </dev/tty"]);
+        if exec(&probe, &ExecOptions::default()).await.code != 0 {
+            return;
+        }
+        let timed = exec(
+            &probe,
+            &ExecOptions {
+                timeout_ms: Some(5_000),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_ne!(timed.code, 0, "the timed child opened the terminal");
     }
 
     #[tokio::test]

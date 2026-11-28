@@ -12,24 +12,27 @@ The port runs beside the TypeScript. Bun still runs everything that ships: the M
 
 | Crate | What it is | From |
 |---|---|---|
-| `canopy-core` | exec, ssh locators, the seed guard, config, remotes, card meta, the shared spec, git reads, the scan, the tree's lines, the build version | `src/core/` |
+| `canopy-core` | exec, ssh locators, the seed guard, config, remotes, card meta, the shared spec, git reads and writes, the stale-copy judge, the scan, the tree's lines, the build version | `src/core/` |
 | `canopy-auth` | caller tokens, rights, the callers book, the request gate, the auth routes, the origin gate, CORS | `src/core/callers.ts`, `src/server/callers.ts`, `src/core/library.ts`, `src/core/cors.ts` |
 | `canopy-cli` | the binary `canopy-rs` | `src/cli/` |
 | `canopy-server` | the binary `canopy-server` | `src/server/index.ts` |
 
-Of 315 modules (106,675 lines of TypeScript under `src/core`, `src/server`, `src/cli`, `src/stage`, `src/egress` and `src/secrets`), 11 are ported, 12 are in part and 292 are not started. The table at the end lists each.
+Of 315 modules (106,675 lines of TypeScript under `src/core`, `src/server`, `src/cli`, `src/stage`, `src/egress` and `src/secrets`), 13 are ported, 12 are in part and 290 are not started. The table at the end lists each.
 
 ## What runs in Rust today
 
-- `canopy-rs` answers `canopy [dir]`, `canopy tree`, `canopy status` and `canopy version` itself. Any other verb, and any of those with a flag, goes to `bun bin/canopy.ts` with the same arguments and exit code, so `canopy-rs` can stand in for `canopy` now. `CANOPY_TS_CLI` points it at another entry.
+- `canopy-rs` answers `canopy [dir]`, `canopy tree`, `canopy status`, `canopy version`, `canopy commit <repo> [-m msg] [--all] [--push]`, `canopy push <repo> [--drop-stale]` and `canopy pull <repo>` itself. Any other verb goes to `bun bin/canopy.ts` with the same arguments and exit code, and so does any of these with a flag the port does not read yet: `--help` or `-h`, `--token`, `--backend`, `commit --ai`, `push test` and `push ls` (web push), or a flag the verb does not take. So `canopy-rs` can stand in for `canopy` now. `CANOPY_TS_CLI` points it at another entry.
+- The write half of `git.ts` runs in Rust (`gitwrite.rs`): a commit's detail and diff, stage and unstage, commit, push with its rebase of a rejected push and FR-048's stale-copy offer (`stalecopy.rs`), pull, and the stale `index.lock` sweep. Nothing calls the diff, stage or commit-detail functions outside the tests until the server's routes are ported.
 - `canopy-server` serves the built page (`dist/web`, with the page as the fallback for client routes), `GET /api/tree`, `/api/about`, `/api/sources` and the `/api/events` stream (`: hello`, then a `scan` frame after each rescan, every 30 seconds). Every request passes the same gate as the Bun server's `route()`: the preflight, the caller token or the loopback bypass, the coordinator's lane, the rights gate in `CANOPY_CALLERS` mode, the origin gate, then the auth routes. Every other API route answers 501 with "not in the Rust port yet". People's folder scopes, the Library, websockets and every feature route are not here yet.
 - `canopy-server` refuses to start without `CANOPY_CONFIG_DIR`, and defaults to port 7860. The Bun server owns `~/.config/canopy` and port 7850 until the cutover; two servers writing `callers.json` would corrupt it.
 
 ## How it was checked
 
-- `cd rust && cargo test --workspace` runs 300 tests. Most are the TypeScript tests ported case by case: `exec.test.ts`, `host.test.ts`, `seedgit.test.ts`, `git.test.ts` (the read half, against real repos), `scan.test.ts`, `meta.test.ts`, `spec.test.ts`, `treelines.test.ts`, `access.test.ts` (remotes), and the callers tests.
+- `cd rust && cargo test --workspace` runs 354 tests. Most are the TypeScript tests ported case by case: `exec.test.ts`, `host.test.ts`, `seedgit.test.ts`, `git.test.ts` (both halves, against real repos, the eight diverged-branch rebase cases and the seven amend cases included), `stalecopy.test.ts`, `scan.test.ts`, `meta.test.ts`, `spec.test.ts`, `treelines.test.ts`, `access.test.ts` (remotes), and the callers tests.
 - `canopy-auth`'s parity tests read fixtures the TypeScript wrote (`rust/crates/canopy-auth/scripts/gen-fixtures.ts`): what every route needs for 5,796 paths by 7 methods, 68,400 origin cases, and a `callers.json` the TS minted. The Rust reads that book, checks its 9 tokens and writes it back byte for byte; `scripts/check-rust.ts` checks the other direction.
 - `bash scripts/rust-parity.sh [folder]` runs the TypeScript CLI and `canopy-rs` on the same folder against a scratch config dir and diffs tree, status, the bare form, version and a missing folder. On `~/dev` (175 lines of tree) every one came out byte-identical, with the last column (how long ago the newest commit was) masked because a scan of that size lets it tick over between the two runs. The script runs with `NO_COLOR`; under a real terminal (Python's `pty.spawn`) the colored tree of `~/dev/dev-tools` was byte-identical too, color codes and all.
+- The same script then builds two identical sets of scratch repos (a bare origin, clones, a repo with no remote, a detached checkout), with names, dates and the global git config pinned so both sides make the same hashes, and runs each git step through both CLIs, stdout, stderr and exit code apart: commit's usage, no message, nothing staged, a missing repo, `--all` and `--push` (which rebases onto a newer upstream first); push fast-forward, usage, a missing repo, no remote and detached; pull usage, fast-forward and a held `index.lock`; and the atlas case, a push refused over an upstream amend and then `--drop-stale`. All 16 came out byte-identical. `CANOPY_PARITY_KEEP=1` keeps the scratch dir to read.
+- Under `script` (a real terminal), a push to a local server that answers 401 failed at once in both CLIs with the same bytes, Bun's red error included: git found no terminal to ask for a username on. The Rust exec had put a timed command in a process group of its own, which kept the terminal, so git would have stopped on a prompt it could not read until the 15-minute timeout. It now calls `setsid` as Bun's `detached: true` does.
 - `canopy-server` was run on a scratch port and config dir against the real `dist/web`: the page and its assets load, `/api/tree` returns the scan, a cross-site Origin gets `{"error":"Foreign origin"}`, the stream says `: hello`, and with `CANOPY_CALLERS=log` it prints the TS's own "callers: would refuse" lines. It wrote nothing to its config dir.
 
 No speed claim yet. Timings taken on 2026-11-27 ran on a machine at a load average near 90, and a single run of either CLI on `~/dev` varied from 7 to 40 seconds.
@@ -42,14 +45,14 @@ No speed claim yet. Timings taken on 2026-11-27 ran on a machine at a load avera
 - Port a module with its tests. A behaviour the TypeScript tests check is a Rust test too.
 - Tests run on macOS and Linux, so a test that shells out uses flags both BSD and GNU tools take.
 - Blocking file work in async code goes through `spawn_blocking`; the scan's eight-at-a-time workers share one task.
-- `unsafe_code` is denied workspace-wide; `rustix` covers signals.
+- `unsafe_code` is denied workspace-wide; `rustix` covers signals. The one exception is `new_session` in `exec.rs`, a `pre_exec` hook that calls `setsid(2)`, because `CommandExt::setsid` is still unstable (rust#105376) and a timed command must lose the terminal as Bun's detached child does.
 - Do not touch the Dockerfile, the compose files or the launchd agent for the port. The cutover changes them, once, with Eric's yes.
 
 ## What comes next
 
 In about this order, each its own task:
 
-1. `git.ts`'s write half (stage, commit, push, pull, diff) and the remaining CLI verbs that need only core and HTTP (`src/cli/api.ts`), so `canopy-rs` stops delegating the common ones.
+1. `src/cli/api.ts` (the backend address, the caller token and its header) and the CLI verbs that are plain HTTP calls to a backend, so `canopy-rs` stops delegating the common ones; then `--token`, `--backend` and verb help.
 2. The server's read routes the page calls on load, then the SSE events the page listens for, so the page renders from `canopy-server` with no 501 on first load.
 3. Runs: `runner.ts`, `driver.ts`, `claudedrive.ts` and the stream-json fold, then `codexrun.ts` and `antigravity.ts`.
 4. Shells: `term.ts` and the tmux bridge over websockets.
@@ -114,7 +117,7 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `emulators.ts` | 246 | not started |  |  |
 | `envnames.ts` | 83 | not started |  |  |
 | `evidence.ts` | 37 | not started |  |  |
-| `exec.ts` | 287 | ported | core `exec.rs` | exec, onHost, git, the seed guard's hook (`SeedGitHook`) |
+| `exec.ts` | 287 | ported | core `exec.rs` | exec, onHost, git, the seed guard's hook (`SeedGitHook`); a timed command gets a session of its own, as Bun's detached child does |
 | `explain.ts` | 1296 | not started |  |  |
 | `export.ts` | 110 | not started |  |  |
 | `favorite.ts` | 32 | not started |  |  |
@@ -133,7 +136,7 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `fr.ts` | 126 | not started |  |  |
 | `gatename.ts` | 4 | not started |  |  |
 | `gates.ts` | 132 | not started |  |  |
-| `git.ts` | 1309 | partial | core `git.rs` | the read half: status, elsewhere, log, fetch and their parsers; commit, push, pull, stage and diff are not |
+| `git.ts` | 1309 | ported | core `git.rs`, `gitwrite.rs` | the read half in `git.rs`; commit detail, diff, stage, commit, push, pull and the lock sweep in `gitwrite.rs`, with `GitError` in place of the TS error classes |
 | `github.ts` | 122 | not started |  |  |
 | `going.ts` | 55 | not started |  |  |
 | `group.ts` | 238 | not started |  |  |
@@ -175,7 +178,7 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `panesizes.ts` | 129 | not started |  |  |
 | `passkeeper.ts` | 93 | not started |  |  |
 | `paste.ts` | 63 | not started |  |  |
-| `peers.ts` | 219 | not started |  |  |
+| `peers.ts` | 219 | partial | core `peers.rs` | `NO_PUSH`, the push URL a peer remote carries, for the push guard; the rest is not started |
 | `peersync.ts` | 1494 | not started |  |  |
 | `people.ts` | 486 | partial | auth `people.rs` | roles and rights; the people store and teams are not |
 | `pickscript.ts` | 236 | not started |  |  |
@@ -239,7 +242,7 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `stageshare.ts` | 142 | not started |  |  |
 | `stagetoken.ts` | 172 | not started |  |  |
 | `stagewire.ts` | 391 | not started |  |  |
-| `stalecopy.ts` | 186 | not started |  |  |
+| `stalecopy.ts` | 186 | ported | core `stalecopy.rs` |  |
 | `stall.ts` | 95 | not started |  |  |
 | `steer.ts` | 68 | not started |  |  |
 | `store.ts` | 698 | partial | core `store.rs` | config path, loadConfig's maxDepth and ignore; the other settings ride along as raw JSON |
@@ -350,7 +353,7 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `groups.ts` | 141 | not started |  |  |
 | `health.ts` | 523 | not started |  |  |
 | `incubator.ts` | 307 | not started |  |  |
-| `index.ts` | 946 | partial | cli `main.rs` | tree, status and version run in Rust; every other verb goes to the TS CLI |
+| `index.ts` | 946 | partial | cli `main.rs` | tree, status, version, commit, push and pull run in Rust; every other verb goes to the TS CLI |
 | `issues.ts` | 65 | not started |  |  |
 | `kit.ts` | 95 | not started |  |  |
 | `land.ts` | 164 | not started |  |  |
