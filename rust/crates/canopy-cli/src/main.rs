@@ -3,8 +3,9 @@
 //! It answers `canopy [dir]`, `canopy tree`, `canopy status`, `canopy
 //! version`, `canopy commit`, `canopy push` and `canopy pull` itself, the
 //! backend verbs `note`, `awake`, `issues`, `pr`, `prs`, `scenarios`,
-//! `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `queue` and
-//! `collisions` over HTTP (`HTTP_VERBS`), and every verb's `--help`, with
+//! `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `queue`,
+//! `collisions`, `people`, `clip`, `clips` and `worktrees` over HTTP
+//! (`HTTP_VERBS`), and every verb's `--help`, with
 //! output byte for byte the TypeScript CLI's.
 //! `--token` is read for every verb, as index.ts reads it. Every other
 //! verb, and a local verb with a flag the port does not read yet
@@ -16,6 +17,7 @@
 mod api;
 mod ask;
 mod awake;
+mod clips;
 mod groups;
 mod help;
 mod issues;
@@ -25,10 +27,12 @@ mod land;
 mod loadouts;
 mod notes;
 mod out;
+mod people;
 mod prs;
 mod scenarios;
 mod sweep;
 mod work;
+mod worktrees;
 
 use canopy_core::git::{StatusOptions, get_status};
 use canopy_core::gitwrite::{GitError, commit, drop_stale_copies, pull, push};
@@ -165,6 +169,10 @@ const HTTP_VERBS: &[&str] = &[
     "land",
     "queue",
     "collisions",
+    "people",
+    "clip",
+    "clips",
+    "worktrees",
 ];
 
 /// `flag()` in index.ts: take a bare flag out of the arguments.
@@ -452,6 +460,28 @@ async fn http_verb(
                 .unwrap_or_else(|_| ".".into());
             work::work_cmd(rest, &caller, &client, &mut o, &cwd).await
         }
+        "people" => people::people_cmd(rest, &caller, &client, &mut o).await,
+        "clip" | "clips" => {
+            let host = clips::Real::new(caller.clone());
+            let mut raw = Vec::new();
+            let r = clips::clip_cmd(
+                rest,
+                &caller,
+                &client,
+                &host,
+                &mut o,
+                &mut raw,
+                now_ms() as f64,
+            )
+            .await;
+            // a file's bytes go to stdout as they are, before any line
+            use std::io::Write as _;
+            let _ = std::io::stdout().write_all(&raw);
+            r
+        }
+        "worktrees" => {
+            worktrees::worktrees_cmd(rest, &caller, &client, &mut o, worktrees::MERGE_POLL).await
+        }
         _ => land::land_cmd(verb, rest, &caller, &client, &mut o).await,
     };
     finish_out(o, r)
@@ -663,9 +693,25 @@ mod tests {
                 "{verb}"
             );
         }
-        for verb in ["run", "runs", "capacity", "secrets", "people"] {
+        for verb in ["run", "runs", "capacity", "secrets"] {
             assert_eq!(plan(&args(&[verb])), Plan::Delegate, "{verb}");
         }
+    }
+
+    #[test]
+    fn people_clip_and_worktrees_run_here() {
+        for verb in ["people", "clip", "clips", "worktrees"] {
+            assert!(
+                matches!(plan(&args(&[verb])), Plan::Http { verb: v, .. } if v == verb),
+                "{verb}"
+            );
+        }
+        assert_eq!(
+            plan(&args(&["worktrees", "--help"])),
+            Plan::Help {
+                verb: Some("worktrees".into())
+            }
+        );
     }
 
     #[test]

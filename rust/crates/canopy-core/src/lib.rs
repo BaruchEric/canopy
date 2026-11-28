@@ -2,6 +2,7 @@
 //! docs/rust-port.md for what is ported and what is not yet). No HTTP here;
 //! the server and the CLI crates sit on top.
 
+pub mod clips;
 pub mod exec;
 pub mod git;
 pub mod gitwrite;
@@ -13,6 +14,7 @@ pub mod meta;
 pub mod notes;
 pub mod pathx;
 pub mod peers;
+pub mod people;
 pub mod pr;
 pub mod remote;
 pub mod scan;
@@ -23,6 +25,7 @@ pub mod store;
 pub mod sweep;
 pub mod touch;
 pub mod treelines;
+pub mod treewords;
 pub mod types;
 pub mod version;
 pub mod work;
