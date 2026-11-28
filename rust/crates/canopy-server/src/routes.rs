@@ -1,7 +1,7 @@
 //! The read routes the page calls on its first load (src/server/index.ts),
 //! in three kinds. The config's own lists (backends, workspaces, launchers,
-//! agent routing, kept shells, people, quick notes) are read the way the
-//! Bun server reads them. The devices list and where each browser is come
+//! agent routing, kept shells, people) are read the way the Bun server
+//! reads them; quick notes have a module of their own (`notes.rs`). The devices list and where each browser is come
 //! from the pages' event streams, as they do there. The other live lists
 //! (runs, flows, fleets, jobs, helpers, agent pulses) are state the Bun
 //! server holds for the work it runs; this port runs none yet, so they
@@ -252,27 +252,6 @@ async fn place(
     (status, Json(r.body)).into_response()
 }
 
-/// `GET /api/notes`: `<config>/notes.json` read back. No file is no notes,
-/// and so is a file that is not JSON; a file that will not read is an
-/// error, as in the Bun server, which must not write one note over the rest.
-async fn notes(State(s): State<Arc<AppState>>) -> Result<Json<Value>, Refusal> {
-    let file = format!("{}/notes.json", s.config_dir);
-    let notes = match std::fs::read_to_string(&file) {
-        Ok(raw) => serde_json::from_str::<Value>(&raw)
-            .map(|v| canopy_core::notes::parse_notes(&v))
-            .unwrap_or_default(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
-        Err(e) => {
-            let error = format!("{e}, open '{file}'");
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": error })),
-            ));
-        }
-    };
-    Ok(Json(json!({ "notes": notes })))
-}
-
 /// `GET /api/layouts`: the presets and the user's own profiles from
 /// `screen-layouts.json`. The Bun server reads the file once at its start;
 /// this reads it at each call, so an edit by hand shows at once.
@@ -301,7 +280,6 @@ async fn peers(State(s): State<Arc<AppState>>, method: Method, uri: Uri) -> Resp
 
 pub fn first_load() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/api/notes", read(notes))
         .route("/api/peers", read(peers))
         .route("/api/layouts", read(layouts))
         .route("/api/backends", read(backends))

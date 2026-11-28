@@ -3,6 +3,7 @@
 //! the built page (`dist/web`) with the reads the page makes on its first
 //! load (`routes.rs` lists them), the tree, `/api/about`, `/api/sources`
 //! and the `/api/events` stream with the devices on it (`presence.rs`).
+//! Quick notes are its own, writes and reminders included (`notes.rs`).
 //! The rest of the API answers 501;
 //! docs/rust-port.md has the ledger.
 //!
@@ -15,6 +16,7 @@ mod app;
 mod gate;
 mod gated;
 mod harnesses;
+mod notes;
 mod people;
 mod presence;
 mod routes;

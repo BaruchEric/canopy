@@ -150,6 +150,8 @@ dependencies = [
 name = "canopy-core"
 version = "0.2.0"
 dependencies = [
+ "jiff",
+ "rand 0.10.4",
  "regex",
  "rustix",
  "serde",
@@ -169,6 +171,7 @@ dependencies = [
  "canopy-core",
  "form_urlencoded",
  "futures-util",
+ "rand 0.10.4",
  "serde",
  "serde_json",
  "sha1",
