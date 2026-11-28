@@ -16,7 +16,8 @@
 #
 # The backend verbs (note, awake, issues, pr, prs, scenarios, sweep, kit,
 # loadouts, groups, work, land, queue, collisions, floorplan, archify,
-# diagnosis, understand, capacity, costs, plugins) talk to a scratch Bun
+# diagnosis, understand, capacity, costs, plugins, people, clip, clips,
+# worktrees) talk to a scratch Bun
 # server this script starts on a free port with its own config dir and
 # HOME, and to nothing else: CANOPY_API, CANOPY_TOKEN and CANOPY_BACKEND
 # are cleared first, so a canopy shell's settings never point either CLI at
@@ -38,6 +39,18 @@
 # marketplace). Nothing starts a run, a coordinator, an incubator stage, an
 # analysis or a plugin prepare. A note's id, which each side mints, is
 # masked.
+#
+# people, clip and worktrees change that server (CANOPY_LOOPBACK_AUTH=1
+# makes both CLIs its owner there). Each such step either answers the same
+# when run twice (a role, a team, a pin set again, a tree's following
+# switched again), or works on an object of its own side (@side in an
+# argument is side-ts or side-rs, masked in the output), or runs after the
+# TypeScript CLI cleared the way (clip clear, worktrees clean), so both
+# find nothing. The TypeScript CLI seeds a team, two people, the clips to
+# pin and drop, and three kept trees on the scratch repo; the people's
+# ids, invite codes and times, side clips' ids and free disk are masked.
+# Clips stay on the server's own store (CANOPY_TAILCHAN_URL=off), and no
+# tree is made or removed outside its scratch config dir.
 #
 # Both run against a scratch config dir, so nothing under ~/.config/canopy
 # is read or written.
@@ -575,3 +588,179 @@ hcheck plugins-search-usage plugins search memory
 hcheck plugins-search-nosuch plugins search memory --machine nosuch
 hcheck plugins-down plugins --backend "$down"
 hcheck plugins-commit-down plugins commit --backend "$down"
+# ---- people, clip and worktrees: steps that change the scratch server ----
+
+# scheck <name> <args...> - hcheck for a step that changes something on the
+# scratch server. An argument's @side becomes side-ts or side-rs, so each
+# CLI makes and drops an object of its own, and that name is masked in the
+# output; @clip is the clip id seeded for that side. stdin is $IN, else
+# /dev/null, and $MASK, a sed expression, masks what each side mints.
+scheck() {
+  local name=$1 side out a code
+  shift
+  for side in ts rs; do
+    local args=()
+    for a in "$@"; do
+      a=${a//@side/side-$side}
+      if [ "$a" = @clip ]; then a=$(cat "$scratch/$side.clip"); fi
+      args+=("$a")
+    done
+    out="$scratch/$side.$name"
+    if [ "$side" = ts ]; then
+      bun "$ts" "${args[@]}" <"${IN:-/dev/null}" >"$out.1" 2>"$out.2" && code=0 || code=$?
+    else
+      "$rs" "${args[@]}" <"${IN:-/dev/null}" >"$out.1" 2>"$out.2" && code=0 || code=$?
+    fi
+    { cat "$out.1"; echo "--- stderr"; cat "$out.2"; echo "--- exit $code"; } >"$out"
+  done
+  local masks=(-e 's/side-(ts|rs)/side-<x>/g')
+  if [ -n "${MASK:-}" ]; then masks+=(-e "$MASK"); fi
+  sed -E -i.bak "${masks[@]}" "$scratch/ts.$name" "$scratch/rs.$name"
+  same "$name" "$scratch/ts.$name" "$scratch/rs.$name" "$*"
+}
+
+# people: the loopback caller is the owner. The TypeScript CLI files a team
+# and two people first; a step run twice gives the same answer (a role, a
+# team, off and on set again), or works on a person of its own side. An
+# invite's code and time and a minted id are masked.
+bun "$ts" people teams add Rio --folder "$scratch/server/root" >/dev/null
+bun "$ts" people add Avery --team rio --no-invite >/dev/null
+bun "$ts" people add Guest --role viewer --no-invite >/dev/null
+ids='s/(p|t)-[a-z2-7]{8}/<id>/g'
+hcheck people people
+hcheck people-list people list
+hcheck people-teams people teams
+hcheck people-me people me
+hcheck people-activity people activity --limit 5
+hcheck people-role people role avery admin
+hcheck people-role-back people role avery member
+hcheck people-team people team avery none
+hcheck people-team-back people team avery rio
+hcheck people-rename people rename guest Guest
+hcheck people-off people off guest
+hcheck people-on people on guest
+hcheck people-uninvite people uninvite guest
+MASK='s/cnv_[A-Za-z0-9_-]+/<code>/g; s/until .*:$/until <when>:/' scheck people-invite people invite guest --hours 2
+MASK=$ids scheck people-add people add Pat-@side --role viewer --no-invite
+MASK="$ids; s/cnv_[A-Za-z0-9_-]+/<code>/g; s/until .*:$/until <when>:/" scheck people-add-invite people add Sam-@side --team Rio
+scheck people-remove people remove Pat-@side
+scheck people-remove-sam people rm Sam-@side
+MASK=$ids scheck people-teams-add people teams add Crew-@side --folder /srv/crew
+MASK=$ids scheck people-teams-set people teams set Crew-@side --folder /srv/a --folder /srv/b
+scheck people-teams-rm people teams remove Crew-@side
+hcheck people-usage people what
+hcheck people-add-usage people add
+hcheck people-add-role people add x --role boss
+hcheck people-add-hours people add x --hours 0
+hcheck people-add-team people add x --team nosuch
+hcheck people-role-bad people role avery boss
+hcheck people-nobody people role nobody viewer
+hcheck people-teams-usage people teams set
+hcheck people-activity-usage people activity x
+hcheck people-origin people --backend http://x/y
+hcheck people-down people --backend "$down"
+
+# clip: the scratch server's own clipboard (CANOPY_TAILCHAN_URL=off keeps
+# it there). The same text or file put twice is one clip moved to the top,
+# so both sides print the same id; a clip to drop is seeded for each side,
+# and clear runs once the TypeScript CLI has cleared, so both find nothing.
+printf 'piped  text\nline two\n' >"$scratch/clip.txt"
+printf '\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR' >"$scratch/clip.png"
+printf '\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDRshot' >"$scratch/shot.png"
+hcheck clip-none clip list
+pin=$(bun "$ts" clip put "pin me" | awk '{print $1}')
+hcheck clip-put clip put "first  text"
+hcheck clip-words clip git log -n 5 --json
+hcheck clip-link clip put https://example.com/a
+IN=$scratch/clip.txt scheck clip-stdin clip
+IN=$scratch/clip.png scheck clip-stdin-file clip put
+hcheck clip-file clip --file "$scratch/shot.png"
+hcheck clip-file-missing clip --file "$scratch/nosuch.png"
+hcheck clip-file-dir clip -f "$scratch/server"
+hcheck clip-file-usage clip list --file "$scratch/shot.png"
+hcheck clip-secret clip put ghp_abcdefghijklmnopqrstuvwxyz0123456789
+hcheck clip-blank clip put "  "
+hcheck clips clips list
+hcheck clip-list clip list -n 3
+hcheck clip-json clip ls -n 2 --json
+hcheck clip-get clip get 4
+hcheck clip-get-id clip get "$pin"
+hcheck clip-get-file-o clip get 1 -o "$scratch/got/clip.png"
+hcheck clip-get-text-o clip get 3 -o "$scratch/got/text.txt"
+# a file's bytes to stdout as they are, compared with cmp, since sed reads text
+bun "$ts" clip get 1 <"/dev/null" >"$scratch/ts.clip-raw"
+"$rs" clip get 1 <"/dev/null" >"$scratch/rs.clip-raw"
+if cmp "$scratch/ts.clip-raw" "$scratch/rs.clip-raw" && cmp "$scratch/ts.clip-raw" "$scratch/shot.png"; then
+  echo "same (clip-get-raw): canopy clip get 1 ($(wc -c <"$scratch/ts.clip-raw" | tr -d ' ') bytes)"
+else
+  echo "differs (clip-get-raw): canopy clip get 1" >&2
+  exit 1
+fi
+hcheck clip-get-none clip get 99
+hcheck clip-get-usage clip get 1 2
+hcheck clip-pin clip pin "$pin"
+hcheck clip-unpin clip unpin "$pin"
+hcheck clip-pin-again clip pin "$pin"
+bun "$ts" clip put "drop side-ts" | awk '{print $1}' >"$scratch/ts.clip"
+bun "$ts" clip put "drop side-rs" | awk '{print $1}' >"$scratch/rs.clip"
+MASK='s/c-[a-z2-7]{8}/<clip>/g' scheck clip-rm clip rm @clip
+hcheck clip-rm-unknown clip delete c-zzzzzzzz
+hcheck clip-pin-usage clip pin
+hcheck clip-n clip list -n 1.5
+hcheck clip-on clip list --on nosuch
+hcheck clip-origin clip --backend http://x/y
+hcheck clip-down clip list --backend "$down"
+hcheck clip-put-down clip put x --backend "$down"
+hcheck clip-pin-down clip pin c-zzzzzzzz --backend "$down"
+hcheck clip-file-down clip --file "$scratch/shot.png" --backend "$down"
+# unpinned first, so the list after shows no row whose age could tick over
+bun "$ts" clip unpin "$pin" >/dev/null
+bun "$ts" clip clear >/dev/null
+hcheck clip-clear clip clear
+hcheck clip-clear-usage clip clear x
+hcheck clip-after clip list
+
+# worktrees: kept trees on the scratch repo only. The TypeScript CLI makes
+# one to keep and one for each side to remove, and waits for them to be
+# ready; clean runs last, once the TypeScript CLI has cleaned, so both find
+# nothing. Free disk and the ports of the side trees are masked.
+bun "$ts" worktrees add app feat/kept --no-caches >/dev/null
+bun "$ts" worktrees add app feat/side-ts --no-caches >/dev/null
+bun "$ts" worktrees add app feat/side-rs --no-caches >/dev/null
+for _ in $(seq 1 60); do
+  trees=$(bun "$ts" worktrees app)
+  case $trees in *preparing*) sleep 0.5 ;; *) break ;; esac
+done
+free='s/^free [0-9.,]+ (GB|MB) under/free <n> under/; s/"free": [0-9.e+]+/"free": <n>/'
+MASK=$free scheck worktrees worktrees
+MASK=$free scheck worktrees-repo worktrees app
+MASK=$free scheck worktrees-path-form worktrees "$scratch/server/root/app"
+MASK=$free scheck worktrees-json worktrees --json
+hcheck worktrees-path worktrees path app feat/kept
+hcheck worktrees-path-none worktrees path app nope
+hcheck worktrees-auto-off worktrees auto app feat/kept off
+hcheck worktrees-auto-on worktrees auto app feat/kept on
+hcheck worktrees-sync worktrees sync app feat/kept
+hcheck worktrees-add-twin worktrees add app feat/kept --no-caches
+hcheck worktrees-add-none worktrees add nosuch feat/x
+scheck worktrees-rm worktrees rm app feat/@side --delete-branch
+hcheck worktrees-rm-none worktrees rm app nosuch
+hcheck worktrees-merge-none worktrees merge app nosuch --no-squash
+hcheck worktrees-warm worktrees warm app
+hcheck worktrees-warm-0 worktrees warm app 0
+hcheck worktrees-warm-bad worktrees warm app 3
+hcheck worktrees-prune worktrees prune
+hcheck worktrees-prune-repo worktrees prune app
+hcheck worktrees-start worktrees start app nosuch
+hcheck worktrees-stop worktrees stop app nosuch dev
+hcheck worktrees-start-usage worktrees start app x --json
+hcheck worktrees-shell-init worktrees shell-init
+hcheck worktrees-shell-init-usage worktrees shell-init x
+hcheck worktrees-usage worktrees app extra
+hcheck worktrees-backend worktrees --backend
+hcheck worktrees-origin worktrees --backend http://x/y
+hcheck worktrees-down worktrees --backend "$down"
+bun "$ts" worktrees clean >/dev/null
+hcheck worktrees-clean worktrees clean
+hcheck worktrees-clean-repo worktrees clean app
+MASK=$free scheck worktrees-after worktrees
