@@ -22,6 +22,7 @@ pub mod pr;
 pub mod remote;
 pub mod route;
 pub mod scan;
+pub mod screenlayouts;
 pub mod seedgit;
 pub mod spec;
 pub mod stalecopy;

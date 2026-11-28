@@ -186,9 +186,19 @@ async fn notes(State(s): State<Arc<AppState>>) -> Result<Json<Value>, Refusal> {
     Ok(Json(json!({ "notes": notes })))
 }
 
+/// `GET /api/layouts`: the presets and the user's own profiles from
+/// `screen-layouts.json`. The Bun server reads the file once at its start;
+/// this reads it at each call, so an edit by hand shows at once.
+async fn layouts(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let raw = std::fs::read_to_string(format!("{}/screen-layouts.json", s.config_dir)).ok();
+    let profiles = canopy_core::screenlayouts::list_profiles(raw.as_deref());
+    Json(json!({ "profiles": profiles }))
+}
+
 pub fn first_load() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/notes", read(notes))
+        .route("/api/layouts", read(layouts))
         .route("/api/backends", read(backends))
         .route("/api/workspaces", read(workspaces_route))
         .route("/api/launchers", read(launchers))
