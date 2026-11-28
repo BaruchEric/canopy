@@ -3,8 +3,11 @@
 //! the server and the CLI crates sit on top.
 
 pub mod agent;
+pub mod archify;
 pub mod backends;
+pub mod diagnosis;
 pub mod exec;
+pub mod floorplan;
 pub mod git;
 pub mod gitwrite;
 pub mod group;
@@ -31,5 +34,6 @@ pub mod sweep;
 pub mod touch;
 pub mod treelines;
 pub mod types;
+pub mod understand;
 pub mod version;
 pub mod work;

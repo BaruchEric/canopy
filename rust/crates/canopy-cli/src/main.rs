@@ -3,9 +3,10 @@
 //! It answers `canopy [dir]`, `canopy tree`, `canopy status`, `canopy
 //! version`, `canopy commit`, `canopy push` and `canopy pull` itself, the
 //! backend verbs `note`, `awake`, `issues`, `pr`, `prs`, `scenarios`,
-//! `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `queue` and
-//! `collisions` over HTTP (`HTTP_VERBS`), and every verb's `--help`, with
-//! output byte for byte the TypeScript CLI's.
+//! `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `queue`,
+//! `collisions`, `floorplan`, `archify`, `diagnosis` and `understand` over
+//! HTTP (`HTTP_VERBS`), and every verb's `--help`, with output byte for
+//! byte the TypeScript CLI's.
 //! `--token` is read for every verb, as index.ts reads it. Every other
 //! verb, and a local verb with a flag the port does not read yet
 //! (`--backend` on tree or status, or in front of the repo, `commit --ai`,
@@ -15,8 +16,11 @@
 //! ledger.
 
 mod api;
+mod archify;
 mod ask;
 mod awake;
+mod diagnosis;
+mod floorplan;
 mod groups;
 mod help;
 mod issues;
@@ -24,11 +28,13 @@ mod jsdate;
 mod kit;
 mod land;
 mod loadouts;
+mod mapsection;
 mod notes;
 mod out;
 mod prs;
 mod scenarios;
 mod sweep;
+mod understand;
 mod work;
 
 use canopy_core::git::{StatusOptions, get_status};
@@ -166,6 +172,10 @@ const HTTP_VERBS: &[&str] = &[
     "land",
     "queue",
     "collisions",
+    "floorplan",
+    "archify",
+    "diagnosis",
+    "understand",
 ];
 
 /// `flag()` in index.ts: take a bare flag out of the arguments.
@@ -480,6 +490,26 @@ async fn http_verb(
                 .unwrap_or_else(|_| ".".into());
             work::work_cmd(rest, &caller, &client, &mut o, &cwd).await
         }
+        "floorplan" | "archify" | "diagnosis" | "understand" => {
+            let now = || now_ms() as f64;
+            let clock = mapsection::Clock {
+                now: &now,
+                naps: true,
+            };
+            let cwd = mapsection::here();
+            match verb {
+                "floorplan" => {
+                    floorplan::floorplan_cmd(rest, &caller, &client, &mut o, &cwd, &clock).await
+                }
+                "archify" => {
+                    archify::archify_cmd(rest, &caller, &client, &mut o, &cwd, &clock).await
+                }
+                "diagnosis" => {
+                    diagnosis::diagnosis_cmd(rest, &caller, &client, &mut o, &cwd, &clock).await
+                }
+                _ => understand::understand_cmd(rest, &caller, &client, &mut o, &cwd, &clock).await,
+            }
+        }
         _ => land::land_cmd(verb, rest, &caller, &client, &mut o).await,
     };
     finish_out(o, r)
@@ -693,6 +723,22 @@ mod tests {
         }
         for verb in ["run", "runs", "capacity", "secrets", "people"] {
             assert_eq!(plan(&args(&[verb])), Plan::Delegate, "{verb}");
+        }
+    }
+
+    #[test]
+    fn the_map_section_verbs_run_here() {
+        for verb in ["floorplan", "archify", "diagnosis", "understand"] {
+            assert!(
+                matches!(plan(&args(&[verb, "app"])), Plan::Http { verb: v, .. } if v == verb),
+                "{verb}"
+            );
+            assert_eq!(
+                plan(&args(&[verb, "app", "--help"])),
+                Plan::Help {
+                    verb: Some(verb.into())
+                }
+            );
         }
     }
 
