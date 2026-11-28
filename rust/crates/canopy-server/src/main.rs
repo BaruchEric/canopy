@@ -2,7 +2,8 @@
 //! (`src/server/index.ts`). It scans the folders it is given and serves
 //! the built page (`dist/web`) with the reads the page makes on its first
 //! load (`routes.rs` lists them), the tree, `/api/about`, `/api/sources`
-//! and the `/api/events` stream. The rest of the API answers 501;
+//! and the `/api/events` stream with the devices on it (`presence.rs`).
+//! The rest of the API answers 501;
 //! docs/rust-port.md has the ledger.
 //!
 //!   canopy-server [--port 7860] [--host 127.0.0.1] [--web dist/web] [dir]

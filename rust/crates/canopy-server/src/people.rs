@@ -1,8 +1,9 @@
-//! The people on a backend, read side only (`src/core/people.ts` and the
-//! hub in `src/server/people.ts`): `people.json` parsed record by record,
-//! who a caller is, the folders their teams hold them to, and
-//! `GET /api/people`. Every change to the roster (add, set, remove, teams,
-//! invites, an invite spent by a join) is not ported yet.
+//! The people on a backend (`src/core/people.ts` and the hub in
+//! `src/server/people.ts`): `people.json` parsed record by record, who a
+//! caller is, the folders their teams hold them to, `GET /api/people` with
+//! each person's browsers, and the repos each browser has open
+//! (`POST /api/people/at`). Every change to the roster (add, set, remove,
+//! teams, invites, an invite spent by a join) is not ported yet.
 
 use canopy_auth::people::{Me, Role, role_allows};
 use canopy_auth::rights::Right;
