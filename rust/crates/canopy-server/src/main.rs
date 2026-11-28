@@ -19,6 +19,7 @@ mod people;
 mod presence;
 mod routes;
 mod tree;
+mod work_reads;
 
 use app::{AppState, Setup, about, read_config, rescan_every};
 use canopy_core::pathx::resolve;

@@ -1,7 +1,8 @@
-//! Branch work items (`src/core/work.ts`). Only what `canopy work` prints
-//! and parses is here: the states, an id, the id a run branch carries,
-//! where an item came from and a note's minute. The store and the ledger of
-//! runs, branches and notes stay in the TypeScript.
+//! Branch work items (`src/core/work.ts`). What `canopy work` prints and
+//! parses is here (the states, an id, the id a run branch carries, where an
+//! item came from, a note's minute), and the state an item derives from
+//! what the hubs know (`stateOf`), which `GET /api/work` reads. The store's
+//! writes and the ledger of runs, branches and notes stay in the TypeScript.
 
 use crate::js::field;
 use serde_json::Value;
@@ -76,6 +77,49 @@ pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
+/// What a branch of a work item is now, as the hubs know it (`WorkFacts`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BranchFact {
+    /// the landing record's state
+    pub state: String,
+    /// its queue entry's state
+    pub land: Option<String>,
+    /// its PR's status
+    pub pr: Option<String>,
+}
+
+/// What the server knows of an item's runs and branches.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkFacts {
+    pub active: bool,
+    pub branches: Vec<BranchFact>,
+}
+
+/// `stateOf()`: the state from the item's open or closed mark and the facts.
+pub fn state_of<'a>(state: &'a str, closed: bool, facts: &WorkFacts) -> &'a str {
+    if closed {
+        return state;
+    }
+    let b = &facts.branches;
+    if b.iter()
+        .any(|x| x.land.as_deref() == Some("landed") || x.pr.as_deref() == Some("merged"))
+    {
+        return "landed";
+    }
+    if facts.active || b.iter().any(|x| x.state == "working") {
+        return "working";
+    }
+    if b.iter().any(|x| {
+        x.state == "ready"
+            || x.state == "stopped"
+            || x.land.is_some()
+            || x.pr.as_deref() == Some("open")
+    }) {
+        return "review";
+    }
+    "open"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,5 +162,94 @@ mod tests {
         assert_eq!(note_stamp(1_764_300_000_000.0), "2025-11-28 03:20");
         assert_eq!(note_stamp(0.0), "1970-01-01 00:00");
         assert_eq!(note_stamp(951_782_400_000.0), "2000-02-29 00:00");
+    }
+
+    fn fact(state: &str, land: Option<&str>, pr: Option<&str>) -> BranchFact {
+        BranchFact {
+            state: state.into(),
+            land: land.map(Into::into),
+            pr: pr.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn state_of_derived_from_the_runs_and_branches_in_order() {
+        let f = |active: bool, branches: Vec<BranchFact>| WorkFacts { active, branches };
+        assert_eq!(state_of("open", false, &f(false, vec![])), "open");
+        assert_eq!(state_of("open", false, &f(true, vec![])), "working");
+        assert_eq!(
+            state_of("open", false, &f(false, vec![fact("working", None, None)])),
+            "working"
+        );
+        assert_eq!(
+            state_of("open", false, &f(false, vec![fact("ready", None, None)])),
+            "review"
+        );
+        assert_eq!(
+            state_of(
+                "open",
+                false,
+                &f(false, vec![fact("ready", Some("red"), None)])
+            ),
+            "review"
+        );
+        assert_eq!(
+            state_of("open", false, &f(false, vec![fact("stopped", None, None)])),
+            "review"
+        );
+        assert_eq!(
+            state_of(
+                "open",
+                false,
+                &f(false, vec![fact("ready", None, Some("open"))])
+            ),
+            "review"
+        );
+        assert_eq!(
+            state_of(
+                "open",
+                false,
+                &f(
+                    false,
+                    vec![fact("nothing", None, None), fact("uncommitted", None, None)]
+                )
+            ),
+            "open"
+        );
+        assert_eq!(
+            state_of(
+                "open",
+                false,
+                &f(false, vec![fact("ready", Some("landed"), None)])
+            ),
+            "landed"
+        );
+        assert_eq!(
+            state_of(
+                "open",
+                false,
+                &f(false, vec![fact("ready", None, Some("merged"))])
+            ),
+            "landed"
+        );
+        // a run going beats a sent-back branch: the fix is on its way
+        assert_eq!(
+            state_of(
+                "open",
+                false,
+                &f(true, vec![fact("ready", Some("conflict"), None)])
+            ),
+            "working"
+        );
+    }
+
+    #[test]
+    fn state_of_a_closed_item_keeps_its_state_whatever_the_facts_say() {
+        let busy = WorkFacts {
+            active: true,
+            branches: vec![fact("working", None, None)],
+        };
+        assert_eq!(state_of("dropped", true, &busy), "dropped");
+        assert_eq!(state_of("landed", true, &WorkFacts::default()), "landed");
     }
 }
