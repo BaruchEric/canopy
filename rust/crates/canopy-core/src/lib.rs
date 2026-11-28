@@ -4,7 +4,11 @@
 
 pub mod agent;
 pub mod archify;
+pub mod backendid;
 pub mod backends;
+pub mod cards;
+pub mod costs;
+pub mod costsheet;
 pub mod diagnosis;
 pub mod exec;
 pub mod floorplan;
@@ -12,6 +16,8 @@ pub mod git;
 pub mod gitwrite;
 pub mod group;
 pub mod harness;
+pub mod harnessshare;
+pub mod historymerge;
 pub mod host;
 pub mod js;
 pub mod keep;

@@ -16,23 +16,28 @@
 #
 # The backend verbs (note, awake, issues, pr, prs, scenarios, sweep, kit,
 # loadouts, groups, work, land, queue, collisions, floorplan, archify,
-# diagnosis, understand) talk to a scratch Bun server this script starts on
-# a free port with its own config dir and HOME, and to nothing else:
-# CANOPY_API, CANOPY_TOKEN and CANOPY_BACKEND are cleared first, so a
-# canopy shell's settings never point either CLI at a real backend. Before
-# it starts, the script seeds that config dir and HOME with things to list:
-# a scratch repo with one command scenario and, committed in it, two
-# diagrams, a diagnosis and a knowledge graph; a second scratch repo with
-# none of those; kit.json's loadouts, two work items, a finished group and
-# a ready run whose repo does not exist. Only calls that change nothing
-# outside that server run: notes and work notes on its own store, keep
-# awake's status (never a new mode), a scenario that runs `true` in the
-# scratch repo, a sweep with nothing to close, pr, land and group picks
-# with ids that do not exist or a run the server cannot land, the map
-# section's reads, refusals and stops, and a diagram's or the diagnosis's
-# page saved into each side's scratch copy. Nothing starts a run, a
-# coordinator, an incubator stage, an analysis or a plugin prepare. A
-# note's id, which each side mints, is masked.
+# diagnosis, understand, capacity, costs, plugins) talk to a scratch Bun
+# server this script starts on a free port with its own config dir and
+# HOME, and to nothing else: CANOPY_API, CANOPY_TOKEN and CANOPY_BACKEND
+# are cleared first, so a canopy shell's settings never point either CLI at
+# a real backend. Before it starts, the script seeds that config dir and
+# HOME with things to list: a scratch repo with one command scenario and,
+# committed in it, two diagrams, a diagnosis and a knowledge graph; a
+# second scratch repo with none of those; kit.json's loadouts, two work
+# items, a finished group and a ready run whose repo does not exist;
+# capacity.json's kept readings, three cost ledger rows, a stand-in
+# claude-history the config names and a stand-in claude plugin CLI
+# (src/core/pluginfake.ts) with plugins in its own state file, so no real
+# ~/.claude is read. Only calls that change nothing outside that server
+# run: notes and work notes on its own store, keep awake's status (never a
+# new mode), a scenario that runs `true` in the scratch repo, a sweep with
+# nothing to close, pr, land, group and capacity picks with ids that do not
+# exist or a run the server cannot land, the map section's reads, refusals
+# and stops, a diagram's or the diagnosis's page saved into each side's
+# scratch copy, and the plugins listing (never an install, an op or a
+# marketplace). Nothing starts a run, a coordinator, an incubator stage, an
+# analysis or a plugin prepare. A note's id, which each side mints, is
+# masked.
 #
 # Both run against a scratch config dir, so nothing under ~/.config/canopy
 # is read or written.
@@ -234,7 +239,8 @@ cat >"$scratch/server/home/.claude/kit.json" <<'JSON'
  "loadoutBase": {"skills": ["verify-build"]},
  "loadouts": {"docs": {"note": "quick docs", "harness": "claude", "model": "haiku", "effort": "low"},
               "deep": {"harness": "claude", "model": "opus", "effort": "high", "skills": ["a", "b"]}},
- "defaults": {"loadout": "docs", "repos": {"app": "deep"}}}
+ "defaults": {"loadout": "docs", "repos": {"app": "deep"}},
+ "machines": {"scratch": {"backend": "scratch"}}, "plugins": ["claude"]}
 JSON
 cat >"$seed/work/w-abcdefg2.json" <<'JSON'
 {"id": "w-abcdefg2", "title": "Tidy the readme", "repos": ["app"], "state": "open", "from": {"kind": "note"},
@@ -253,9 +259,61 @@ cat >"$seed/landing/groups/g-0123abcd.json" <<'JSON'
  "expectedMembers": 2, "members": [{"run": "run-1", "origin": "o-1", "profile": "fast"}, {"run": "run-2", "origin": "o-2", "profile": null}],
  "state": "picked", "autoLand": false, "winner": "o-1", "pickedBy": "eric", "startedAt": 1764300000000, "endedAt": 1764303600000}
 JSON
+# For capacity, costs and plugins. capacity.json keeps a standing hit on
+# claude, codex's count from a run and Antigravity's from its CLI, every
+# reset a year away so the words hold still. The ledger has three rows from
+# a minute ago, in the file of their local month. A stand-in claude-history
+# answers with the scratch app as one project with spend today, and
+# config.json names it, marks app as the harness and names this backend
+# scratch, the machine kit.json reads plugins on. The stand-in claude
+# plugin CLI keeps two plugins and a marketplace in its state file, and
+# settings.json turns three on; KIT_CLAUDE points the kit's scan at it.
+read -r ledger_at month r_hit r_five r_week < <(env -u TZ "$bun" -e '
+  const at = Date.now() - 60_000, d = new Date(at), y = d.getFullYear() + 1;
+  console.log(at, `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+    Date.UTC(y, 0, 14, 15), Date.UTC(y, 0, 15, 15), Date.UTC(y, 0, 16, 15));')
+# the path the scan reports, so the ledger's rows land on the app's card
+app="$real/server/root/app"
+cat >"$seed/capacity.json" <<JSON
+{"hits": {"claude": {"window": "fiveHour", "at": $ledger_at, "resetsAt": $r_hit, "text": "You've hit your limit"}},
+ "windows": {"codex": {"fiveHour": {"used": 0.4, "resetsAt": $r_five, "readAt": $ledger_at},
+                       "weekly": {"used": 0.86, "resetsAt": $r_week, "readAt": $ledger_at}},
+             "antigravity": {"source": "cli", "fiveHour": {"used": 0.04, "resetsAt": null, "readAt": $ledger_at}, "weekly": null}}}
+JSON
+mkdir -p "$seed/costs"
+zero='{"input": 0, "cachedInput": 0, "output": 0, "reasoning": 0, "total": 0}'
+cat >"$seed/costs/$month.jsonl" <<JSON
+{"at": $ledger_at, "service": "claude", "provider": "anthropic", "model": "opus", "repo": "$app", "repoName": "app", "run": "r-1", "label": null, "session": "s-1", "usd": 2.5, "tokens": {"input": 100000, "cachedInput": 0, "output": 20000, "reasoning": 0, "total": 120000}, "seconds": null}
+{"at": $ledger_at, "service": "codex", "provider": "openai", "model": "gpt-5", "repo": "$app", "repoName": "app", "run": "r-2", "label": null, "session": null, "usd": 1.25, "tokens": {"input": 4000, "cachedInput": 0, "output": 1000, "reasoning": 0, "total": 5000}, "seconds": null}
+{"at": $ledger_at, "service": "speech", "provider": "speech", "model": "transcribe", "repo": null, "repoName": null, "run": null, "label": null, "session": null, "usd": null, "tokens": $zero, "seconds": 30}
+JSON
+history_bin="$scratch/server/home/dev/dev-tools/claude-history/bin/claude-history"
+mkdir -p "$(dirname "$history_bin")"
+cat >"$history_bin" <<SH
+#!/bin/sh
+case \$1 in
+  projects) echo '[{"id": "p-app", "name": "app", "path": "$app", "sessions": 4, "tokens": 250000, "cost": 6.5, "first": null, "last": null, "commits": 2}]' ;;
+  activity) echo "[{\\"project\\": \\"p-app\\", \\"day\\": \\"\$(date +%Y-%m-%d)\\", \\"sessions\\": 3, \\"cost\\": 4.25}]" ;;
+  *) exit 2 ;;
+esac
+SH
+chmod +x "$history_bin"
+cat >"$seed/config.json" <<JSON
+{"self": "scratch", "historyBin": "$history_bin", "harness": ["$scratch/server/root/app", "$app"]}
+JSON
+fake_claude=$("$bun" -e 'const { fakePluginCli } = await import(process.argv[1]); console.log(fakePluginCli(process.argv[2], "claude"));' \
+  "$here/src/core/pluginfake.ts" "$scratch/server")
+cat >"$scratch/server/home/.fake-claude-plugins.json" <<'JSON'
+{"installed": {"superpowers@o": {"enabled": true, "version": "7.0.0"},
+               "context-mode@cm": {"enabled": false, "version": "0.2.0", "servers": {"context-mode": "node s"}}},
+ "markets": {"o": "x/o"}, "catalog": [{"id": "remember@o", "description": "memory", "installs": 5}]}
+JSON
+cat >"$scratch/server/home/.claude/settings.json" <<'JSON'
+{"enabledPlugins": {"superpowers@o": true, "remember@o": true, "off@o": false}}
+JSON
 env -i HOME="$scratch/server/home" PATH="$(dirname "$bun"):/usr/local/bin:/usr/bin:/bin" SHELL=/bin/bash LANG=C.UTF-8 \
   CANOPY_CONFIG_DIR="$scratch/server/config" CANOPY_LOOPBACK_AUTH=1 CANOPY_PREVIEW_PORTS=0 CANOPY_NO_DESKTOP=1 \
-  CANOPY_AGENT_SCAN=0 CANOPY_TAILCHAN_URL=off CANOPY_TMUX=0 \
+  CANOPY_AGENT_SCAN=0 CANOPY_TAILCHAN_URL=off CANOPY_TMUX=0 KIT_CLAUDE="$fake_claude" \
   "$bun" "$ts" ui "$scratch/server/root" --port "$port" --no-open >"$scratch/server.log" 2>&1 &
 server=$!
 for _ in $(seq 1 60); do
@@ -469,3 +527,51 @@ hcheck understand-bad understand app draw
 hcheck understand-unknown understand nosuch
 hcheck understand-on understand app --on nosuch
 hcheck understand-down understand app --backend "$down"
+# capacity: the kept readings, a held start that does not exist, the usages
+# and a down backend; read and set, which run the CLI readers, only as
+# usages and against the down one
+hcheck capacity capacity
+hcheck capacity-list capacity list
+(export TZ=Asia/Tokyo && hcheck capacity-tokyo capacity)
+hcheck capacity-json capacity --json
+hcheck capacity-on capacity --on nosuch
+hcheck capacity-on-self capacity --on scratch --json
+hcheck capacity-release-unknown capacity release flow:nope
+hcheck capacity-release-usage capacity release
+hcheck capacity-usage capacity what
+hcheck capacity-list-extra capacity list extra
+hcheck capacity-set-usage capacity set
+hcheck capacity-set-hold capacity set --normal 2
+hcheck capacity-set-usd capacity set --usd -1
+hcheck capacity-needs capacity --backend
+hcheck capacity-down capacity --backend "$down"
+hcheck capacity-json-down capacity --json --backend "$down"
+hcheck capacity-read-down capacity read --backend "$down"
+hcheck capacity-set-down capacity set --low 60% --backend "$down"
+# costs: the ledger and the stand-in archive over each window, the share
+hcheck costs costs
+hcheck costs-today costs --days 1
+hcheck costs-month-share costs --days 30 --share
+hcheck costs-share costs --share
+hcheck costs-days-usage costs --days 5
+hcheck costs-days-missing costs --days
+hcheck costs-stray costs --share stray
+hcheck costs-on costs --on nosuch
+hcheck costs-on-self costs --on scratch --days 30
+hcheck costs-origin costs --backend http://x/y
+hcheck costs-down costs --backend "$down"
+# plugins: only the listing reads; no install, op or marketplace runs
+hcheck plugins plugins
+hcheck plugins-status plugins status
+hcheck plugins-claude plugins list --agent claude
+hcheck plugins-codex plugins list --agent codex
+hcheck plugins-machine plugins list --machine nosuch
+hcheck plugins-machine-self plugins list --machine scratch --agent claude
+hcheck plugins-agent-bad plugins --agent hermes
+hcheck plugins-usage plugins frob x
+hcheck plugins-op-usage plugins enable
+hcheck plugins-market-usage plugins marketplace frob x
+hcheck plugins-search-usage plugins search memory
+hcheck plugins-search-nosuch plugins search memory --machine nosuch
+hcheck plugins-down plugins --backend "$down"
+hcheck plugins-commit-down plugins commit --backend "$down"
