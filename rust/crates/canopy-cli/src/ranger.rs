@@ -17,7 +17,9 @@ use crate::ask::{Ask, Body, encode_component, is_origin};
 use crate::jsdate::date_of;
 use crate::out::Out;
 use crate::render::Paint;
-use canopy_core::js::{field, list_at, number_string, round, str_at, template, truthy_at};
+use canopy_core::js::{
+    ascii_ci as ci, field, list_at, number_string, round, str_at, template, truthy_at,
+};
 use canopy_core::pathx::{JS_S, js_trim, pad_end};
 use regex::Regex;
 use serde_json::{Value, json};
@@ -27,20 +29,6 @@ const USAGE: &str = "usage: canopy ranger [status] | on | off | restart | fresh 
 const SAY_USAGE: &str = "usage: canopy ranger say \"message\"";
 const WAKE_USAGE: &str = "usage: canopy ranger wake <when> \"prompt\" | --cron \"0 8 * * *\" \"prompt\" | --run <id> \"prompt\"";
 const UNWAKE_USAGE: &str = "usage: canopy ranger unwake <id>";
-
-/// A word's letters matched in either case, ASCII only, as JavaScript's
-/// `i` flag without `u` folds them.
-fn ci(word: &str) -> String {
-    word.chars()
-        .map(|c| {
-            if c.is_ascii_alphabetic() {
-                format!("[{}{}]", c.to_ascii_lowercase(), c.to_ascii_uppercase())
-            } else {
-                regex::escape(&c.to_string())
-            }
-        })
-        .collect()
-}
 
 /// cron.ts's `IN`: `/^in\s+(\d{1,4})\s*(m|min|mins|minutes?|h|hrs?|hours?|d|days?)$/i`
 static IN: LazyLock<Regex> = LazyLock::new(|| {

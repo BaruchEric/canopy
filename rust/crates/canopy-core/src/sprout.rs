@@ -7,7 +7,7 @@
 //! stages' rules) is not ported yet.
 
 use crate::clips::js_slice;
-use crate::js::{field, list_at, num_at, str_at, template, truthy, truthy_at};
+use crate::js::{ascii_ci as ci, field, list_at, num_at, str_at, template, truthy, truthy_at};
 use crate::pathx::{JS_S, js_squash_ws, js_trim};
 use regex::Regex;
 use serde_json::Value;
@@ -17,20 +17,6 @@ use std::sync::LazyLock;
 /// `max` UTF-16 units.
 pub fn one_line(s: &str, max: usize) -> String {
     js_slice(js_trim(&js_squash_ws(s)), max)
-}
-
-/// A pattern's letters matched in either case, ASCII only, as JavaScript's
-/// `i` flag without `u` folds them.
-fn ci(word: &str) -> String {
-    word.chars()
-        .map(|c| {
-            if c.is_ascii_alphabetic() {
-                format!("[{}{}]", c.to_ascii_lowercase(), c.to_ascii_uppercase())
-            } else {
-                regex::escape(&c.to_string())
-            }
-        })
-        .collect()
 }
 
 /// `[^…\s]` with JavaScript's `\s`: none of `chars` and no whitespace.
