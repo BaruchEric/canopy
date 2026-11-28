@@ -6,8 +6,9 @@
 //! `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `queue`,
 //! `collisions`, `floorplan`, `archify`, `diagnosis`, `understand`,
 //! `capacity`, `costs`, `plugins`, `people`, `clip`, `clips`, `worktrees`,
-//! `workflow` and `health` over HTTP, `fr` on a repo's own git, and every
-//! verb's `--help`, with output byte for byte the TypeScript CLI's.
+//! `workflow`, `health`, `run` and `runs` over HTTP, `fr` on a repo's own
+//! git, and every verb's `--help`, with output byte for byte the
+//! TypeScript CLI's.
 //! `HTTP_VERBS` lists the HTTP verbs and `fr`: each gets `--backend` in
 //! its own arguments, as in index.ts, and `fr` refuses it with its usage.
 //! `--token` is read for every verb, as index.ts reads it. Every other
@@ -43,8 +44,10 @@ mod people;
 mod plugins;
 mod prs;
 mod render;
+mod run;
 mod scenarios;
 mod sweep;
+mod transcripts;
 mod understand;
 mod work;
 mod workflow;
@@ -198,6 +201,8 @@ const HTTP_VERBS: &[&str] = &[
     "fr",
     "workflow",
     "health",
+    "run",
+    "runs",
 ];
 
 /// `flag()` in index.ts: take a bare flag out of the arguments.
@@ -568,6 +573,24 @@ async fn http_verb(
             };
             health::health_cmd(rest, &caller, &client, &mut o, &env).await
         }
+        "run" | "runs" => {
+            let mut env = run::RunEnv {
+                cwd: run::here(),
+                now: now_ms() as f64,
+                warned: Vec::new(),
+            };
+            let r = if verb == "run" {
+                run::run_cmd(rest, &caller, &client, &mut o, &mut env).await
+            } else {
+                run::runs_cmd(rest, &caller, &client, &mut o, &env.cwd).await
+            };
+            // a start's line on stdout, then what it says on stderr after it
+            let code = finish_out(o, r);
+            for w in &env.warned {
+                render::say_err(w);
+            }
+            return code;
+        }
         _ => land::land_cmd(verb, rest, &caller, &client, &mut o).await,
     };
     finish_out(o, r)
@@ -681,8 +704,8 @@ mod tests {
             "the token goes, as index.ts takes it"
         );
         assert_eq!(plan(&args(&["tree", "a", "b"])), Plan::Delegate);
-        assert_eq!(plan(&args(&["runs"])), Plan::Delegate);
-        assert_eq!(plan(&args(&["runs", "--token", "t"])), Plan::Delegate);
+        assert_eq!(plan(&args(&["secrets"])), Plan::Delegate);
+        assert_eq!(plan(&args(&["secrets", "--token", "t"])), Plan::Delegate);
         assert_eq!(plan(&args(&["version", "--json"])), Plan::Delegate);
         assert_eq!(
             plan(&args(&["tree", "--backend", "http://x"])),
@@ -698,7 +721,7 @@ mod tests {
         assert_eq!(plan(&args(&["tree", "--help"])), help(Some("tree")));
         assert_eq!(plan(&args(&["runs", "start", "-h"])), help(Some("runs")));
         assert_eq!(
-            plan(&args(&["run", "x", "--", "-h"])),
+            plan(&args(&["secrets", "x", "--", "-h"])),
             Plan::Delegate,
             "after -- it belongs to another program"
         );
@@ -779,9 +802,7 @@ mod tests {
                 "{verb}"
             );
         }
-        for verb in ["run", "runs", "secrets"] {
-            assert_eq!(plan(&args(&[verb])), Plan::Delegate, "{verb}");
-        }
+        assert_eq!(plan(&args(&["secrets"])), Plan::Delegate);
     }
 
     #[test]
@@ -847,6 +868,49 @@ mod tests {
                 rest: args(&["--backend", "http://x:1"]),
                 token: Some("t".into()),
                 home_base: Some("http://x:1".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn run_and_runs_run_here_with_their_own_backend_flag() {
+        for verb in ["run", "runs"] {
+            assert!(
+                matches!(plan(&args(&[verb])), Plan::Http { verb: v, .. } if v == verb),
+                "{verb}"
+            );
+        }
+        assert_eq!(
+            plan(&args(&["run", "x", "--", "-h"])),
+            Plan::Http {
+                verb: "run".into(),
+                rest: args(&["x", "--", "-h"]),
+                token: None,
+                home_base: None,
+            },
+            "after -- it belongs to another program"
+        );
+        assert_eq!(
+            plan(&args(&[
+                "run",
+                "show",
+                "ab12cd34",
+                "--token",
+                "t",
+                "--backend",
+                "http://x:1"
+            ])),
+            Plan::Http {
+                verb: "run".into(),
+                rest: args(&["show", "ab12cd34", "--backend", "http://x:1"]),
+                token: Some("t".into()),
+                home_base: Some("http://x:1".into()),
+            }
+        );
+        assert_eq!(
+            plan(&args(&["runs", "child", "--help"])),
+            Plan::Help {
+                verb: Some("runs".into())
             }
         );
     }

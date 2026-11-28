@@ -1,18 +1,17 @@
 //! What the map section's four verbs (`floorplan`, `archify`, `diagnosis`,
-//! `understand`) share, each a private copy of a TypeScript helper the
-//! port has not reached yet: `selectedTarget`, `repoId`, `isPathArgument`
-//! and `folderOf` from src/cli/run.ts, `ageWord` from src/cli/worktrees.ts,
-//! `Date.parse` for the ISO times the routes send, and `askText` with the
-//! timeout the TypeScript gives it, which ask.rs's trait does not take yet.
+//! `understand`) share: the target and repo pickers from run.rs
+//! (`selectedTarget` and `repoId` in src/cli/run.ts), `ageWord` from
+//! worktrees.rs, `Date.parse` for the ISO times the routes send, the line a
+//! start prints, and a page saved beside the CLI.
 
-use crate::api::Caller;
-use crate::ask::{Ask, Target, did_not_answer, every_target, is_origin};
-use canopy_core::js::{field, list_at, str_at};
+use canopy_core::js::field;
 use canopy_core::pathx::resolve_from;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde_json::Value;
 use std::time::Duration;
+
+pub(crate) use crate::run::{here, repo_id, selected_target};
 
 /// The clock a verb reads and whether it naps: `Date.now()` and
 /// `Bun.sleep()` for real, a counter and no naps in a test.
@@ -32,97 +31,6 @@ impl Clock<'_> {
         if self.naps {
             tokio::time::sleep(Duration::from_millis(ms)).await;
         }
-    }
-}
-
-/// The folder the CLI runs in, which a path argument and a saved page are
-/// read against.
-pub(crate) fn here() -> String {
-    std::env::current_dir()
-        .map(|d| d.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| ".".into())
-}
-
-/// `selectedTarget()`: the home backend (`--backend`, else $CANOPY_API,
-/// else the local one), or the one `--on` names from the home backend's
-/// list. Unlike the listing verbs, a home backend that does not answer
-/// the list is a failure here.
-pub(crate) async fn selected_target(
-    ask: &impl Ask,
-    caller: &Caller,
-    backend: Option<&str>,
-    on: Option<&str>,
-) -> Result<Target, String> {
-    let home = caller.api_base(backend);
-    if !is_origin(&home) {
-        return Err(format!("--backend must be an http(s) origin, got {home}"));
-    }
-    let Some(name) = on else {
-        return Ok(Target::home(&home));
-    };
-    let targets = every_target(ask, &home)
-        .await
-        .map_err(|e| did_not_answer("home", &e))?;
-    match targets.iter().find(|t| t.name == name) {
-        Some(t) => Ok(t.clone()),
-        None => Err(format!(
-            "no backend named {name}; the home backend lists {}",
-            targets
-                .iter()
-                .map(|t| t.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
-    }
-}
-
-/// `isPathArgument()`: ".", or a path that starts with /, ./, ../ or ~: a
-/// folder, not a repo's name.
-fn is_path_argument(v: &str) -> bool {
-    v == "."
-        || v.starts_with('/')
-        || v.starts_with("./")
-        || v.starts_with("../")
-        || v.starts_with('~')
-}
-
-/// `folderOf()`: a path argument as the real folder it names, `~` read as
-/// $HOME, else the failure that says there is none.
-fn folder_of(arg: &str, cwd: &str) -> Result<String, String> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "~".into());
-    let tilde = arg == "~" || arg.starts_with("~/");
-    let expanded = if tilde {
-        format!("{home}{}", &arg[1..])
-    } else {
-        arg.to_string()
-    };
-    std::fs::canonicalize(resolve_from(cwd, &expanded))
-        .map(|p| p.to_string_lossy().into_owned())
-        .map_err(|_| format!("no such folder: {arg}"))
-}
-
-/// `repoId()`: a repo's id as typed, or, for a path, the id of the repo the
-/// backend scans there.
-pub(crate) async fn repo_id(
-    ask: &impl Ask,
-    repo: &str,
-    target: &Target,
-    cwd: &str,
-) -> Result<String, String> {
-    if !is_path_argument(repo) {
-        return Ok(repo.to_string());
-    }
-    let path = folder_of(repo, cwd)?;
-    let tree = ask
-        .ask(target, "GET", "/api/tree", None)
-        .await
-        .map_err(|e| did_not_answer(&target.name, &e))?;
-    match list_at(&tree, "repos")
-        .iter()
-        .find(|r| str_at(r, "path") == Some(path.as_str()))
-    {
-        Some(r) => Ok(field(r, "id")),
-        None => Err(format!("{} does not scan {path}", target.name)),
     }
 }
 
@@ -321,9 +229,9 @@ pub(crate) fn write_page(cwd: &str, file: &str, text: &str) -> Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ask::tests::{Fake, Stub};
-    use crate::ask::{AskError, Client};
-    use serde_json::json;
+    use crate::api::Caller;
+    use crate::ask::tests::Stub;
+    use crate::ask::{AskError, Client, Target};
 
     #[test]
     fn age_words_and_ago() {
@@ -403,84 +311,6 @@ mod tests {
         ] {
             assert!(p(s).is_nan(), "{s}");
         }
-    }
-
-    #[tokio::test]
-    async fn a_named_backend_comes_from_the_home_list_and_a_path_from_the_tree() {
-        let caller = Caller {
-            env_api: Some("http://home.invalid".into()),
-            ..Caller::default()
-        };
-        let dir = std::env::temp_dir().join(format!("canopy-mapsection-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("shop")).unwrap();
-        let real = std::fs::canonicalize(dir.join("shop"))
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        let tree = json!({"repos": [{"id": "web/shop", "path": real}]});
-        let fake = Fake(|t: &Target, _: &str, p: &str, _: Option<&Value>| match p {
-            "/api/backends" => Ok::<Value, AskError>(
-                json!({"self": "mac", "backends": [{"name": "mini", "tailnet": "http://mini.invalid"}]}),
-            ),
-            "/api/tree" if t.name == "mini" => Ok(tree.clone()),
-            _ => Err(AskError::Refused {
-                message: "no".into(),
-                status: 404,
-            }),
-        });
-        let mini = selected_target(&fake, &caller, None, Some("mini"))
-            .await
-            .unwrap();
-        assert_eq!(mini.urls, ["http://mini.invalid"]);
-        assert_eq!(
-            selected_target(&fake, &caller, None, Some("pi"))
-                .await
-                .unwrap_err(),
-            "no backend named pi; the home backend lists mac, mini"
-        );
-        assert_eq!(
-            selected_target(&fake, &caller, None, None).await.unwrap(),
-            Target::home("http://home.invalid")
-        );
-        assert_eq!(
-            selected_target(&fake, &caller, Some("http://x/y"), None)
-                .await
-                .unwrap_err(),
-            "--backend must be an http(s) origin, got http://x/y"
-        );
-        let d = dir.to_string_lossy().into_owned();
-        assert_eq!(
-            repo_id(&fake, "./shop", &mini, &d).await.unwrap(),
-            "web/shop"
-        );
-        assert_eq!(repo_id(&fake, "shop", &mini, &d).await.unwrap(), "shop");
-        assert_eq!(
-            repo_id(&fake, "./nope", &mini, &d).await.unwrap_err(),
-            "no such folder: ./nope"
-        );
-        assert_eq!(
-            repo_id(&fake, ".", &mini, &format!("{d}/shop/.."))
-                .await
-                .unwrap_err(),
-            format!(
-                "mini does not scan {}",
-                std::fs::canonicalize(&dir).unwrap().to_string_lossy()
-            )
-        );
-        let down = Fake(|_: &Target, _: &str, _: &str, _: Option<&Value>| {
-            Err::<Value, AskError>(AskError::Unreachable("http://home.invalid: refused".into()))
-        });
-        assert_eq!(
-            selected_target(&down, &caller, None, Some("mini"))
-                .await
-                .unwrap_err(),
-            "home did not answer: http://home.invalid: refused"
-        );
-        assert_eq!(
-            repo_id(&down, "./shop", &mini, &d).await.unwrap_err(),
-            "mini did not answer: http://home.invalid: refused"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
