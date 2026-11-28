@@ -17,12 +17,12 @@ The port runs beside the TypeScript. Bun still runs everything that ships: the M
 | `canopy-cli` | the binary `canopy-rs` | `src/cli/` |
 | `canopy-server` | the binary `canopy-server` | `src/server/index.ts` |
 
-Of 315 modules (106,675 lines of TypeScript under `src/core`, `src/server`, `src/cli`, `src/stage`, `src/egress` and `src/secrets`), 18 are ported, 16 are in part and 281 are not started. The table at the end lists each.
+Of 315 modules (106,675 lines of TypeScript under `src/core`, `src/server`, `src/cli`, `src/stage`, `src/egress` and `src/secrets`), 25 are ported, 21 are in part and 269 are not started. The table at the end lists each.
 
 ## What runs in Rust today
 
 - `canopy-rs` answers `canopy [dir]`, `canopy tree`, `canopy status`, `canopy version`, `canopy commit <repo> [-m msg] [--all] [--push]`, `canopy push <repo> [--drop-stale]` and `canopy pull <repo>` itself. Any other verb goes to `bun bin/canopy.ts` with the same arguments and exit code, and so does any of these with a flag the port does not read yet: `--backend`, `commit --ai`, `push test` and `push ls` (web push), or a flag the verb does not take. So `canopy-rs` can stand in for `canopy` now. `CANOPY_TS_CLI` points it at another entry.
-- It also answers the backend verbs `canopy note` (add, list, done, delete), `canopy awake`, `canopy issues`, `canopy pr` (open and rebase) and `canopy prs` over HTTP (`api.rs`, `ask.rs`): the backend's address from `--backend`, else `$CANOPY_API`, else `127.0.0.1:7850`; the caller token from `--token`, the backend's token file or `$CANOPY_TOKEN`, with the flag and the variable kept to the backend the command was pointed at; each of a backend's addresses tried in turn, no redirect followed, an 8-second timeout. The client is reqwest on rustls with ring. A backend that does not answer is worded as Bun's fetch words it ("ECONNREFUSED: Unable to connect. ...", "getaddrinfo ENOTFOUND host", "The operation timed out.", the TLS handshake on a plain port), so a "did not answer" line reads the same from either CLI.
+- It also answers the backend verbs `canopy note` (add, list, done, delete), `canopy awake`, `canopy issues`, `canopy pr` (open and rebase), `canopy prs`, `canopy scenarios` (list, add, run), `canopy sweep`, `canopy kit` (status, apply), `canopy loadouts` (list, resolve, adopt, restore), `canopy groups` (list, pick), `canopy work` (list, show, note, close, export), `canopy land` (one run, `--all`, `--approve`, `--skip-judge`, followup), `canopy queue` and `canopy collisions` over HTTP (`api.rs`, `ask.rs`): the backend's address from `--backend`, else `$CANOPY_API`, else `127.0.0.1:7850`; the caller token from `--token`, the backend's token file or `$CANOPY_TOKEN`, with the flag and the variable kept to the backend the command was pointed at; each of a backend's addresses tried in turn, no redirect followed, an 8-second timeout. The client is reqwest on rustls with ring. A backend that does not answer is worded as Bun's fetch words it ("ECONNREFUSED: Unable to connect. ...", "getaddrinfo ENOTFOUND host", "The operation timed out.", the TLS handshake on a plain port), so a "did not answer" line reads the same from either CLI. A verb that asks every backend the home one lists (`kit`, `groups`, `work list`, `queue`, `collisions`) asks each in turn and prints a line for each one that does not answer, as the TypeScript does. These verbs write to `out.rs` and main prints it before the failure line, the order the TypeScript's own end leaves them in.
 - `--token` is read for every verb but `source`, as index.ts reads it, and every verb's `--help` or `-h` (but `library`'s), `canopy help` and `canopy help <verb>` print from `help.ts`. canopy-rs reads `src/core/help.ts` when it is built (`include_str!`), so the two CLIs cannot print different help.
 - The write half of `git.ts` runs in Rust (`gitwrite.rs`): a commit's detail and diff, stage and unstage, commit, push with its rebase of a rejected push and FR-048's stale-copy offer (`stalecopy.rs`), pull, and the stale `index.lock` sweep. Nothing calls the diff, stage or commit-detail functions outside the tests until the server's routes are ported.
 - `canopy-server` serves the built page (`dist/web`, with the page as the fallback for client routes), `GET /api/tree`, `/api/about`, `/api/sources` and the `/api/events` stream (`: hello`, then a `scan` frame after each rescan, every 30 seconds). Every request passes the same gate as the Bun server's `route()`: the preflight, the caller token or the loopback bypass, the coordinator's lane, the rights gate in `CANOPY_CALLERS` mode, the origin gate, then the auth routes. Every other API route answers 501 with "not in the Rust port yet". People's folder scopes, the Library, websockets and every feature route are not here yet.
@@ -30,12 +30,13 @@ Of 315 modules (106,675 lines of TypeScript under `src/core`, `src/server`, `src
 
 ## How it was checked
 
-- `cd rust && cargo test --workspace` runs 396 tests. Most are the TypeScript tests ported case by case: `exec.test.ts`, `host.test.ts`, `seedgit.test.ts`, `git.test.ts` (both halves, against real repos, the eight diverged-branch rebase cases and the seven amend cases included), `stalecopy.test.ts`, `scan.test.ts`, `meta.test.ts`, `spec.test.ts`, `treelines.test.ts`, `access.test.ts` (remotes), the callers tests, `api.test.ts`, `notes.test.ts`, `issues.test.ts` and `pr.test.ts`. The verbs' tests hand in a fake backend (`ask::tests::Fake`) as the TS tests hand in their own `ask`; `ask.rs`'s own tests run a raw HTTP server on a free port and check each way of not answering against the words Bun printed for it. No test makes a request to 127.0.0.1:7850.
+- `cd rust && cargo test --workspace` runs 448 tests. Most are the TypeScript tests ported case by case: `exec.test.ts`, `host.test.ts`, `seedgit.test.ts`, `git.test.ts` (both halves, against real repos, the eight diverged-branch rebase cases and the seven amend cases included), `stalecopy.test.ts`, `scan.test.ts`, `meta.test.ts`, `spec.test.ts`, `treelines.test.ts`, `access.test.ts` (remotes), the callers tests, `api.test.ts`, `notes.test.ts`, `issues.test.ts`, `pr.test.ts`, and the CLI's `scenarios`, `sweep`, `kit`, `loadouts`, `groups`, `work` and `land` tests. `land.test.ts` builds its entries with the queue's own `enqueue` and `advance`, which are not ported, so the Rust test writes the JSON those calls leave. The verbs' tests hand in a fake backend (`ask::tests::Fake`) as the TS tests hand in their own `ask`; `ask.rs`'s own tests run a raw HTTP server on a free port and check each way of not answering against the words Bun printed for it. No test makes a request to 127.0.0.1:7850.
 - `canopy-auth`'s parity tests read fixtures the TypeScript wrote (`rust/crates/canopy-auth/scripts/gen-fixtures.ts`): what every route needs for 5,796 paths by 7 methods, 68,400 origin cases, and a `callers.json` the TS minted. The Rust reads that book, checks its 9 tokens and writes it back byte for byte; `scripts/check-rust.ts` checks the other direction.
 - `bash scripts/rust-parity.sh [folder]` runs the TypeScript CLI and `canopy-rs` on the same folder against a scratch config dir and diffs tree, status, the bare form, version and a missing folder. On `~/dev` (175 lines of tree) every one came out byte-identical, with the last column (how long ago the newest commit was) masked because a scan of that size lets it tick over between the two runs. The script runs with `NO_COLOR`; under a real terminal (Python's `pty.spawn`) the colored tree of `~/dev/dev-tools` was byte-identical too, color codes and all.
 - The same script then builds two identical sets of scratch repos (a bare origin, clones, a repo with no remote, a detached checkout), with names, dates and the global git config pinned so both sides make the same hashes, and runs each git step through both CLIs, stdout, stderr and exit code apart: commit's usage, no message, nothing staged, a missing repo, `--all` and `--push` (which rebases onto a newer upstream first); push fast-forward, usage, a missing repo, no remote and detached; pull usage, fast-forward and a held `index.lock`; and the atlas case, a push refused over an upstream amend and then `--drop-stale`. All 16 came out byte-identical. `CANOPY_PARITY_KEEP=1` keeps the scratch dir to read.
 - The script diffs `canopy <verb> --help` and `canopy help <verb>` for all 62 words of `COMMANDS`, plus `canopy help` and `canopy --help`: 126 checks, all byte-identical.
 - For the backend verbs it clears `CANOPY_API`, `CANOPY_TOKEN` and `CANOPY_BACKEND`, starts a scratch Bun server on a free port with its own config dir, and runs 32 steps through both CLIs: notes added (one with a reminder, one on a repo that does not exist, one read under `TZ=Asia/Tokyo`), listed, done, listed with `--all` and deleted; the usages; a note that does not exist; a `--backend` that is not an origin; a bogus `--token`; keep awake's status; issues and prs, with a repo and without; pr and pr rebase on a run that does not exist; and each verb pointed at a port nothing listens on. A note's id, which each side mints, is masked. All 32 came out byte-identical. Only calls that change nothing outside that scratch server run: no keep-awake mode, no real run.
+- Before that server starts, the script seeds its config dir and HOME: a scratch repo with one commit, kit.json with a store target, two loadouts and defaults, two work items (one closed, so the work hub never moves it), a finished best-of-N group and a ready run whose repo does not exist, with a sensitive file waiting for approval. Then 57 more steps run through both CLIs: scenarios listed, added (by the TypeScript CLI, once) and run (the scenario runs `true` in the scratch repo); sweep with nothing to close, with `--yes`, and with a bad `--kind`; kit status and a dry-run apply; loadouts listed, as JSON, resolved in the repo and in one that does not exist; groups listed and a pick of a group that does not exist; work listed with filters, shown, exported and noted; the queue and collisions with and without a repo; `land` on the seeded run, which the scratch server refuses with "its diff could not be sorted" since its repo does not exist; and every verb's usages and a port nothing listens on. All 57 came out byte-identical. Nothing starts a run, a gate, a landing, a coordinator or an incubator stage.
 - Under `script` (a real terminal), a push to a local server that answers 401 failed at once in both CLIs with the same bytes, Bun's red error included: git found no terminal to ask for a username on. The Rust exec had put a timed command in a process group of its own, which kept the terminal, so git would have stopped on a prompt it could not read until the 15-minute timeout. It now calls `setsid` as Bun's `detached: true` does.
 - `canopy-server` was run on a scratch port and config dir against the real `dist/web`: the page and its assets load, `/api/tree` returns the scan, a cross-site Origin gets `{"error":"Foreign origin"}`, the stream says `: hello`, and with `CANOPY_CALLERS=log` it prints the TS's own "callers: would refuse" lines. It wrote nothing to its config dir.
 
@@ -44,7 +45,7 @@ No speed claim yet. Timings taken on 2026-11-27 ran on a machine at a load avera
 ## Rules for the rest of the port
 
 - State files round-trip byte for byte. A Rust module that writes a file the TypeScript also writes (config, callers, runs, notes, anything under `~/.config/canopy/` or a repo's `.canopy/`) must write what the TS would write, key order and trailing newline included, and read what the TS wrote. `serde_json` has `preserve_order` on for this.
-- JavaScript's rules where output is compared: `pathx.rs` has Node's `path` functions, UTF-16 lengths for padding, JavaScript's sort order, JavaScript's whitespace for `trim` and `\s` (`JS_S`), and a field that is absent in TS JSON is `skip_serializing_if` in Rust while a `null` one is a plain `Option`. `jsdate.rs` prints `toLocaleString()` as Bun does, always en-US ("12/1/2026, 9:00:00 AM") in the zone `TZ` names, whatever `LANG` says.
+- JavaScript's rules where output is compared: `pathx.rs` has Node's `path` functions, UTF-16 lengths for padding, JavaScript's sort order, JavaScript's whitespace for `trim` and `\s` (`JS_S`), and a field that is absent in TS JSON is `skip_serializing_if` in Rust while a `null` one is a plain `Option`. `js.rs` has what a template's `${x}` prints for a JSON value (`undefined`, `null`, `[object Object]`), `toFixed` (an exact tie rounds away from zero), and the truthiness and `??` reads of a field, which differ for `0` and `""`. `jsdate.rs` prints `toLocaleString()` as Bun does, always en-US ("12/1/2026, 9:00:00 AM") in the zone `TZ` names, whatever `LANG` says.
 - canopy-rs builds from one file outside `rust/`: `src/core/help.ts`, read with `include_str!`. The page imports that file too, so it stays where it is after the cutover; a test fails if `HELP_TEXT` ever interpolates.
 - No Rust test makes a request to `127.0.0.1:7850`, the live server's address. A verb's test hands in a fake backend; a test of the client runs its own server on a free port.
 - Test against a scratch `CANOPY_CONFIG_DIR` and a port other than 7850, never the live server's state.
@@ -58,13 +59,13 @@ No speed claim yet. Timings taken on 2026-11-27 ran on a machine at a load avera
 
 In about this order, each its own task:
 
-1. The rest of the CLI's backend verbs (`run`, `runs`, `health`, `land`, `work`, `queue`, `clip`, `people`, `tenant`, `groups`, `sweep` and the others in `src/cli/`), one at a time on the pattern `note` set: the verb's own parsing and failure words, its pure helpers with their tests, a fake backend in its tests, and its steps in the parity script. `--backend` on `commit`, `push` and `pull` goes with them.
+1. The rest of the CLI's backend verbs (`run`, `runs`, `health`, `capacity`, `costs`, `plugins`, `clip`, `people`, `tenant`, `worktrees`, `fr`, `workflow`, `secrets`, `auth`, `incubator`, `coordinator`, `library`, `helper`, `mcp` and the others in `src/cli/`), one at a time on the pattern `note` set: the verb's own parsing and failure words, its pure helpers with their tests, a fake backend in its tests, and its steps in the parity script. `--backend` on `commit`, `push` and `pull` goes with them.
 2. The server's read routes the page calls on load, then the SSE events the page listens for, so the page renders from `canopy-server` with no 501 on first load.
 3. Runs: `runner.ts`, `driver.ts`, `claudedrive.ts` and the stream-json fold, then `codexrun.ts` and `antigravity.ts`.
 4. Shells: `term.ts` and the tmux bridge over websockets.
 5. Flows, workflows, peers, the Library, people and tenants, the coordinator.
 6. The separate processes: `src/stage`, `src/egress`, `src/secrets`.
-7. The cutover: the launchd agent, the compose images and `canopy` on PATH switch to the Rust binaries, with the TS kept one release for a rollback.
+7. The cutover: the launchd agent, the compose images and `canopy` on PATH switch to the Rust binaries, with the TS kept one release for a rollback. Eric said yes on 2026-11-27; it runs once canopy-server serves the first load (step 2), and not before. Swapping only the CLI on PATH ahead of the server is not part of that yes.
 
 ## Every module
 
@@ -145,7 +146,7 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `git.ts` | 1309 | ported | core `git.rs`, `gitwrite.rs` | the read half in `git.rs`; commit detail, diff, stage, commit, push, pull and the lock sweep in `gitwrite.rs`, with `GitError` in place of the TS error classes |
 | `github.ts` | 122 | not started |  |  |
 | `going.ts` | 55 | not started |  |  |
-| `group.ts` | 238 | not started |  |  |
+| `group.ts` | 238 | partial | core `group.rs` | `groupWord` only; fan-out, scoring and the reviewer wait on runs |
 | `guards.ts` | 121 | not started |  |  |
 | `handoff.ts` | 93 | not started |  |  |
 | `harness.ts` | 284 | not started |  |  |
@@ -168,7 +169,7 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `kitfake.ts` | 42 | not started |  |  |
 | `kitmcp.ts` | 404 | not started |  |  |
 | `kitscan.ts` | 359 | not started |  |  |
-| `landing.ts` | 386 | not started |  |  |
+| `landing.ts` | 386 | partial | core `landing.rs` | `SCORE_GATE`, `inQueue`, `sentBack`, `stoppedWhole`, `queueOf`, `landWord` and `reviewWord`, read from the JSON `/api/landing` answers; the queue itself waits on the server |
 | `launch.ts` | 292 | not started |  |  |
 | `launcher.ts` | 838 | not started |  |  |
 | `leftovers.ts` | 127 | not started |  |  |
@@ -253,7 +254,7 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `steer.ts` | 68 | not started |  |  |
 | `store.ts` | 698 | partial | core `store.rs` | config path, loadConfig's maxDepth and ignore; the other settings ride along as raw JSON |
 | `suggest.ts` | 190 | not started |  |  |
-| `sweep.ts` | 265 | not started |  |  |
+| `sweep.ts` | 265 | partial | core `sweep.rs` | the kinds and `mayClose`; the planner waits on the server |
 | `sweepstore.ts` | 182 | not started |  |  |
 | `tailchan.ts` | 427 | not started |  |  |
 | `taskrun.ts` | 165 | not started |  |  |
@@ -262,7 +263,7 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `term.ts` | 245 | not started |  |  |
 | `tmux.ts` | 816 | not started |  |  |
 | `todos.ts` | 42 | not started |  |  |
-| `touch.ts` | 269 | not started |  |  |
+| `touch.ts` | 269 | partial | core `touch.rs` | `withName` only; the overlap scan waits on runs |
 | `transcribe.ts` | 100 | not started |  |  |
 | `treelines.ts` | 166 | partial | core `treelines.rs` | the tree and spec listings; the drift listing waits on trigger.ts |
 | `treewords.ts` | 82 | not started |  |  |
@@ -280,7 +281,7 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `warm.ts` | 233 | not started |  |  |
 | `webpush.ts` | 206 | not started |  |  |
 | `wirereplay.ts` | 409 | not started |  |  |
-| `work.ts` | 257 | not started |  |  |
+| `work.ts` | 257 | partial | core `work.rs` | `WORK_STATES`, `isWorkId`, `workIdOf`, `fromWord` and `noteStamp`; the store and the export wait on the server |
 | `workflow.ts` | 373 | not started |  |  |
 | `workflows.ts` | 71 | not started |  |  |
 | `workstore.ts` | 116 | not started |  |  |
@@ -356,15 +357,15 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `drift.ts` | 57 | not started |  |  |
 | `floorplan.ts` | 93 | not started |  |  |
 | `fr.ts` | 294 | not started |  |  |
-| `groups.ts` | 141 | not started |  |  |
+| `groups.ts` | 141 | ported | cli `groups.rs` |  |
 | `health.ts` | 523 | partial | cli `ask.rs` | `ask`, `targetsOf`, `take`, `has` and the error classes (`AskError`); the health verb is not started |
 | `incubator.ts` | 307 | not started |  |  |
-| `index.ts` | 946 | partial | cli `main.rs` | tree, status, version, commit, push, pull, note, awake, issues, pr, prs, help and `--token` run in Rust; every other verb goes to the TS CLI |
+| `index.ts` | 946 | partial | cli `main.rs` | tree, status, version, commit, push, pull, note, awake, issues, pr, prs, scenarios, sweep, kit, loadouts, groups, work, land, queue, collisions, help and `--token` run in Rust; every other verb goes to the TS CLI |
 | `issues.ts` | 65 | ported | cli `issues.rs` |  |
-| `kit.ts` | 95 | not started |  |  |
-| `land.ts` | 164 | not started |  |  |
+| `kit.ts` | 95 | ported | cli `kit.rs` |  |
+| `land.ts` | 164 | ported | cli `land.rs` | land, queue and collisions |
 | `libsync.ts` | 63 | not started |  |  |
-| `loadouts.ts` | 117 | not started |  |  |
+| `loadouts.ts` | 117 | ported | cli `loadouts.rs` |  |
 | `mcp.ts` | 83 | not started |  |  |
 | `newargs.ts` | 102 | not started |  |  |
 | `notes.ts` | 74 | ported | cli `notes.rs` | the reminder's time printed by `jsdate.rs` |
@@ -376,12 +377,12 @@ Status is `ported` when the module's behaviour and tests are in Rust, `partial` 
 | `render.ts` | 29 | partial | cli `main.rs`, `help.rs` | the tree's colors and the help's bold name |
 | `run-transcripts.ts` | 270 | not started |  |  |
 | `run.ts` | 305 | not started |  |  |
-| `scenarios.ts` | 82 | not started |  |  |
+| `scenarios.ts` | 82 | ported | cli `scenarios.rs` |  |
 | `secrets.ts` | 494 | not started |  |  |
-| `sweep.ts` | 90 | not started |  |  |
+| `sweep.ts` | 90 | ported | cli `sweep.rs` |  |
 | `tenant.ts` | 419 | not started |  |  |
 | `understand.ts` | 123 | not started |  |  |
-| `work.ts` | 122 | not started |  |  |
+| `work.ts` | 122 | ported | cli `work.rs` | `work note` reads the branch through `exec.rs` |
 | `workflow.ts` | 186 | not started |  |  |
 | `worktrees.ts` | 358 | not started |  |  |
 

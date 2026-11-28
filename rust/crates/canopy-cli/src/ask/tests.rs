@@ -138,6 +138,89 @@ fn target(urls: &[&str]) -> Target {
 }
 
 #[tokio::test]
+async fn ask_text_hands_back_the_body_and_reads_a_refusal_as_the_typescript_does() {
+    let stub = Stub::start(|s| match s.path.as_str() {
+        "/md" => (200, vec![], "# title\n".into()),
+        "/json-error" => json_answer(404, json!({"error": "no item w-x"})),
+        "/text-error" => (500, vec![], "it broke".into()),
+        "/empty" => (502, vec![], String::new()),
+        "/forbidden" => json_answer(403, json!({"why": "no"})),
+        "/need" => json_answer(403, json!({"need": "admin"})),
+        "/gate" => (401, vec![], "sign in".into()),
+        _ => (302, vec![("location".into(), "/x".into())], String::new()),
+    })
+    .await;
+    let c = client();
+    let t = target(&[&stub.url]);
+    assert_eq!(c.ask_text(&t, "/md").await.unwrap(), "# title\n");
+    let e = |r: Result<String, AskError>| r.unwrap_err().message().to_string();
+    assert_eq!(e(c.ask_text(&t, "/json-error").await), "no item w-x");
+    assert_eq!(e(c.ask_text(&t, "/text-error").await), "it broke");
+    assert_eq!(e(c.ask_text(&t, "/empty").await), "x answered 502");
+    assert_eq!(e(c.ask_text(&t, "/forbidden").await), "x answered 403");
+    assert_eq!(
+        e(c.ask_text(&t, "/need").await),
+        "x refused: it needs the admin right"
+    );
+    let gate = c.ask_text(&t, "/gate").await.unwrap_err();
+    assert_eq!(
+        gate,
+        AskError::Unreachable(format!("{}: needs a sign-in", stub.url))
+    );
+    let moved = c.ask_text(&t, "/moved").await.unwrap_err();
+    assert_eq!(
+        moved,
+        AskError::Unreachable(format!("{}: needs a sign-in", stub.url))
+    );
+}
+
+#[tokio::test]
+async fn backend_targets_take_home_alone_the_one_on_names_or_every_one() {
+    let listed = json!({"self": "mac", "backends": [{"name": "mini", "tailnet": "http://mini"}, {"name": "far"}]});
+    let fake = Fake(|_: &Target, _: &str, _: &str, _: Option<&Value>| Ok(listed.clone()));
+    let names = |ts: Vec<Target>| ts.into_iter().map(|t| t.name).collect::<Vec<_>>();
+    assert_eq!(
+        names(
+            backend_targets(&fake, "http://h", true, None)
+                .await
+                .unwrap()
+        ),
+        ["home"]
+    );
+    assert_eq!(
+        names(
+            backend_targets(&fake, "http://h", false, None)
+                .await
+                .unwrap()
+        ),
+        ["mac", "mini"]
+    );
+    assert_eq!(
+        names(
+            backend_targets(&fake, "http://h", true, Some("mini"))
+                .await
+                .unwrap()
+        ),
+        ["mini"]
+    );
+    assert_eq!(
+        backend_targets(&fake, "http://h", false, Some("far"))
+            .await
+            .unwrap_err(),
+        "no backend named far; the home backend lists mac, mini"
+    );
+}
+
+#[test]
+fn a_form_query_encodes_as_urlsearchparams_does() {
+    assert_eq!(
+        form_query(&[("repo", "a b/c"), ("state", "open")]),
+        "repo=a+b%2Fc&state=open"
+    );
+    assert_eq!(form_query(&[("x", "*-._~!'()")]), "x=*-._%7E%21%27%28%29");
+}
+
+#[tokio::test]
 async fn a_403_with_need_is_final_and_a_401_without_need_tries_the_next_address() {
     let stub = Stub::start(|s| match s.path.as_str() {
         "/forbidden" => json_answer(403, json!({"error": "this needs admin", "need": "admin"})),
@@ -400,5 +483,13 @@ where
         body: Option<&Value>,
     ) -> Result<Value, AskError> {
         (self.0)(t, method, path, body)
+    }
+
+    /// a text answer is the closure's string, asked for as a GET
+    async fn ask_text(&self, t: &Target, path: &str) -> Result<String, AskError> {
+        (self.0)(t, "GET", path, None).map(|v| match v {
+            Value::String(s) => s,
+            other => other.to_string(),
+        })
     }
 }

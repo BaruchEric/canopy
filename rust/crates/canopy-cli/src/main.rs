@@ -2,8 +2,10 @@
 //!
 //! It answers `canopy [dir]`, `canopy tree`, `canopy status`, `canopy
 //! version`, `canopy commit`, `canopy push` and `canopy pull` itself, the
-//! backend verbs `note`, `awake`, `issues`, `pr` and `prs` over HTTP, and
-//! every verb's `--help`, with output byte for byte the TypeScript CLI's.
+//! backend verbs `note`, `awake`, `issues`, `pr`, `prs`, `scenarios`,
+//! `sweep`, `kit`, `loadouts`, `groups`, `work`, `land`, `queue` and
+//! `collisions` over HTTP (`HTTP_VERBS`), and every verb's `--help`, with
+//! output byte for byte the TypeScript CLI's.
 //! `--token` is read for every verb, as index.ts reads it. Every other
 //! verb, and a local verb with a flag the port does not read yet
 //! (`--backend` on a local verb, `commit --ai`, `push test|ls`), still goes
@@ -14,11 +16,19 @@
 mod api;
 mod ask;
 mod awake;
+mod groups;
 mod help;
 mod issues;
 mod jsdate;
+mod kit;
+mod land;
+mod loadouts;
 mod notes;
+mod out;
 mod prs;
+mod scenarios;
+mod sweep;
+mod work;
 
 use canopy_core::git::{StatusOptions, get_status};
 use canopy_core::gitwrite::{GitError, commit, drop_stale_copies, pull, push};
@@ -139,7 +149,23 @@ enum Plan {
 }
 
 /// The verbs canopy-rs sends to a backend itself.
-const HTTP_VERBS: &[&str] = &["note", "notes", "awake", "issues", "pr", "prs"];
+const HTTP_VERBS: &[&str] = &[
+    "note",
+    "notes",
+    "awake",
+    "issues",
+    "pr",
+    "prs",
+    "scenarios",
+    "sweep",
+    "kit",
+    "loadouts",
+    "groups",
+    "work",
+    "land",
+    "queue",
+    "collisions",
+];
 
 /// `flag()` in index.ts: take a bare flag out of the arguments.
 fn flag(args: &mut Vec<String>, name: &str) -> bool {
@@ -407,12 +433,42 @@ async fn http_verb(
 ) -> ExitCode {
     let client = ask::Client::new(api::Caller::from_env(token, home_base));
     let caller = client.caller.clone();
-    finish_lines(match verb {
-        "note" | "notes" => notes::note_cmd(rest, &caller, &client, now_ms() as f64).await,
-        "awake" => awake::awake_cmd(rest, &caller, &client).await,
-        "issues" => issues::issues_cmd(rest, &caller, &client).await,
-        _ => prs::pr_cmd(verb, rest, &caller, &client).await,
-    })
+    let mut o = out::Out::default();
+    let r = match verb {
+        "note" | "notes" => {
+            return finish_lines(notes::note_cmd(rest, &caller, &client, now_ms() as f64).await);
+        }
+        "awake" => return finish_lines(awake::awake_cmd(rest, &caller, &client).await),
+        "issues" => return finish_lines(issues::issues_cmd(rest, &caller, &client).await),
+        "pr" | "prs" => return finish_lines(prs::pr_cmd(verb, rest, &caller, &client).await),
+        "scenarios" => scenarios::scenarios_cmd(rest, &caller, &client, &mut o).await,
+        "sweep" => sweep::sweep_cmd(rest, &caller, &client, &mut o, now_ms() as f64).await,
+        "kit" => kit::kit_cmd(rest, &caller, &client, &mut o).await,
+        "loadouts" => loadouts::loadouts_cmd(rest, &caller, &client, &mut o).await,
+        "groups" => groups::groups_cmd(rest, &caller, &client, &mut o).await,
+        "work" => {
+            let cwd = std::env::current_dir()
+                .map(|d| d.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| ".".into());
+            work::work_cmd(rest, &caller, &client, &mut o, &cwd).await
+        }
+        _ => land::land_cmd(verb, rest, &caller, &client, &mut o).await,
+    };
+    finish_out(o, r)
+}
+
+/// A verb's kept stdout, then its failure as `finish` says it, or exit 1
+/// for a verb that set `process.exitCode`.
+fn finish_out(o: out::Out, r: Result<(), String>) -> ExitCode {
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(o.text.as_bytes());
+    let _ = stdout.flush();
+    match r {
+        Err(e) => finish(Err(e)),
+        Ok(()) if o.failed => ExitCode::FAILURE,
+        Ok(()) => ExitCode::SUCCESS,
+    }
 }
 
 /// Hand the arguments to the TypeScript CLI and take its exit code.
@@ -587,6 +643,29 @@ mod tests {
             plan(&args(&["sources", "add", "--token", "f"])),
             Plan::Delegate
         );
+    }
+
+    #[test]
+    fn the_second_batch_of_backend_verbs_runs_here_and_the_rest_still_delegates() {
+        for verb in [
+            "scenarios",
+            "sweep",
+            "kit",
+            "loadouts",
+            "groups",
+            "work",
+            "land",
+            "queue",
+            "collisions",
+        ] {
+            assert!(
+                matches!(plan(&args(&[verb])), Plan::Http { verb: v, .. } if v == verb),
+                "{verb}"
+            );
+        }
+        for verb in ["run", "runs", "capacity", "secrets", "people"] {
+            assert_eq!(plan(&args(&[verb])), Plan::Delegate, "{verb}");
+        }
     }
 
     #[test]

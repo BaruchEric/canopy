@@ -126,6 +126,17 @@ pub fn pad_end(s: &str, width: usize) -> String {
     out
 }
 
+/// `s.padStart(width)` as JavaScript pads: by UTF-16 code units.
+pub fn pad_start(s: &str, width: usize) -> String {
+    let len = js_len(s);
+    if len >= width {
+        return s.to_string();
+    }
+    let mut out: String = std::iter::repeat_n(' ', width - len).collect();
+    out.push_str(s);
+    out
+}
+
 /// The order JavaScript's default `sort()` gives strings: by UTF-16 code
 /// units, which differs from Rust's byte order only past the BMP.
 pub fn js_cmp(a: &str, b: &str) -> Ordering {

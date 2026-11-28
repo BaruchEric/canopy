@@ -45,10 +45,16 @@ pub fn line_text(line: &[Seg]) -> String {
 
 /// How long ago, in the tree's short units. `now` is milliseconds.
 pub fn ago(unix_seconds: Option<i64>, now: i64) -> String {
-    let Some(at) = unix_seconds.filter(|s| *s != 0) else {
+    ago_f(unix_seconds.map_or(0.0, |s| s as f64), now as f64)
+}
+
+/// `ago()` for a time that need not be whole seconds, as the sweep's
+/// `idleSince / 1000` is. 0 (and NaN) are no time at all.
+pub fn ago_f(unix_seconds: f64, now: f64) -> String {
+    if unix_seconds == 0.0 || unix_seconds.is_nan() {
         return String::new();
-    };
-    let s = (now as f64 / 1000.0 - at as f64).max(0.0);
+    }
+    let s = (now / 1000.0 - unix_seconds).max(0.0);
     let f = |d: f64| (s / d).floor() as i64;
     if s < 3600.0 {
         format!("{}m", f(60.0))
