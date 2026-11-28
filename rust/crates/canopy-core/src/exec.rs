@@ -493,6 +493,19 @@ pub async fn git_with<S: AsRef<str>>(
     on_host(loc.host.as_deref(), &argv, &opts).await
 }
 
+/// `Bun.which`: an executable file of that name on PATH, its full path.
+/// The server's harness probe and the CLI's Library both look up a binary
+/// this way.
+pub fn which(binary: &str) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = std::env::var("PATH").ok()?;
+    path.split(':').filter(|d| !d.is_empty()).find_map(|d| {
+        let full = crate::pathx::join(d, binary);
+        let m = std::fs::metadata(&full).ok()?;
+        (m.is_file() && m.permissions().mode() & 0o111 != 0).then_some(full)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

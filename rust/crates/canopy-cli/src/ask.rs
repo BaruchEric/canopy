@@ -392,9 +392,21 @@ pub fn fetch_words(e: &reqwest::Error, url: &str) -> String {
             .ok()
             .and_then(|u| u.host_str().map(String::from))
             .unwrap_or_default();
-        return format!("getaddrinfo ENOTFOUND {host}");
+        return format!("getaddrinfo {} {host}", dns_code(&chain));
     }
     chain.last().cloned().unwrap_or_else(|| e.to_string())
+}
+
+/// The getaddrinfo code Bun names for a lookup that failed: EAI_AGAIN when
+/// the resolver could not answer now (glibc's and macOS's "temporary failure
+/// in name resolution", what a bare name gets in canopy's containers), else
+/// ENOTFOUND.
+pub(crate) fn dns_code(chain: &[String]) -> &'static str {
+    let again = chain.iter().any(|c| {
+        c.to_ascii_lowercase()
+            .contains("temporary failure in name resolution")
+    });
+    if again { "EAI_AGAIN" } else { "ENOTFOUND" }
 }
 
 /// rustls's error, through the io::Errors hyper-util and tokio-rustls wrap

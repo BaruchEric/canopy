@@ -33,6 +33,7 @@ pub mod jsjson;
 pub mod keep;
 pub mod landing;
 pub mod launch;
+pub mod library;
 pub mod meta;
 pub mod notes;
 pub mod pathx;

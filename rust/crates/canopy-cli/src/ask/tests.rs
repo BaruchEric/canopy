@@ -338,6 +338,29 @@ async fn a_body_goes_as_json() {
     assert_eq!(seen[0].body, r#"{"text":"hi"}"#);
 }
 
+#[test]
+fn a_lookup_the_resolver_could_not_answer_now_is_eai_again() {
+    let chain = |last: &str| {
+        vec![
+            "dns error".to_string(),
+            format!("failed to lookup address information: {last}"),
+        ]
+    };
+    assert_eq!(
+        dns_code(&chain("Temporary failure in name resolution")),
+        "EAI_AGAIN"
+    );
+    assert_eq!(
+        dns_code(&chain("temporary failure in name resolution")),
+        "EAI_AGAIN"
+    );
+    assert_eq!(dns_code(&chain("Name or service not known")), "ENOTFOUND");
+    assert_eq!(
+        dns_code(&chain("nodename nor servname provided, or not known")),
+        "ENOTFOUND"
+    );
+}
+
 #[tokio::test]
 async fn each_way_of_not_answering_reads_as_bun_words_it() {
     let c = client();

@@ -61,6 +61,18 @@
 # Clips stay on the server's own store (CANOPY_TAILCHAN_URL=off), and no
 # tree is made or removed outside its scratch config dir.
 #
+# push test and ls ask the scratch server, which has no browser to push to;
+# the bare source listing reads the CLIs' scratch config dir.
+#
+# library runs the Library's Python adapter on a scratch workspace with a
+# config dir per side, and compares the state each writes as well as what
+# each prints; library sync asks the scratch server, whose sync is off, and
+# only the TypeScript CLI's seed changes it. helper's refusals ask nothing;
+# its pairing asks the scratch server, which refuses a wrong first code and
+# is approved by curl as its loopback owner for the other, and the loop that
+# follows (still the TypeScript's) registers there and is stopped. Each
+# side's helper token goes to a config dir of its own.
+#
 # Both run against a scratch config dir, so nothing under ~/.config/canopy
 # is read or written.
 #
@@ -1102,3 +1114,146 @@ hcheck runs-child-either runs child nosuch --note x --parent p --backend "$CANOP
 hcheck runs-child-origin runs child nosuch --note x --parent p --backend http://x/y
 hcheck runs-child-on runs child nosuch --note x --parent p --on nosuch
 hcheck runs-child-down runs child nosuch --note x --parent p --backend "$down"
+# ---- library and helper ----
+
+# library: the Library's Python adapter on a scratch workspace (two repos
+# with a commit and one with none, at its root, which the adapter files as
+# projects), never ~/dev. Each CLI gets a config dir of
+# its own under its side's folder, so the state each adapter writes is
+# compared too, file by file with its mode and its clock masked. Steps run
+# from the workspace's root, so a bare `library tags` reads it as "."; no
+# python3 on PATH is tried with PATH holding only bun's folder.
+libroot=$scratch/libroot
+mkdir -p "$libroot"
+for n in alpha beta; do
+  git init -q -b main "$libroot/$n"
+  printf '# %s\n\nA fixture.\n' "$n" >"$libroot/$n/README.md"
+  git -C "$libroot/$n" add -A && git -C "$libroot/$n" commit -q -m first
+done
+git init -q -b main "$libroot/lonely"
+echo x >"$libroot/lonely/x"
+
+# lcheck <name> <args...> - both CLIs from the workspace's root, each with
+# its own config dir; LPATH, when set, is the PATH both run with
+lcheck() {
+  local name=$1 side out code pre=()
+  shift
+  if [ -n "${LPATH:-}" ]; then pre=(env PATH="$LPATH"); fi
+  for side in ts rs; do
+    out="$scratch/$side.$name"
+    if [ "$side" = ts ]; then
+      (cd "$libroot" && CANOPY_CONFIG_DIR="$scratch/ts/libcfg" ${pre[@]+"${pre[@]}"} "$bun" "$ts" "$@") >"$out.1" 2>"$out.2" && code=0 || code=$?
+    else
+      (cd "$libroot" && CANOPY_CONFIG_DIR="$scratch/rs/libcfg" ${pre[@]+"${pre[@]}"} "$rs" "$@") >"$out.1" 2>"$out.2" && code=0 || code=$?
+    fi
+    { cat "$out.1"; echo "--- stderr"; cat "$out.2"; echo "--- exit $code"; } >"$out"
+  done
+  same "$name" "$scratch/ts.$name" "$scratch/rs.$name" "$*"
+}
+
+# lstate <name> - the Library state each side's adapter wrote
+lstate() {
+  local name=$1 side dir f
+  for side in ts rs; do
+    for dir in "$scratch/$side"/libcfg/library/*; do
+      echo "== $(basename "$dir")"
+      (cd "$dir" && for f in $(ls -A | LC_ALL=C sort); do
+        if [ -f "$f" ]; then
+          echo "== $f $(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")"
+          sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[-+][0-9]{2}:[0-9]{2}/<time>/g' "$f"
+          echo
+        else
+          echo "== $f/"
+        fi
+      done)
+    done >"$scratch/$side.$name"
+  done
+  same "$name" "$scratch/ts.$name" "$scratch/rs.$name" "library state"
+}
+
+lcheck lib-index library --root "$libroot" index
+lcheck lib-doctor library --root "$libroot" doctor
+lstate lib-state
+lcheck lib-relate library --root "$libroot" relate alpha beta
+lcheck lib-tag library --token bogus --root "$libroot" tag alpha fixture
+lcheck lib-cwd library tags
+lstate lib-state-after
+lcheck lib-bogus library --root "$libroot" bogus
+lcheck lib-bare library --root "$libroot"
+lcheck lib-help library --root "$libroot" --help
+lcheck lib-serve library --root "$libroot" serve
+lcheck lib-root-last library tags --root
+lcheck lib-missing library --root "$scratch/no-such-folder" index
+lcheck lib-file library --root "$libroot/alpha/README.md" index
+LPATH=$(dirname "$bun") lcheck lib-no-python library --root "$libroot" index
+
+# library sync on the scratch server, whose librarySync is off: the status,
+# the refusals a pull, an adopt and an accept get there, the usages, and a
+# backend that does not answer. The TypeScript CLI seeds first, so both
+# CLIs then find it joined.
+hcheck libsync-status library sync --status
+hcheck libsync-pull library sync
+hcheck libsync-adopt library sync --adopt nosuch
+hcheck libsync-accept library sync --accept nosuch
+bun "$ts" library sync --seed >/dev/null
+hcheck libsync-seed library sync --seed
+hcheck libsync-joined library --root /nowhere sync --status --token bogus
+hcheck libsync-usage library sync --seed --status
+hcheck libsync-word library sync now
+hcheck libsync-empty library sync --adopt ""
+hcheck libsync-help library sync --help
+hcheck libsync-down library sync --status --backend "$down"
+hcheck libsync-name library sync --status --backend http://x/y
+
+# helper: its refusals, a pair the scratch server refuses (a wrong first
+# code) and one it approves, after which the loop (still the TypeScript's)
+# registers with the scratch server and is stopped. Each side keeps its
+# helper token in a config dir of its own; the time, the pair code and the
+# token are masked, and its file's mode and line count printed.
+hcheck helper-scheme helper --backend ftp://x
+hcheck helper-url helper --backend http://
+hcheck helper-openers helper --openers kitty,,emacs --backend "$down"
+hcheck helper-down helper --pair --backend "$down"
+hcheck helper-dns helper --pair --backend http://nosuch.invalid
+stamp='s/^[0-9]{1,2}:[0-9]{2}:[0-9]{2} [AP]M/<time>/; s/pair code [A-Z0-9]+/pair code <code>/'
+MASK=$stamp scheck helper-code helper --pair --code WRONG1 --backend "$CANOPY_API"
+for side in ts rs; do
+  out="$scratch/$side.helper-pair"
+  if [ "$side" = ts ]; then cli=("$bun" "$ts"); else cli=("$rs"); fi
+  CANOPY_CONFIG_DIR="$scratch/$side/helpercfg" "${cli[@]}" helper --pair --backend "$CANOPY_API" \
+    --name parity --openers "" --no-emulators >"$out.1" 2>"$out.2" &
+  helper=$!
+  for _ in $(seq 1 40); do grep -q "pair code" "$out.1" && break; sleep 0.25; done
+  pending=$(curl -s "$CANOPY_API/api/auth" | "$bun" -e '
+    const a = await Bun.stdin.json();
+    console.log((a.pending ?? []).filter((p) => p.kind === "helper").at(-1)?.id ?? "")')
+  curl -s -o /dev/null -X POST -H 'content-type: application/json' -d "{\"id\": \"$pending\"}" "$CANOPY_API/api/auth/approve"
+  for _ in $(seq 1 60); do grep -q "registered" "$out.1" && break; sleep 0.25; done
+  kill -TERM "$helper"
+  wait "$helper" && code=0 || code=$?
+  for f in "$scratch/$side/helpercfg"/token-helper-*; do
+    echo "$(basename "$f") $(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f") $(wc -l <"$f" | tr -d ' ') line"
+    sed -E 's/^cnp_helper_[A-Za-z0-9_-]+$/cnp_helper_<token>/' "$f"
+  done >"$out.3"
+  { cat "$out.1"; echo "--- stderr"; cat "$out.2"; echo "--- exit $code"; echo "--- token"; cat "$out.3"; } >"$out"
+done
+sed -E -i.bak "$stamp" "$scratch/ts.helper-pair" "$scratch/rs.helper-pair"
+same helper-pair "$scratch/ts.helper-pair" "$scratch/rs.helper-pair" "helper --pair, approved, then the loop"
+
+# push test and ls (web push) on the scratch server, which made its key and
+# has no browser to send to
+hcheck push-ls push ls
+hcheck push-test push test
+hcheck push-usage push ls extra
+hcheck push-down push test --backend "$down"
+hcheck push-name push ls --backend http://x/y
+
+# source: the bare listing of the CLIs' own config, empty and then with a
+# local, an ssh and a forge folder the TypeScript CLI adds (add and rm
+# still run in TypeScript)
+hcheck sources-none source
+bun "$ts" source add "$scratch/server/root" --label Scratch >/dev/null
+bun "$ts" source add /home/x/dev --host mini >/dev/null
+bun "$ts" source add --forgejo https://git.example --label Forge >/dev/null
+hcheck sources sources
+hcheck source source

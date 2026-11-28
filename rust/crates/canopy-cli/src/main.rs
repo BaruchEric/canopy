@@ -7,14 +7,17 @@
 //! `collisions`, `floorplan`, `archify`, `diagnosis`, `understand`,
 //! `capacity`, `costs`, `plugins`, `people`, `clip`, `clips`, `worktrees`,
 //! `workflow`, `health`, `run` and `runs` over HTTP, `fr` on a repo's own
-//! git, and every verb's `--help`, with output byte for byte the
-//! TypeScript CLI's.
+//! git, `library` (the Library's Python adapter, and `library sync` over
+//! HTTP), `helper`'s arguments, refusals and `--pair` (its loop still goes
+//! to the TypeScript), `push test|ls` (web push, over HTTP), the bare
+//! `source` listing, and every verb's `--help`, with output byte for byte
+//! the TypeScript CLI's.
 //! `HTTP_VERBS` lists the HTTP verbs and `fr`: each gets `--backend` in
 //! its own arguments, as in index.ts, and `fr` refuses it with its usage.
 //! `--token` is read for every verb, as index.ts reads it. Every other
 //! verb, and a local verb with a flag the port does not read yet
-//! (`--backend` on tree or status, or in front of the repo, `commit --ai`,
-//! `push test|ls`), still goes
+//! (`--backend` on tree or status, or in front of the repo, `commit --ai`),
+//! still goes
 //! to the TypeScript CLI (`bun bin/canopy.ts`) until it is ported, so the
 //! binary can stand in for `canopy` today. docs/rust-port.md has the
 //! ledger.
@@ -32,23 +35,29 @@ mod fr;
 mod groups;
 mod health;
 mod help;
+mod helper;
 mod issues;
 mod jsdate;
 mod kit;
 mod land;
+mod library;
+mod libsync;
 mod loadouts;
 mod mapsection;
 mod notes;
 mod out;
+mod pair;
 mod people;
 mod plugins;
 mod prs;
 mod render;
 mod run;
 mod scenarios;
+mod sources;
 mod sweep;
 mod transcripts;
 mod understand;
+mod webpush;
 mod work;
 mod workflow;
 mod worktrees;
@@ -167,6 +176,20 @@ enum Plan {
         token: Option<String>,
         home_base: Option<String>,
     },
+    /// `canopy library`: what follows the verb once `--token` is out, with
+    /// the run's token and the `--backend` it was pointed at.
+    Library {
+        rest: Vec<String>,
+        token: Option<String>,
+        home_base: Option<String>,
+    },
+    /// `canopy helper`, which reads the whole command line itself.
+    Helper {
+        token: Option<String>,
+        home_base: Option<String>,
+    },
+    /// `canopy source` or `sources` with nothing after it: the listing.
+    Sources,
     Delegate,
 }
 
@@ -249,9 +272,6 @@ fn drop_backend(a: &mut Vec<String>) {
     }
 }
 
-/// `PUSH_WORDS` in cli/push.ts: web push's test and list, not a repo.
-const PUSH_WORDS: &[&str] = &["test", "ls"];
-
 fn plan(args: &[String]) -> Plan {
     let (cmd, rest) = match args.first() {
         Some(a) if COMMANDS.contains(&a.as_str()) => (Some(a.as_str()), &args[1..]),
@@ -268,9 +288,14 @@ fn plan(args: &[String]) -> Plan {
             verb: Some(c.to_string()),
         };
     }
-    // --token is every verb's except source's, which carries a Forgejo token
+    // --token is every verb's except source's, which carries a Forgejo token;
+    // the bare listing runs here, add and rm write the config in TypeScript
     if matches!(cmd, Some("source" | "sources")) {
-        return Plan::Delegate;
+        return if rest.is_empty() {
+            Plan::Sources
+        } else {
+            Plan::Delegate
+        };
     }
     let mut stripped = rest.to_vec();
     let token = opt(&mut stripped, "--token");
@@ -286,6 +311,19 @@ fn plan(args: &[String]) -> Plan {
             return Plan::Http {
                 verb: verb.to_string(),
                 rest: rest.to_vec(),
+                token,
+                home_base: pointed.and_then(|i| rest.get(i + 1).cloned()),
+            };
+        }
+        Some("library") => {
+            return Plan::Library {
+                rest: rest.to_vec(),
+                token,
+                home_base: pointed.and_then(|i| rest.get(i + 1).cloned()),
+            };
+        }
+        Some("helper") => {
+            return Plan::Helper {
                 token,
                 home_base: pointed.and_then(|i| rest.get(i + 1).cloned()),
             };
@@ -329,11 +367,17 @@ fn plan(args: &[String]) -> Plan {
             }
         }
         Some("push") => {
+            // web push's test and list, over HTTP; a repo by either name is ./test or ./ls
             if rest
                 .first()
-                .is_some_and(|w| PUSH_WORDS.contains(&w.as_str()))
+                .is_some_and(|w| webpush::PUSH_WORDS.contains(&w.as_str()))
             {
-                return Plan::Delegate;
+                return Plan::Http {
+                    verb: "push".into(),
+                    rest: rest.to_vec(),
+                    token,
+                    home_base: pointed.and_then(|i| rest.get(i + 1).cloned()),
+                };
             }
             let mut a = rest.to_vec();
             let drop_stale = flag(&mut a, "--drop-stale");
@@ -564,6 +608,7 @@ async fn http_verb(
             fr::fr_cmd(rest, &cwd, &env, now_ms(), &mut o).await
         }
         "workflow" => workflow::workflow_cmd(rest, &caller, &client, &mut o).await,
+        "push" => webpush::push_cmd(rest, &caller, &client, &mut o, now_ms() as f64).await,
         "health" => {
             let say = |line: String| println!("{line}");
             let env = health::HealthEnv {
@@ -596,6 +641,53 @@ async fn http_verb(
     finish_out(o, r)
 }
 
+/// `canopy library`: `sync` over HTTP, any other command the Library's
+/// adapter with this terminal, exiting with its code.
+async fn library_verb(
+    rest: Vec<String>,
+    token: Option<String>,
+    home_base: Option<String>,
+) -> ExitCode {
+    if libsync::is_library_sync(&rest) {
+        let client = ask::Client::new(api::Caller::from_env(token, home_base));
+        let caller = client.caller.clone();
+        let mut o = out::Out::default();
+        let r = libsync::library_sync_cmd(rest, &caller, &client, &mut o, now_ms() as f64).await;
+        return finish_out(o, r);
+    }
+    let mut a = rest;
+    let root = resolve(&opt(&mut a, "--root").unwrap_or_else(|| ".".into()));
+    let config = canopy_core::store::config_dir();
+    match library::library_command(&root, &a, &canopy_dir(), &config) {
+        Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
+        Err(e) => finish(Err(e)),
+    }
+}
+
+/// `canopy helper`: its refusals and `--pair` here, then the loop in the
+/// TypeScript CLI with what is left of the arguments.
+async fn helper_verb(
+    args: &[String],
+    token: Option<String>,
+    home_base: Option<String>,
+) -> ExitCode {
+    let caller = api::Caller::from_env(token, home_base);
+    let env_backend = std::env::var("CANOPY_BACKEND").ok();
+    let p = match helper::parse(args, env_backend.as_deref(), &caller) {
+        Ok(p) => p,
+        Err(e) => return finish(Err(e)),
+    };
+    let planned = helper::plan(args, &p, env_backend.as_deref(), &caller);
+    if planned.pair {
+        let client = ask::Client::new(caller);
+        let paint = render::Paint { color: use_color() };
+        if let Err(e) = helper::pair_now(&p, &client, paint).await {
+            return finish(Err(e));
+        }
+    }
+    delegate(&planned.delegate)
+}
+
 /// A verb's kept stdout, then its failure as `finish` says it, or exit 1
 /// for a verb that set `process.exitCode`.
 fn finish_out(o: out::Out, r: Result<(), String>) -> ExitCode {
@@ -610,17 +702,20 @@ fn finish_out(o: out::Out, r: Result<(), String>) -> ExitCode {
     }
 }
 
-/// Hand the arguments to the TypeScript CLI and take its exit code.
+/// Hand the arguments to the TypeScript CLI. bun takes this process's
+/// place (exec), so a signal sent to canopy-rs reaches it and its exit
+/// code, a signal's included, is the command's: a long-running verb
+/// (`helper`'s loop, `ui`) stops on Ctrl-C or SIGTERM as the TypeScript's
+/// own would, and leaves no child behind.
 fn delegate(args: &[String]) -> ExitCode {
+    use std::io::Write as _;
+    use std::os::unix::process::CommandExt as _;
     let entry = std::env::var("CANOPY_TS_CLI")
         .unwrap_or_else(|_| format!("{}/bin/canopy.ts", canopy_dir()));
-    match Command::new("bun").arg(&entry).args(args).status() {
-        Ok(s) => ExitCode::from(s.code().map_or(1, |c| c.clamp(0, 255) as u8)),
-        Err(e) => {
-            eprintln!("canopy-rs: cannot run bun {entry}: {e}");
-            ExitCode::from(127)
-        }
-    }
+    let _ = std::io::stdout().flush();
+    let e = Command::new("bun").arg(&entry).args(args).exec();
+    eprintln!("canopy-rs: cannot run bun {entry}: {e}");
+    ExitCode::from(127)
 }
 
 #[tokio::main]
@@ -652,6 +747,13 @@ async fn main() -> ExitCode {
             token,
             home_base,
         } => http_verb(&verb, rest, token, home_base).await,
+        Plan::Library {
+            rest,
+            token,
+            home_base,
+        } => library_verb(rest, token, home_base).await,
+        Plan::Helper { token, home_base } => helper_verb(&args, token, home_base).await,
+        Plan::Sources => finish_lines(sources::sources_cmd(render::Paint { color: use_color() })),
     }
 }
 
@@ -725,7 +827,15 @@ mod tests {
             Plan::Delegate,
             "after -- it belongs to another program"
         );
-        assert_eq!(plan(&args(&["library", "--help"])), Plan::Delegate);
+        assert_eq!(
+            plan(&args(&["library", "--help"])),
+            Plan::Library {
+                rest: args(&["--help"]),
+                token: None,
+                home_base: None,
+            },
+            "the adapter's own help"
+        );
         assert_eq!(plan(&args(&["help"])), help(None));
         assert_eq!(plan(&args(&["--help"])), help(None));
         assert_eq!(plan(&args(&["help", "note"])), help(Some("note")));
@@ -782,6 +892,13 @@ mod tests {
             plan(&args(&["sources", "add", "--token", "f"])),
             Plan::Delegate
         );
+        assert_eq!(plan(&args(&["source"])), Plan::Sources);
+        assert_eq!(plan(&args(&["sources"])), Plan::Sources);
+        assert_eq!(
+            plan(&args(&["source", "--token", "t"])),
+            Plan::Delegate,
+            "source keeps --token, so it is an unknown command there"
+        );
     }
 
     #[test]
@@ -802,7 +919,9 @@ mod tests {
                 "{verb}"
             );
         }
-        assert_eq!(plan(&args(&["secrets"])), Plan::Delegate);
+        for verb in ["secrets", "peers"] {
+            assert_eq!(plan(&args(&[verb])), Plan::Delegate, "{verb}");
+        }
     }
 
     #[test]
@@ -916,6 +1035,49 @@ mod tests {
     }
 
     #[test]
+    fn library_and_helper_run_here_with_their_token_and_backend() {
+        assert_eq!(
+            plan(&args(&[
+                "library",
+                "--token",
+                "t",
+                "--root",
+                "/x",
+                "sync",
+                "--backend",
+                "http://b:1"
+            ])),
+            Plan::Library {
+                rest: args(&["--root", "/x", "sync", "--backend", "http://b:1"]),
+                token: Some("t".into()),
+                home_base: Some("http://b:1".into()),
+            }
+        );
+        assert_eq!(
+            plan(&args(&["library", "index", "--backend", "http://b:1"])),
+            Plan::Library {
+                rest: args(&["index", "--backend", "http://b:1"]),
+                token: None,
+                home_base: Some("http://b:1".into()),
+            },
+            "a --backend is the adapter's word, and still the home base"
+        );
+        assert_eq!(
+            plan(&args(&["helper", "--pair", "--backend", "http://b:1"])),
+            Plan::Helper {
+                token: None,
+                home_base: Some("http://b:1".into()),
+            }
+        );
+        assert_eq!(
+            plan(&args(&["helper", "--help"])),
+            Plan::Help {
+                verb: Some("helper".into())
+            }
+        );
+    }
+
+    #[test]
     fn commit_reads_its_flags_as_index_ts_does() {
         let commit =
             |repo: Option<&str>, message: Option<&str>, all: bool, push: bool| Plan::Commit {
@@ -967,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn push_and_pull_take_a_repo_and_web_push_goes_to_typescript() {
+    fn push_and_pull_take_a_repo_and_web_push_asks_the_backend() {
         assert_eq!(
             plan(&args(&["push", "r", "--drop-stale"])),
             Plan::Push {
@@ -982,8 +1144,24 @@ mod tests {
                 drop_stale: false
             }
         );
-        assert_eq!(plan(&args(&["push", "test"])), Plan::Delegate);
-        assert_eq!(plan(&args(&["push", "ls"])), Plan::Delegate);
+        assert_eq!(
+            plan(&args(&[
+                "push",
+                "test",
+                "--token",
+                "t",
+                "--backend",
+                "http://b"
+            ])),
+            Plan::Http {
+                verb: "push".into(),
+                rest: args(&["test", "--backend", "http://b"]),
+                token: Some("t".into()),
+                home_base: Some("http://b".into()),
+            },
+            "web push runs here"
+        );
+        assert!(matches!(plan(&args(&["push", "ls"])), Plan::Http { verb, .. } if verb == "push"));
         assert_eq!(plan(&args(&["push", "r", "--force"])), Plan::Delegate);
         assert_eq!(
             plan(&args(&["pull", "r"])),
