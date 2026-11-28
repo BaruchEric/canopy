@@ -49,6 +49,7 @@ for r in app web; do
 done
 cat >"$S/seed/config.json" <<JSON
 {"self": "scratch", "keepShells": true,
+ "peers": [{"name": "mini", "alias": "eric@mini", "root": "/srv/dev", "role": "mirror", "repos": ["app", ""]}, {"name": "mini", "alias": "x", "root": "/y"}, {"name": "nb", "alias": "gpd", "root": "/a/../b"}],
  "backends": [{"name": "mini", "tailnet": "http://127.0.0.1:1"}, {"name": "bad name!"}, {"name": "pub", "public": "http://not-https.example"}],
  "workspaces": [{"name": "both", "repos": ["$S/root/app", "$S/root/web", 3], "primary": "$S/root/web", "color": "nope"}, {"name": 5}],
  "launchers": {"$S/root/app": {"app": "kitty"}},

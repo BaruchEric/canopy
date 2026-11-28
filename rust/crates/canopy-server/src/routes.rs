@@ -195,9 +195,27 @@ async fn layouts(State(s): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({ "profiles": profiles }))
 }
 
+/// `GET /api/peers` while peer sync is off: the config's peers and nothing
+/// seen, since only a pass fills that in. With sync on or dry the Bun server
+/// runs passes this port does not, so the route is not ported then.
+async fn peers(State(s): State<Arc<AppState>>, method: Method, uri: Uri) -> Response {
+    let raw = match config(&s).await {
+        Ok(raw) => raw,
+        Err(e) => return e.into_response(),
+    };
+    let sync = canopy_core::peers::peer_sync(&raw);
+    if sync != "off" {
+        return not_ported(method, uri).await;
+    }
+    let list = canopy_core::peers::normalize_peers(raw.get("peers").unwrap_or(&Value::Null));
+    let body = json!({ "self": config_self(&raw), "peers": list, "seen": [], "sync": sync, "root": s.root });
+    Json(body).into_response()
+}
+
 pub fn first_load() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/notes", read(notes))
+        .route("/api/peers", read(peers))
         .route("/api/layouts", read(layouts))
         .route("/api/backends", read(backends))
         .route("/api/workspaces", read(workspaces_route))
