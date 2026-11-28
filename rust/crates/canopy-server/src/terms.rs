@@ -172,7 +172,13 @@ struct Live {
     sockets: HashMap<u64, Option<String>>,
     ending: Arc<AtomicBool>,
     last_input: Option<i64>,
+    /// when it was taken into the map, for the list's order
+    order: u64,
 }
+
+/// The order shells were taken in: the list goes in it, as the Bun
+/// server's map iterates in insertion order.
+static TAKEN: AtomicU64 = AtomicU64::new(0);
 
 impl Live {
     fn new(info: TermInfo) -> Live {
@@ -181,6 +187,7 @@ impl Live {
             sockets: HashMap::new(),
             ending: Arc::new(AtomicBool::new(false)),
             last_input: None,
+            order: TAKEN.fetch_add(1, Ordering::SeqCst),
         }
     }
 
@@ -448,7 +455,7 @@ impl Terms {
             .values()
             .filter(|l| l.info.task.is_none() && (with_ending || !l.ending()))
             .collect();
-        list.sort_by_key(|l| (l.info.started_at, l.info.id.clone()));
+        list.sort_by_key(|l| l.order);
         list.into_iter()
             .map(|l| self.info_of(l, &devices))
             .collect()
