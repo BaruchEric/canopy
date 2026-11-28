@@ -15,20 +15,24 @@
 # Help: every verb's --help, and help <verb>, read from the same help.ts.
 #
 # The backend verbs (note, awake, issues, pr, prs, scenarios, sweep, kit,
-# loadouts, groups, work, land, queue, collisions) talk to a scratch Bun
-# server this script starts on a free port with its own config dir and
-# HOME, and to nothing else: CANOPY_API, CANOPY_TOKEN and CANOPY_BACKEND
-# are cleared first, so a canopy shell's settings never point either CLI at
-# a real backend. Before it starts, the script seeds that config dir and
-# HOME with things to list: a scratch repo with one command scenario,
-# kit.json's loadouts, two work items, a finished group and a ready run
-# whose repo does not exist. Only calls that change nothing outside that
-# server run: notes and work notes on its own store, keep awake's status
-# (never a new mode), a scenario that runs `true` in the scratch repo, a
-# sweep with nothing to close, and pr, land and group picks with ids that
-# do not exist or a run the server cannot land. Nothing starts a run, a
-# coordinator or an incubator stage. A note's id, which each side mints,
-# is masked.
+# loadouts, groups, work, land, queue, collisions, floorplan, archify,
+# diagnosis, understand) talk to a scratch Bun server this script starts on
+# a free port with its own config dir and HOME, and to nothing else:
+# CANOPY_API, CANOPY_TOKEN and CANOPY_BACKEND are cleared first, so a
+# canopy shell's settings never point either CLI at a real backend. Before
+# it starts, the script seeds that config dir and HOME with things to list:
+# a scratch repo with one command scenario and, committed in it, two
+# diagrams, a diagnosis and a knowledge graph; a second scratch repo with
+# none of those; kit.json's loadouts, two work items, a finished group and
+# a ready run whose repo does not exist. Only calls that change nothing
+# outside that server run: notes and work notes on its own store, keep
+# awake's status (never a new mode), a scenario that runs `true` in the
+# scratch repo, a sweep with nothing to close, pr, land and group picks
+# with ids that do not exist or a run the server cannot land, the map
+# section's reads, refusals and stops, and a diagram's or the diagnosis's
+# page saved into each side's scratch copy. Nothing starts a run, a
+# coordinator, an incubator stage, an analysis or a plugin prepare. A
+# note's id, which each side mints, is masked.
 #
 # Both run against a scratch config dir, so nothing under ~/.config/canopy
 # is read or written.
@@ -179,6 +183,41 @@ mkdir -p "$scratch/server/root" "$scratch/server/home"
 seed=$scratch/server/config
 git init -q -b main "$scratch/server/root/app"
 git -C "$scratch/server/root/app" commit -q --allow-empty -m first
+# The map section's verbs (floorplan, archify, diagnosis, understand) read
+# what app holds, committed so a remove is refused, never done: two
+# diagrams (one with finalize's receipt), a diagnosis with its overview, and
+# a knowledge graph made at the first commit with code lessons beside it.
+# The pages' times are years ahead, so each reads "just now" on both sides.
+# plain is a repo with none of it.
+mapped=$scratch/server/root/app
+mkdir -p "$mapped/.archify/architecture-app-20260101-090000" "$mapped/.archify/sequence-login-20260102-090000" \
+  "$mapped/.archify/diagnosis/analysis" "$mapped/.ua"
+printf '<!doctype html><html><head><title>App &amp; its parts — map</title></head><body>app</body></html>\n' \
+  >"$mapped/.archify/architecture-app-20260101-090000/app.html"
+cat >"$mapped/.archify/architecture-app-20260101-090000/app.finalize-summary.json" <<'JSON'
+{"command": "finalize", "status": "skipped", "type": "architecture",
+ "gates": {"deliver": "pass", "check": "pass", "browser-check": "skipped"},
+ "artifact": {"path": ".archify/architecture-app-20260101-090000/app.html"}}
+JSON
+printf '<html><body>login, no title</body></html>\n' >"$mapped/.archify/sequence-login-20260102-090000/login.html"
+printf '<html><body>the analysis</body></html>\n' >"$mapped/.archify/diagnosis/analysis/repo.analysis.html"
+cat >"$mapped/.archify/diagnosis/analysis/overview.json" <<'JSON'
+{"verdict": "attention", "counts": {"findings": 270, "error": 2, "warning": 104, "info": 164, "accepted": 0},
+ "review": {"baseline": null, "comparison": {"comparable": true, "reasons": [], "new": ["A"], "notDetected": ["B", "C"], "fixed": [], "evidenceChanged": ["D"], "unchanged": 266}},
+ "investigation": {"leads": [
+   {"id": "COUP-1", "code": "coupling/cycle", "severity": "error", "message": "2 modules depend on each other at package level: src → src/components → src.", "where": "src/App.tsx:1", "symbol": null},
+   {"id": "COMP-1", "code": "complexity/function", "severity": "warning", "message": "handleApi has cyclomatic complexity 982.", "where": null}]},
+ "coverage": {"language": "ts", "adapter": "typescript@5.9.3", "files": {"analyzed": 263, "excludedByRole": 147}, "otherLanguages": [{"adapter": "py", "files": 26}, {"adapter": "go", "files": 0}]}}
+JSON
+printf '{"project": {"analyzedAt": "2030-01-01T00:00:00.000Z", "gitCommitHash": "%s"}, "nodes": [{"type": "file"}, {"type": "file"}, {"type": "function"}], "edges": [{}], "layers": [{}, {}], "tour": [{}]}\n' \
+  "$(git -C "$mapped" rev-parse HEAD)" >"$mapped/.ua/knowledge-graph.json"
+echo '[]' >"$mapped/.ua/code-lessons.json"
+git -C "$mapped" add -A
+git -C "$mapped" commit -q -m "the map section"
+touch -t 203001010000 "$mapped/.archify/architecture-app-20260101-090000/app.html" "$mapped/.archify/diagnosis/analysis/repo.analysis.html"
+touch -t 203001020000 "$mapped/.archify/sequence-login-20260102-090000/login.html"
+git init -q -b main "$scratch/server/root/plain"
+git -C "$scratch/server/root/plain" commit -q --allow-empty -m first
 mkdir -p "$scratch/server/home/.claude" "$seed/work" "$seed/landing/groups" "$seed/landing/runs"
 cat >"$seed/landing/runs/o-1.json" <<'JSON'
 {"id": "o-1", "group": "g-0123abcd", "runId": "run-1", "repoId": "app", "repoPath": "/nowhere/app",
@@ -349,3 +388,81 @@ hcheck land-all land --all nosuch
 hcheck land-followup-usage land followup
 hcheck land-down land x --backend "$down"
 hcheck land-approve land run-1
+
+# ---- the map section: floorplan, archify, diagnosis, understand ----
+# Reads, refusals and stops only: a make, update, rebuild or revise starts
+# a run, diagnosis run starts an analysis, and understand open or prepare
+# installs a plugin, so none of them runs here. A save writes the page into
+# each side's own scratch copy, and the two copies must match the repo's.
+
+# samepage <name> <saved> <source> - both sides' saved page, byte for byte
+samepage() {
+  local name=$1 saved=$2 source=$3
+  if cmp "$scratch/ts/$saved" "$source" && cmp "$scratch/rs/$saved" "$source"; then
+    echo "same ($name): the saved $saved ($(wc -c <"$source" | tr -d ' ') bytes)"
+  else
+    echo "differs ($name): the saved $saved" >&2
+    exit 1
+  fi
+}
+
+hcheck floorplan floorplan app
+hcheck floorplan-json floorplan app status --json
+hcheck floorplan-path floorplan "$scratch/server/root/app"
+hcheck floorplan-no-folder floorplan ./no-such-folder
+hcheck floorplan-not-scanned floorplan "$scratch"
+hcheck floorplan-open floorplan app open
+hcheck floorplan-stop floorplan app stop
+hcheck floorplan-note floorplan app open -m hi
+hcheck floorplan-usage floorplan
+hcheck floorplan-bad floorplan app draw
+hcheck floorplan-unknown floorplan nosuch
+hcheck floorplan-on floorplan app --on nosuch
+hcheck floorplan-either floorplan app --backend "$CANOPY_API" --on x
+hcheck floorplan-origin floorplan app --backend http://x/y
+hcheck floorplan-down floorplan app --backend "$down"
+hcheck archify archify app
+hcheck archify-json archify app list --json
+hcheck archify-none archify plain
+hcheck archify-usage archify
+hcheck archify-type archify app make --type mindmap
+hcheck archify-type-rm archify app rm x --type erd
+hcheck archify-note-rm archify app rm x -m why
+hcheck archify-revise-note archify app revise architecture-app-20260101-090000
+hcheck archify-rm-tracked archify app rm architecture-app-20260101-090000
+hcheck archify-rm-unknown archify app rm nosuch
+hcheck archify-rm-none archify plain rm nosuch
+hcheck archify-rm-name archify app rm ../x
+hcheck archify-save-unknown archify app save nosuch
+hcheck archify-save-there archify app save architecture-app-20260101-090000 "$scratch/server.log"
+gcheck archify-save archify app save architecture-app-20260101-090000
+samepage archify-saved app.html "$mapped/.archify/architecture-app-20260101-090000/app.html"
+gcheck archify-save-to archify app save sequence-login-20260102-090000 pages/login.html
+samepage archify-saved-to pages/login.html "$mapped/.archify/sequence-login-20260102-090000/login.html"
+gcheck archify-save-again archify app save architecture-app-20260101-090000
+hcheck archify-unknown archify nosuch
+hcheck archify-down archify app --backend "$down"
+hcheck diagnosis diagnosis app
+hcheck diagnosis-json diagnosis app status --json
+hcheck diagnosis-none diagnosis plain
+hcheck diagnosis-usage diagnosis
+hcheck diagnosis-language diagnosis app run --language cobol
+hcheck diagnosis-no-wait diagnosis app --no-wait
+hcheck diagnosis-rm-tracked diagnosis app rm
+hcheck diagnosis-rm-none diagnosis plain rm
+hcheck diagnosis-save-none diagnosis plain save
+gcheck diagnosis-save diagnosis app save
+samepage diagnosis-saved repo.analysis.html "$mapped/.archify/diagnosis/analysis/repo.analysis.html"
+gcheck diagnosis-save-again diagnosis app save
+hcheck diagnosis-unknown diagnosis nosuch
+hcheck diagnosis-down diagnosis app --backend "$down"
+hcheck understand understand app
+hcheck understand-json understand app status --json
+hcheck understand-none understand plain
+hcheck understand-stop understand app stop
+hcheck understand-note understand app open -m hi
+hcheck understand-usage understand
+hcheck understand-bad understand app draw
+hcheck understand-unknown understand nosuch
+hcheck understand-on understand app --on nosuch
+hcheck understand-down understand app --backend "$down"

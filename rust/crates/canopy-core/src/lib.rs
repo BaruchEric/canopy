@@ -2,7 +2,10 @@
 //! docs/rust-port.md for what is ported and what is not yet). No HTTP here;
 //! the server and the CLI crates sit on top.
 
+pub mod archify;
+pub mod diagnosis;
 pub mod exec;
+pub mod floorplan;
 pub mod git;
 pub mod gitwrite;
 pub mod group;
@@ -24,5 +27,6 @@ pub mod sweep;
 pub mod touch;
 pub mod treelines;
 pub mod types;
+pub mod understand;
 pub mod version;
 pub mod work;
