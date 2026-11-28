@@ -129,13 +129,45 @@ async fn none() -> Json<Value> {
     Json(json!([]))
 }
 
-/// No evaluator runs here (`flows.hasEvaluator`).
-async fn verdict() -> Json<Value> {
-    Json(json!({ "ready": false }))
+/// `flows.hasEvaluator`: false without a gateway key. With one the Bun
+/// server's flows can ask the evaluator, and this port runs no flows yet.
+async fn verdict(State(s): State<Arc<AppState>>, method: Method, uri: Uri) -> Response {
+    if s.gates.evaluator {
+        return not_ported(method, uri).await;
+    }
+    Json(json!({ "ready": false })).into_response()
 }
 
-async fn pulse() -> Json<Value> {
-    Json(json!({ "pulses": [] }))
+/// The agents' pulses read the broker's cards; without a broker there are
+/// none, and with one this port does not read them yet.
+async fn pulse(State(s): State<Arc<AppState>>, method: Method, uri: Uri) -> Response {
+    if s.gates.chan {
+        return not_ported(method, uri).await;
+    }
+    Json(json!({ "pulses": [] })).into_response()
+}
+
+/// Whether `<config>/flows` holds a flow record, which the Bun server
+/// takes back at its start (`loadFlowRecords`), fleets with it.
+fn flow_records(config_dir: &str) -> bool {
+    std::fs::read_dir(format!("{config_dir}/flows")).is_ok_and(|d| {
+        d.flatten()
+            .any(|e| e.file_name().to_string_lossy().ends_with(".json"))
+    })
+}
+
+/// `GET /api/flows` and `/api/fleets`: none here, unless the config dir
+/// keeps flow records the Bun server would have taken back.
+async fn flows(State(s): State<Arc<AppState>>, method: Method, uri: Uri) -> Response {
+    if flow_records(&s.config_dir) {
+        return not_ported(method, uri).await;
+    }
+    Json(json!([])).into_response()
+}
+
+/// Any method but POST on a people path: the Bun server's 404.
+async fn not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))).into_response()
 }
 
 /// `clientKey`: an IPv4-mapped IPv6 address as the IPv4 it carries.
@@ -282,15 +314,15 @@ pub fn first_load() -> Router<Arc<AppState>> {
         .route("/api/verdict", read(verdict))
         .route("/api/agents/pulse", read(pulse))
         .route("/api/runs", read(runs))
-        .route("/api/flows", read(none))
-        .route("/api/fleets", read(none))
+        .route("/api/flows", read(flows))
+        .route("/api/fleets", read(flows))
         .route("/api/jobs", read(none))
         .route("/api/terms", read(terms))
         .route("/api/helpers", read(none))
         .route("/api/devices", read(devices))
         .route(
             "/api/people/at",
-            axum::routing::post(place).fallback(not_ported),
+            axum::routing::post(place).fallback(not_found),
         )
 }
 

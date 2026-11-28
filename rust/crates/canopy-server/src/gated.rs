@@ -102,6 +102,8 @@ pub struct Gates {
     pub tmux: bool,
     pub chan: bool,
     pub voice: bool,
+    /// a gateway key for the flows' evaluator (`hasGatewayKey` in core/jev.ts)
+    pub evaluator: bool,
 }
 
 impl Gates {
@@ -114,6 +116,7 @@ impl Gates {
             voice: set("CANOPY_VOICE_KEY")
                 || set("CANOPY_LIVE_KEY")
                 || set("CANOPY_TRANSCRIBE_URL"),
+            evaluator: set("AI_GATEWAY_API_KEY") || set("VERCEL_AI_GATEWAY_API_KEY"),
         }
     }
 }
@@ -238,6 +241,7 @@ mod tests {
             tmux: false,
             chan: false,
             voice: false,
+            evaluator: false,
         };
         let status = |m: Method, p: &str| answer(off, &m, p).map(|r| r.status().as_u16());
         assert_eq!(status(Method::GET, "/api/tasks"), Some(503));
@@ -255,6 +259,7 @@ mod tests {
             tmux: true,
             chan: true,
             voice: true,
+            evaluator: true,
         };
         for p in [
             "/api/tasks",

@@ -6,9 +6,10 @@
 //! The rest of the API answers 501;
 //! docs/rust-port.md has the ledger.
 //!
-//!   canopy-server [--port 7860] [--host 127.0.0.1] [--web dist/web] [dir]
+//!   canopy-server [--port 7870] [--host 127.0.0.1] [--web dist/web] [dir]
 //!
-//! It defaults to port 7860 so it never takes the Bun server's 7850.
+//! It defaults to port 7870, clear of the Bun server's 7850 and of its
+//! preview ports, 7860 to 7869.
 
 mod app;
 mod gate;
@@ -34,7 +35,7 @@ struct Args {
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut a = Args {
-        port: 7860,
+        port: 7870,
         host: "127.0.0.1".into(),
         web: format!("{}/dist/web", canopy_dir()),
         root: ".".into(),

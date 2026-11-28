@@ -382,6 +382,7 @@ mod tests {
             tmux: false,
             chan: false,
             voice: false,
+            evaluator: false,
         };
         serve_with(mode, origins, off).await
     }
@@ -584,15 +585,32 @@ mod tests {
     async fn what_this_port_cannot_read_yet_answers_501_not_an_empty_list() {
         let tmux = Gates {
             tmux: true,
-            chan: false,
+            chan: true,
             voice: false,
+            evaluator: true,
         };
         let s = serve_with(CallersMode::Log, &[], tmux).await;
         let addr = s.addr.as_str();
-        for path in ["/api/terms", "/api/terms/kept", "/api/runs?kept=1"] {
+        for path in [
+            "/api/terms",
+            "/api/terms/kept",
+            "/api/runs?kept=1",
+            "/api/verdict",
+            "/api/agents/pulse",
+        ] {
             let r = get(addr, path, 1 << 14).await;
             assert!(r.starts_with("HTTP/1.1 501"), "{path}: {r}");
         }
+        // flow records on disk would come back as the Bun server's flows
+        let flows = s._root.path().join("config/flows");
+        std::fs::create_dir_all(&flows).unwrap();
+        std::fs::write(flows.join("f-1.json"), "{}").unwrap();
+        for path in ["/api/flows", "/api/fleets"] {
+            let r = get(addr, path, 1 << 14).await;
+            assert!(r.starts_with("HTTP/1.1 501"), "{path}: {r}");
+        }
+        let r = get(addr, "/api/people/at", 1 << 14).await;
+        assert!(r.starts_with("HTTP/1.1 404"), "{r}");
         let r = get(addr, "/api/runs?kept=0", 1 << 14).await;
         assert!(r.starts_with("HTTP/1.1 200"), "{r}");
     }
