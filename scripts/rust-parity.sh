@@ -12,6 +12,17 @@
 # built with pinned names and dates so their commit hashes match, and each
 # step runs on both copies in turn, the scratch path masked.
 #
+# Help: every verb's --help, and help <verb>, read from the same help.ts.
+#
+# The backend verbs (note, awake, issues, pr, prs) talk to a scratch Bun
+# server this script starts on a free port with its own config dir, and to
+# nothing else: CANOPY_API, CANOPY_TOKEN and CANOPY_BACKEND are cleared
+# first, so a canopy shell's settings never point either CLI at a real
+# backend. Only calls that change nothing outside that server run: notes
+# on its own store, keep awake's status (never a new mode), and pr, pr
+# rebase with a run id that does not exist. A note's id, which each side
+# mints, is masked.
+#
 # Both run against a scratch config dir, so nothing under ~/.config/canopy
 # is read or written.
 #
@@ -20,14 +31,20 @@
 # CANOPY_PARITY_KEEP=1 keeps the scratch dir, with each step's two outputs
 # (ts.<name>, rs.<name>), and says where it is.
 set -euo pipefail
+unset CANOPY_API CANOPY_TOKEN CANOPY_BACKEND
 here=$(cd "$(dirname "$0")/.." && pwd)
 dir=${1:-$(dirname "$here")}
 scratch=$(mktemp -d)
-if [ -n "${CANOPY_PARITY_KEEP:-}" ]; then
-  trap 'echo "kept: $scratch"' EXIT
-else
-  trap 'rm -rf "$scratch"' EXIT
-fi
+server=""
+cleanup() {
+  if [ -n "$server" ]; then kill "$server" 2>/dev/null || true; fi
+  if [ -n "${CANOPY_PARITY_KEEP:-}" ]; then
+    echo "kept: $scratch"
+  else
+    rm -rf "$scratch"
+  fi
+}
+trap cleanup EXIT
 real=$(cd "$scratch" && pwd -P)
 export CANOPY_CONFIG_DIR="$scratch/config" NO_COLOR=1
 
@@ -62,6 +79,16 @@ check status status "$dir"
 check bare "$dir"
 check version --version
 check missing tree "$scratch/no-such-folder"
+
+# ---- help, for every verb index.ts knows ----
+
+check help help
+check help-bare --help
+verbs=$(awk '/export const COMMANDS = new Set\(\[/{f=1;next} f&&/\]\);/{exit} f' "$here/src/cli/index.ts" | grep -o '"[^"]*"' | tr -d '"')
+for v in $verbs; do
+  check "help-of-$v" "$v" --help
+  check "help-for-$v" help "$v"
+done
 
 # ---- the git verbs, on scratch repos ----
 
@@ -132,3 +159,87 @@ both 'git clone -q origin.git mac && printf "a\nb\nnew line\nc\n" >mac/f.txt && 
   echo k >work/k.txt && git -C work add k.txt && git -C work commit -q -m "work after"'
 gcheck push-stale push work
 gcheck push-drop-stale push work --drop-stale
+
+# ---- the backend verbs, against a scratch server ----
+
+bun=$(command -v bun)
+port=$("$bun" -e 'const s = Bun.serve({ port: 0, fetch: () => new Response() }); console.log(s.port); s.stop(true);')
+mkdir -p "$scratch/server/root" "$scratch/server/home"
+env -i HOME="$scratch/server/home" PATH="$(dirname "$bun"):/usr/local/bin:/usr/bin:/bin" SHELL=/bin/bash LANG=C.UTF-8 \
+  CANOPY_CONFIG_DIR="$scratch/server/config" CANOPY_LOOPBACK_AUTH=1 CANOPY_PREVIEW_PORTS=0 CANOPY_NO_DESKTOP=1 \
+  CANOPY_AGENT_SCAN=0 CANOPY_TAILCHAN_URL=off CANOPY_TMUX=0 \
+  "$bun" "$ts" ui "$scratch/server/root" --port "$port" --no-open >"$scratch/server.log" 2>&1 &
+server=$!
+for _ in $(seq 1 60); do
+  if curl -sf -o /dev/null "http://127.0.0.1:$port/api/notes"; then break; fi
+  sleep 0.5
+done
+if ! curl -sf -o /dev/null "http://127.0.0.1:$port/api/notes"; then
+  echo "the scratch server did not come up:" >&2
+  tail -20 "$scratch/server.log" >&2
+  exit 1
+fi
+export CANOPY_API="http://127.0.0.1:$port"
+down="http://127.0.0.1:1"
+# a reminder months away, so its words hold still between the two runs and
+# the backend never delivers it mid-check
+at="$(($(date +%Y) + 1))-06-01 09:00"
+
+# hcheck <name> <args...> - both CLIs against the scratch server, stdout and
+# stderr kept apart, the note ids masked. An argument @id is the id that
+# side's own `hcheck note-add` printed.
+hcheck() {
+  local name=$1 side out a code
+  shift
+  for side in ts rs; do
+    local args=()
+    for a in "$@"; do
+      if [ "$a" = @id ]; then a=$(cat "$scratch/$side.id"); fi
+      args+=("$a")
+    done
+    out="$scratch/$side.$name"
+    if [ "$side" = ts ]; then
+      bun "$ts" "${args[@]}" >"$out.1" 2>"$out.2" && code=0 || code=$?
+    else
+      "$rs" "${args[@]}" >"$out.1" 2>"$out.2" && code=0 || code=$?
+    fi
+    if [ "$name" = note-add ]; then awk 'NR==1{print $1}' "$out.1" >"$scratch/$side.id"; fi
+    { cat "$out.1"; echo "--- stderr"; cat "$out.2"; echo "--- exit $code"; } >"$out"
+  done
+  sed -E -i.bak 's/n-[a-z2-7]{8}/<note>/g' "$scratch/ts.$name" "$scratch/rs.$name"
+  same "$name" "$scratch/ts.$name" "$scratch/rs.$name" "$*"
+}
+
+hcheck notes-none note list
+hcheck note-add note add "pick up  the
+parts"
+hcheck note-add-repo note add "call the bank" --at "$at" --repo nosuch
+hcheck note-add-at note add "call the bank" --at "$at"
+(export TZ=Asia/Tokyo && hcheck note-add-tokyo notes add "in tokyo" --at "$at")
+hcheck notes note list
+hcheck note-done note done @id
+hcheck notes-all note list --all
+hcheck note-delete note rm @id
+hcheck note-add-usage note add
+hcheck note-done-usage note done
+hcheck note-list-usage note list --at "in 5m"
+hcheck note-unknown note done n-zzzzzzzz
+hcheck note-origin note list --backend http://x/y
+hcheck note-down note list --backend "$down"
+hcheck note-token note list --token bogus
+hcheck awake awake
+hcheck awake-status awake status --token bogus
+hcheck awake-usage awake sometimes
+hcheck awake-down awake --backend "$down"
+hcheck issues issues
+hcheck issues-repo issues web/none --needs-you
+hcheck issues-usage issues a b
+hcheck issues-down issues --backend "$down"
+hcheck prs prs
+hcheck prs-repo prs tally
+hcheck prs-usage prs a b
+hcheck pr-usage pr
+hcheck pr-unknown pr nosuch-run --draft
+hcheck pr-rebase-unknown pr rebase nosuch-run
+hcheck pr-rebase-usage pr rebase
+hcheck pr-down pr rebase x --backend "$down"

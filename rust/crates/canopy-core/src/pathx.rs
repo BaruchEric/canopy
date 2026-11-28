@@ -160,6 +160,24 @@ pub fn js_trim_end(s: &str) -> &str {
     s.trim_end_matches(js_ws)
 }
 
+/// `s.replace(/\s+/g, " ")`: each run of JavaScript whitespace as one space.
+pub fn js_squash_ws(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_ws = false;
+    for c in s.chars() {
+        if js_ws(c) {
+            if !in_ws {
+                out.push(' ');
+            }
+            in_ws = true;
+        } else {
+            out.push(c);
+            in_ws = false;
+        }
+    }
+    out
+}
+
 /// A regex class for JavaScript's `\s`, to splice into a pattern.
 pub const JS_S: &str = r"[[\s\x{FEFF}]&&[^\x{85}]]";
 
@@ -220,5 +238,10 @@ mod tests {
         let re = regex::Regex::new(&format!("^{JS_S}+$")).unwrap();
         assert!(re.is_match(" \t\u{feff}"));
         assert!(!re.is_match("\u{85}"));
+        assert_eq!(
+            js_squash_ws("two  words\nand\u{a0}\u{feff}a line "),
+            "two words and a line "
+        );
+        assert_eq!(js_squash_ws("a\u{85}b"), "a\u{85}b");
     }
 }

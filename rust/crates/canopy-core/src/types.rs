@@ -255,6 +255,51 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Keep awake's modes (`AWAKE_MODES`).
+pub const AWAKE_MODES: &[&str] = &["off", "always", "working"];
+
+/// Where keep awake stands on a backend (`AwakeInfo`, `GET /api/awake`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct AwakeInfo {
+    pub mode: String,
+    /// a caffeinate or systemd-inhibit child is alive
+    pub holding: bool,
+    /// this machine can hold itself awake
+    pub available: bool,
+    /// why it cannot, or why the last hold ended; null when all is well
+    pub why: Option<String>,
+    /// agents working on this machine, as last counted
+    pub working: f64,
+}
+
+/// `awakeWords()`: where keep awake stands in a few words, "holding the
+/// machine awake", "not holding, 0 agents working", "unavailable: ...".
+pub fn awake_words(info: &AwakeInfo) -> String {
+    let why = info.why.as_deref().filter(|w| !w.is_empty());
+    if !info.available {
+        return format!(
+            "unavailable: {}",
+            info.why
+                .as_deref()
+                .unwrap_or("this machine cannot hold itself awake")
+        );
+    }
+    let s = if info.working == 1.0 { "" } else { "s" };
+    let agents = format!("{} agent{s} working", info.working);
+    let hold = if info.holding {
+        "holding the machine awake".to_string()
+    } else if info.mode == "working" {
+        format!("not holding, {agents}")
+    } else {
+        "not holding".to_string()
+    };
+    match why {
+        Some(w) => format!("{hold} ({w})"),
+        None => hold,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,6 +355,53 @@ mod tests {
                 host: "wsl".into(),
                 path: "/x".into()
             }
+        );
+    }
+
+    #[test]
+    fn awake_words_say_where_keep_awake_stands() {
+        let info = |mode: &str, holding: bool, available: bool, why: Option<&str>, working: f64| {
+            AwakeInfo {
+                mode: mode.into(),
+                holding,
+                available,
+                why: why.map(String::from),
+                working,
+            }
+        };
+        assert_eq!(
+            awake_words(&info("always", true, true, None, 0.0)),
+            "holding the machine awake"
+        );
+        assert_eq!(
+            awake_words(&info("working", false, true, None, 0.0)),
+            "not holding, 0 agents working"
+        );
+        assert_eq!(
+            awake_words(&info("working", false, true, None, 1.0)),
+            "not holding, 1 agent working"
+        );
+        assert_eq!(
+            awake_words(&info("off", false, true, None, 3.0)),
+            "not holding"
+        );
+        assert_eq!(
+            awake_words(&info("always", false, true, Some("caffeinate exited"), 0.0)),
+            "not holding (caffeinate exited)"
+        );
+        assert_eq!(
+            awake_words(&info(
+                "always",
+                false,
+                false,
+                Some("running in a container"),
+                0.0
+            )),
+            "unavailable: running in a container"
+        );
+        assert_eq!(
+            awake_words(&info("always", false, false, None, 0.0)),
+            "unavailable: this machine cannot hold itself awake"
         );
     }
 

@@ -25,7 +25,7 @@ One developer (the owner) across a laptop, an always-on Linux backend, a tablet 
 ## Stack and versions
 
 - Bun 1.4.2 runs the server, the CLI and the tests (`bun test`).
-- Rust 1.100 (edition 2024) for the port in `rust/`, a Cargo workspace: tokio 1.54.1, axum 0.8.9, serde_json 1.0.154, regex 1.13.2, rustix 1.1.6. It runs beside the TypeScript until a cutover; `docs/rust-port.md` is its ledger.
+- Rust 1.100 (edition 2024) for the port in `rust/`, a Cargo workspace: tokio 1.54.1, axum 0.8.9, serde_json 1.0.154, regex 1.13.2, rustix 1.1.6, reqwest 0.13.5 on rustls 0.23.46 with ring (the CLI's calls to a backend), jiff 1.0.3 (dates as Bun prints them). It runs beside the TypeScript until a cutover; `docs/rust-port.md` is its ledger.
 - Docker uses Bun 1.4.4, pinned by digest in `Dockerfile` to the base the running shells were built on; changing it requires a planned shells restart.
 - TypeScript 7.0.2, `strict` in both `tsconfig.json` and `ui/tsconfig.json`.
 - React 19.3.1, Zustand 5.0.16, Vite 8.3.5 with @vitejs/plugin-react 6.1.2 for the SPA; a second Vite build makes the service worker (`ui/sw.ts`) into `dist/web/sw.js`.

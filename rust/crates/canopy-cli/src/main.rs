@@ -1,12 +1,24 @@
 //! `canopy-rs`, the Rust port of the `canopy` CLI (`src/cli/index.ts`).
 //!
 //! It answers `canopy [dir]`, `canopy tree`, `canopy status`, `canopy
-//! version`, `canopy commit`, `canopy push` and `canopy pull` itself, with
-//! output byte for byte the TypeScript CLI's. Every other verb, and any of
-//! these with a flag the port does not read yet (`--help`, `--token`,
-//! `--backend`, `commit --ai`, `push test|ls`), still goes to the TypeScript
-//! CLI (`bun bin/canopy.ts`) until it is ported, so the binary can stand in
-//! for `canopy` today. docs/rust-port.md has the ledger.
+//! version`, `canopy commit`, `canopy push` and `canopy pull` itself, the
+//! backend verbs `note`, `awake`, `issues`, `pr` and `prs` over HTTP, and
+//! every verb's `--help`, with output byte for byte the TypeScript CLI's.
+//! `--token` is read for every verb, as index.ts reads it. Every other
+//! verb, and a local verb with a flag the port does not read yet
+//! (`--backend` on a local verb, `commit --ai`, `push test|ls`), still goes
+//! to the TypeScript CLI (`bun bin/canopy.ts`) until it is ported, so the
+//! binary can stand in for `canopy` today. docs/rust-port.md has the
+//! ledger.
+
+mod api;
+mod ask;
+mod awake;
+mod help;
+mod issues;
+mod jsdate;
+mod notes;
+mod prs;
 
 use canopy_core::git::{StatusOptions, get_status};
 use canopy_core::gitwrite::{GitError, commit, drop_stale_copies, pull, push};
@@ -110,8 +122,24 @@ enum Plan {
     Pull {
         repo: Option<String>,
     },
+    /// One verb's lines from the help, or the whole help when it has none
+    /// or no verb was named.
+    Help {
+        verb: Option<String>,
+    },
+    /// A verb that is a call to a backend, with the run's `--token` and the
+    /// `--backend` it was pointed at.
+    Http {
+        verb: String,
+        rest: Vec<String>,
+        token: Option<String>,
+        home_base: Option<String>,
+    },
     Delegate,
 }
+
+/// The verbs canopy-rs sends to a backend itself.
+const HTTP_VERBS: &[&str] = &["note", "notes", "awake", "issues", "pr", "prs"];
 
 /// `flag()` in index.ts: take a bare flag out of the arguments.
 fn flag(args: &mut Vec<String>, name: &str) -> bool {
@@ -152,11 +180,42 @@ fn plan(args: &[String]) -> Plan {
         _ => (None, args),
     };
     let flagged = |a: &[String]| a.iter().any(|w| w.starts_with('-'));
-    // a verb's help, a caller token or another backend: only the TypeScript
-    // CLI knows those yet
-    if (cmd.is_some() && asks_help(rest)) || rest.iter().any(|a| a == "--token" || a == "--backend")
+    // --help or -h after a verb prints its lines and runs nothing; library
+    // has its own help
+    if let Some(c) = cmd
+        && c != "library"
+        && asks_help(rest)
     {
+        return Plan::Help {
+            verb: Some(c.to_string()),
+        };
+    }
+    // --token is every verb's except source's, which carries a Forgejo token
+    if matches!(cmd, Some("source" | "sources")) {
         return Plan::Delegate;
+    }
+    let mut stripped = rest.to_vec();
+    let token = opt(&mut stripped, "--token");
+    let rest = stripped.as_slice();
+    let pointed = rest.iter().position(|a| a == "--backend");
+    match cmd {
+        Some("help" | "--help" | "-h") => {
+            return Plan::Help {
+                verb: rest.first().cloned(),
+            };
+        }
+        Some(verb) if HTTP_VERBS.contains(&verb) => {
+            return Plan::Http {
+                verb: verb.to_string(),
+                rest: rest.to_vec(),
+                token,
+                home_base: pointed.and_then(|i| rest.get(i + 1).cloned()),
+            };
+        }
+        // another backend for a local verb: only the TypeScript CLI knows
+        // that yet
+        _ if pointed.is_some() => return Plan::Delegate,
+        _ => {}
     }
     match cmd {
         None | Some("tree") | Some("status") if rest.len() <= 1 && !flagged(rest) => Plan::Tree {
@@ -331,6 +390,31 @@ fn finish(r: Result<(), String>) -> ExitCode {
     }
 }
 
+/// A backend verb's lines on stdout, or its failure as `finish` says it.
+fn finish_lines(r: Result<Vec<String>, String>) -> ExitCode {
+    finish(r.map(|lines| {
+        for line in lines {
+            println!("{line}");
+        }
+    }))
+}
+
+async fn http_verb(
+    verb: &str,
+    rest: Vec<String>,
+    token: Option<String>,
+    home_base: Option<String>,
+) -> ExitCode {
+    let client = ask::Client::new(api::Caller::from_env(token, home_base));
+    let caller = client.caller.clone();
+    finish_lines(match verb {
+        "note" | "notes" => notes::note_cmd(rest, &caller, &client, now_ms() as f64).await,
+        "awake" => awake::awake_cmd(rest, &caller, &client).await,
+        "issues" => issues::issues_cmd(rest, &caller, &client).await,
+        _ => prs::pr_cmd(verb, rest, &caller, &client).await,
+    })
+}
+
 /// Hand the arguments to the TypeScript CLI and take its exit code.
 fn delegate(args: &[String]) -> ExitCode {
     let entry = std::env::var("CANOPY_TS_CLI")
@@ -362,6 +446,17 @@ async fn main() -> ExitCode {
         } => finish(commit_cmd(repo, message, all, push).await),
         Plan::Push { repo, drop_stale } => finish(push_cmd(repo, drop_stale).await),
         Plan::Pull { repo } => finish(pull_cmd(repo).await),
+        Plan::Help { verb } => {
+            let text = verb.as_deref().and_then(help::verb_help);
+            println!("{}", text.unwrap_or_else(|| help::help(use_color())));
+            ExitCode::SUCCESS
+        }
+        Plan::Http {
+            verb,
+            rest,
+            token,
+            home_base,
+        } => http_verb(&verb, rest, token, home_base).await,
     }
 }
 
@@ -405,12 +500,93 @@ mod tests {
         );
         assert_eq!(plan(&args(&["-V"])), Plan::Version);
         assert_eq!(plan(&args(&["version"])), Plan::Version);
-        assert_eq!(plan(&args(&["tree", "--help"])), Plan::Delegate);
-        assert_eq!(plan(&args(&["--token", "x"])), Plan::Delegate);
+        assert_eq!(
+            plan(&args(&["--token", "x"])),
+            Plan::Tree {
+                dir: ".".into(),
+                dirty_only: false
+            },
+            "the token goes, as index.ts takes it"
+        );
         assert_eq!(plan(&args(&["tree", "a", "b"])), Plan::Delegate);
         assert_eq!(plan(&args(&["runs"])), Plan::Delegate);
-        assert_eq!(plan(&args(&["help"])), Plan::Delegate);
+        assert_eq!(plan(&args(&["runs", "--token", "t"])), Plan::Delegate);
         assert_eq!(plan(&args(&["version", "--json"])), Plan::Delegate);
+        assert_eq!(
+            plan(&args(&["tree", "--backend", "http://x"])),
+            Plan::Delegate
+        );
+    }
+
+    #[test]
+    fn help_is_answered_here_for_every_verb_but_library() {
+        let help = |v: Option<&str>| Plan::Help {
+            verb: v.map(String::from),
+        };
+        assert_eq!(plan(&args(&["tree", "--help"])), help(Some("tree")));
+        assert_eq!(plan(&args(&["runs", "start", "-h"])), help(Some("runs")));
+        assert_eq!(
+            plan(&args(&["run", "x", "--", "-h"])),
+            Plan::Delegate,
+            "after -- it belongs to another program"
+        );
+        assert_eq!(plan(&args(&["library", "--help"])), Plan::Delegate);
+        assert_eq!(plan(&args(&["help"])), help(None));
+        assert_eq!(plan(&args(&["--help"])), help(None));
+        assert_eq!(plan(&args(&["help", "note"])), help(Some("note")));
+        assert_eq!(
+            plan(&args(&["help", "--token", "t", "pr"])),
+            help(Some("pr"))
+        );
+        assert_eq!(plan(&args(&["help", "--help"])), help(Some("help")));
+        assert_eq!(
+            plan(&args(&["source", "add", "--help"])),
+            help(Some("source"))
+        );
+    }
+
+    #[test]
+    fn a_backend_verb_carries_the_token_and_the_backend_it_was_pointed_at() {
+        assert_eq!(
+            plan(&args(&[
+                "note",
+                "add",
+                "x",
+                "--token",
+                "t",
+                "--backend",
+                "http://b:1"
+            ])),
+            Plan::Http {
+                verb: "note".into(),
+                rest: args(&["add", "x", "--backend", "http://b:1"]),
+                token: Some("t".into()),
+                home_base: Some("http://b:1".into()),
+            }
+        );
+        assert_eq!(
+            plan(&args(&["prs", "--backend"])),
+            Plan::Http {
+                verb: "prs".into(),
+                rest: args(&["--backend"]),
+                token: None,
+                home_base: None,
+            }
+        );
+        assert_eq!(
+            plan(&args(&["awake", "--token"])),
+            Plan::Http {
+                verb: "awake".into(),
+                rest: args(&["--token"]),
+                token: None,
+                home_base: None,
+            },
+            "a --token with nothing after it stays, as opt() leaves it"
+        );
+        assert_eq!(
+            plan(&args(&["sources", "add", "--token", "f"])),
+            Plan::Delegate
+        );
     }
 
     #[test]
@@ -441,9 +617,19 @@ mod tests {
         );
         assert_eq!(plan(&args(&["commit"])), commit(None, None, false, false));
         assert_eq!(plan(&args(&["commit", "r", "--ai"])), Plan::Delegate);
-        assert_eq!(plan(&args(&["commit", "r", "-m", "-h"])), Plan::Delegate);
+        assert_eq!(
+            plan(&args(&["commit", "r", "-m", "-h"])),
+            Plan::Help {
+                verb: Some("commit".into())
+            },
+            "index.ts asks for help before it reads -m"
+        );
         assert_eq!(
             plan(&args(&["commit", "r", "--token", "t"])),
+            commit(Some("r"), None, false, false)
+        );
+        assert_eq!(
+            plan(&args(&["commit", "r", "--backend", "http://b"])),
             Plan::Delegate
         );
         assert_eq!(plan(&args(&["commit", "r", "-m"])), Plan::Delegate);
@@ -475,7 +661,12 @@ mod tests {
             }
         );
         assert_eq!(plan(&args(&["pull", "r", "--rebase"])), Plan::Delegate);
-        assert_eq!(plan(&args(&["pull", "--help"])), Plan::Delegate);
+        assert_eq!(
+            plan(&args(&["pull", "--help"])),
+            Plan::Help {
+                verb: Some("pull".into())
+            }
+        );
     }
 
     #[test]
