@@ -124,7 +124,7 @@ pub fn history_answer(
         Ok(_) => Answer::NotPorted,
         Err(reason) => Answer::Body(
             StatusCode::OK,
-            json!({ "available": false, "reason": reason, "fetchedAt": canopy_core::screenlayouts::js_num(now) }),
+            json!({ "available": false, "reason": reason, "fetchedAt": canopy_core::js::num(now) }),
         ),
     }
 }
@@ -419,13 +419,7 @@ async fn kit(method: Method, uri: Uri) -> Response {
 
 /* ---------- worktrees ---------- */
 
-/// Whether a folder lists any entry ending in `.json`.
-fn has_json(dir: &str) -> bool {
-    std::fs::read_dir(dir).is_ok_and(|d| {
-        d.flatten()
-            .any(|e| e.file_name().to_string_lossy().ends_with(".json"))
-    })
-}
+use crate::routes::has_json;
 
 /// Whether the worktrees root holds anything the pool or the landing queue
 /// would list: a folder under a repo's key (a run's tree, an orphan or a
@@ -502,7 +496,7 @@ pub fn worktrees_answer(raw: &Value, config_dir: &str, repos: &[Repo]) -> Answer
     let free = free_bytes(&root).unwrap_or(0.0);
     Answer::Body(
         StatusCode::OK,
-        json!({ "root": root, "free": canopy_core::screenlayouts::js_num(free), "repos": out }),
+        json!({ "root": root, "free": canopy_core::js::num(free), "repos": out }),
     )
 }
 

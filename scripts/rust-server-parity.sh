@@ -12,10 +12,14 @@
 # not there, clips (pruned, pinned, a file, a duplicate, a bad source), a
 # secrets key with a pin but no remote, the ranger's settings, record and
 # wakes with Claude's settings giving the Telegram plugin to every session,
-# an empty worktrees root and a gates file with a warm count. HOME holds no
-# kit.json. Both servers run under env -i with a scratch HOME, CANOPY_TMUX=0
-# and CANOPY_TAILCHAN_URL=off, so neither reads ~/.config/canopy, starts a
-# shell or dials a broker, and neither takes port 7850.
+# an empty worktrees root and a gates file with a warm count, the
+# incubator's improvements list, the landing queue's notices, work items
+# (open, closed, broken and misnamed) and kept worktrees of one repo on
+# record, with an unrecorded detached one beside them. HOME holds no
+# kit.json. Both servers run under env -i with a scratch HOME,
+# CANOPY_TMUX=0 and CANOPY_TAILCHAN_URL=off, so neither reads
+# ~/.config/canopy, starts a shell or dials a broker, and neither takes
+# port 7850.
 #
 # Answers are compared as JSON with keys sorted, millisecond clocks masked,
 # the runtime field of /api/about masked, a volume's free bytes masked (the
@@ -118,7 +122,57 @@ cat >"$S/home/.claude/settings.json" <<'JSON'
 JSON
 mkdir -p "$S/root/app/.canopy"
 printf '{"gates": [{"name": "t", "run": " true "}], "warm": 2}\n' >"$S/root/app/.canopy/gates.json"
+mkdir -p "$S/seed/incubator" "$S/seed/landing" "$S/seed/work"
+cat >"$S/seed/incubator/improvements.json" <<'JSON'
+{"entries": {
+  "scout-reads-npm": {"key": "scout-reads-npm", "lesson": "  Scout reads\n release dates   on npm. ", "file": "lib/workflows/scout.md", "edit": "+ a line",
+    "from": [{"id": "sp_1", "title": "One", "at": 1764300000000}, {"id": "sp_2", "title": "Two", "at": 1764300001000.0}, {"id": "sp_3", "at": 5}]},
+  "clarify-asks-less": {"key": "clarify-asks-less", "lesson": "Ask less.", "file": "../x.md",
+    "from": [{"id": "sp_1", "title": "One", "at": 1764300000000}], "decided": {"accept": false, "at": 1764300002000, "count": 1}},
+  "comes-back": {"key": "comes-back", "lesson": "Back again.", "decided": {"accept": true, "at": 1, "count": 1},
+    "from": [{"id": "a", "title": "A", "at": 1}, {"id": "b", "title": "B", "at": 2}, {"id": "c", "title": "C", "at": 3}, {"id": "d", "title": "D", "at": 4}]},
+  "b-tie": {"key": "b-tie", "lesson": "b", "from": [{"id": "x", "title": "X", "at": 7}]},
+  "a-tie": {"key": "a-tie", "lesson": "a", "from": [{"id": "x", "title": "X", "at": 7}]},
+  "123": {"key": "123", "lesson": "a number", "from": []},
+  "Bad Key": {"key": "Bad Key", "lesson": "l", "from": []},
+  "mismatch": {"key": "other", "lesson": "l", "from": []}}}
+JSON
+cat >"$S/seed/landing/notices.json" <<'JSON'
+[{"id": "n1", "at": 1764300000000, "repoId": "app", "text": "landed run/a on its own"},
+ {"id": "n2", "at": 1764300009000.0, "repoId": "web", "text": "held back"},
+ {"at": 5, "text": "no id"}, "junk"]
+JSON
+cat >"$S/seed/work/w-testaaaa.json" <<'JSON'
+{"id": "w-testaaaa", "title": "open on app", "repos": ["app"], "state": "open", "from": {"kind": "note"}, "runs": ["r-gone"], "branches": ["b-gone"], "prs": [], "events": [], "notes": [], "createdAt": 1764300000000, "updatedAt": 1764300000000}
+JSON
+cat >"$S/seed/work/w-testbbbb.json" <<'JSON'
+{"id": "w-testbbbb", "title": "dropped on web", "repos": ["web"], "state": "dropped", "from": {"kind": "issue", "service": "linear", "key": "K-1"}, "runs": [], "branches": [], "prs": [{"number": 4, "url": "https://example.com/pr/4"}], "events": ["e1"], "notes": [{"at": 1764300009000, "by": "eric", "text": "not worth it"}], "createdAt": 1764300000000, "updatedAt": 1764300009000, "closedAt": 1764300009000, "reason": "not worth it"}
+JSON
+cat >"$S/seed/work/w-testcccc.json" <<'JSON'
+{"id": "w-testcccc", "title": "open on both", "7": "an index key", "repos": ["app", "web"], "state": "open", "from": {"kind": "trigger", "event": "e2"}, "runs": [], "branches": [], "prs": [], "events": [], "notes": [], "createdAt": 1764300000000.0, "updatedAt": 1764300005000, "extra": {"b": 2.50, "a": 1.0}}
+JSON
+echo '{' >"$S/seed/work/broken.json"
+sed 's/w-testcccc/w-testeeee/' "$S/seed/work/w-testcccc.json" >"$S/seed/work/w-testdddd.json"
 for side in bun rs; do cp -R "$S/seed" "$S/config-$side"; done
+# kept worktrees of app in each side's own trees folder: one on record, one
+# on record as failed that follows main and is synced to it, and a detached
+# one with no record; a branch is checked out once per side, hence -f
+key=$(python3 -c 'import hashlib, os, sys; p = sys.argv[1]; print((os.path.basename(p) or "repo") + "-" + hashlib.sha1(p.encode()).hexdigest()[:8])' "$S/root/app")
+main_rev=$(git -C "$S/root/app" rev-parse main)
+git -C "$S/root/app" branch feat/x
+git -C "$S/root/app" branch fix
+for side in bun rs; do
+  trees="$S/config-$side/trees/$key"
+  git -C "$S/root/app" worktree add -q -f "$trees/feat-x" feat/x
+  git -C "$S/root/app" worktree add -q -f "$trees/fix" fix
+  git -C "$S/root/app" worktree add -q --detach "$trees/scratch" main
+  echo dirty >"$trees/fix/new.txt"
+  cat >"$trees/trees.json" <<JSON
+{"trees": [{"slug": "feat-x", "branch": "feat/x", "base": "main", "port": 7901, "madeAt": 1764300000000, "caches": false, "state": "ready", "sync": false},
+  {"slug": "fix", "branch": "fix", "base": "main", "port": 7.5, "madeAt": 1764300000000.0, "state": "failed", "why": "setup exited 1", "stopped": "", "sync": true, "syncedTo": "$main_rev", "extra": 1},
+  {"slug": "nameless"}]}
+JSON
+done
 
 free() { "$bun" -e 'const s = Bun.serve({ port: 0, fetch: () => new Response() }); console.log(s.port); s.stop(true);'; }
 bp=$(free)
@@ -165,7 +219,7 @@ sleep 5
 routes="backends tree auth runs flows fleets agents helpers verdict jobs terms client devices terms/kept
   workspaces launchers tasks tailchan history peers registry asks incubator/stages incubator/advice incubator
   ranger agents/pulse health capacity kit landing trees prs triggers people work clips notes secrets layouts
-  about worktrees voice sources
+  about worktrees voice sources work?repo=app work?state=dropped work?state=nope work?repo=nope
   clips?ids=c-dddddddd,c-bbbbbbbb,nope history?window=90d&refresh=1"
 same=0
 unported=()

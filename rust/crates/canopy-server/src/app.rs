@@ -356,6 +356,7 @@ pub fn router(state: Arc<AppState>, keeper: Arc<Gatekeeper>, web: &str) -> Route
         .route("/api/events", get(events))
         .merge(first_load())
         .merge(crate::settings_reads::routes())
+        .merge(crate::work_reads::routes())
         .route("/api/{*rest}", axum::routing::any(gated::fallback))
         .fallback_service(page)
         .with_state(state)

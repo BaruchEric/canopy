@@ -96,9 +96,7 @@ pub fn parse_gates_file(text: &str) -> Result<Value, GatesError> {
     let warm = match raw.get("warm") {
         None => None,
         Some(w) => match w.as_f64() {
-            Some(n) if n.fract() == 0.0 && (0.0..=WARM_MAX).contains(&n) => {
-                Some(crate::screenlayouts::js_num(n))
-            }
+            Some(n) if n.fract() == 0.0 && (0.0..=WARM_MAX).contains(&n) => Some(crate::js::num(n)),
             _ => {
                 return Err(bad(format!(
                     "{GATES_FILE}: warm must be a whole number from 0 to {WARM_MAX}"

@@ -14,9 +14,9 @@
 //! ASCII letters only, and the lookaheads are written out by hand, since
 //! the regex crate has none.
 
+use crate::js::num as js_num;
 use crate::js::to_fixed;
 use crate::pathx::{JS_S, js_len, js_squash_ws, js_trim, js_trim_end, js_ws};
-use crate::screenlayouts::js_num;
 use crate::store::js_number;
 use regex::Regex;
 use serde_json::{Map, Value, json};

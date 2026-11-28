@@ -147,13 +147,19 @@ async fn pulse(State(s): State<Arc<AppState>>, method: Method, uri: Uri) -> Resp
     Json(json!({ "pulses": [] })).into_response()
 }
 
-/// Whether `<config>/flows` holds a flow record, which the Bun server
-/// takes back at its start (`loadFlowRecords`), fleets with it.
-fn flow_records(config_dir: &str) -> bool {
-    std::fs::read_dir(format!("{config_dir}/flows")).is_ok_and(|d| {
+/// Whether a folder lists an entry ending in `.json`: a record some keeper
+/// of the Bun server's reads back at its start.
+pub(crate) fn has_json(dir: &str) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|d| {
         d.flatten()
             .any(|e| e.file_name().to_string_lossy().ends_with(".json"))
     })
+}
+
+/// Whether `<config>/flows` holds a flow record, which the Bun server
+/// takes back at its start (`loadFlowRecords`), fleets with it.
+fn flow_records(config_dir: &str) -> bool {
+    has_json(&format!("{config_dir}/flows"))
 }
 
 /// `GET /api/flows` and `/api/fleets`: none here, unless the config dir
