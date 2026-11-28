@@ -40,17 +40,20 @@ const DAY: f64 = 24.0 * HOUR;
 const MB: f64 = 1024.0 * 1024.0;
 const GB: f64 = 1024.0 * MB;
 
-/// `ageWord()`: "2h", "3d", "5m", "now".
+/// `ageWord()`: "now", "5m", "2h", "3d". `Math.max(0, NaN)` is NaN, which
+/// falls through to days. fr and the map section's verbs print ages with it
+/// too.
 pub fn age_word(ms: f64) -> String {
-    let age = if ms.is_nan() { f64::NAN } else { ms.max(0.0) };
+    let age = if ms.is_nan() { ms } else { ms.max(0.0) };
+    let js = canopy_core::store::js_number;
     if age < MINUTE {
         "now".into()
     } else if age < HOUR {
-        format!("{}m", (age / MINUTE).floor())
+        format!("{}m", js((age / MINUTE).floor()))
     } else if age < DAY {
-        format!("{}h", (age / HOUR).floor())
+        format!("{}h", js((age / HOUR).floor()))
     } else {
-        format!("{}d", canopy_core::store::js_number((age / DAY).floor()))
+        format!("{}d", js((age / DAY).floor()))
     }
 }
 

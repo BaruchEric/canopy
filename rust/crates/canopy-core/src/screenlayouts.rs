@@ -42,19 +42,7 @@ fn clamp(v: f64, min: f64, max: f64) -> f64 {
     v.max(min).min(max)
 }
 
-/// `Math.round`: halves go up, as JavaScript's do.
-fn js_round(v: f64) -> f64 {
-    (v + 0.5).floor()
-}
-
-/// A number as JavaScript would write it: whole numbers without a point.
-pub fn js_num(v: f64) -> Value {
-    if v.fract() == 0.0 && v.abs() < 9_007_199_254_740_992.0 {
-        json!(v as i64)
-    } else {
-        json!(v)
-    }
-}
+use crate::js::{num as js_num, round as js_round};
 
 fn halves(dir: &str, a: Value, b: Value) -> Value {
     json!({ "dir": dir, "at": 0.5, "a": a, "b": b })

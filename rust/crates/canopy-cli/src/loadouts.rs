@@ -193,10 +193,7 @@ pub fn loadout_lines(info: &Value) -> Vec<String> {
     out
 }
 
-/// `JSON.stringify(v, null, 2)`.
-fn pretty(v: &Value) -> String {
-    serde_json::to_string_pretty(v).unwrap_or_default()
-}
+use canopy_core::js::pretty;
 
 /// `loadoutsCommand()`.
 pub(crate) async fn loadouts_cmd(

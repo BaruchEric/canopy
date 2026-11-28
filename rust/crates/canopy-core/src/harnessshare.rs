@@ -15,11 +15,7 @@ pub const WEEKS: usize = 8;
 /// `HARNESS_SHARE_MAX`: Yegge's default warning line, in percent.
 pub const HARNESS_SHARE_MAX: f64 = 25.0;
 
-/// `Math.round()`: the nearer whole number, a half toward +∞.
-fn round(x: f64) -> f64 {
-    let f = x.floor();
-    if x - f >= 0.5 { f + 1.0 } else { f }
-}
+use crate::js::round;
 
 /// `pct()`: a share as a whole percent, a dash when nothing was spent.
 pub fn pct(share: Option<f64>) -> String {

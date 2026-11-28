@@ -71,6 +71,27 @@ impl Client {
         Client { http, caller }
     }
 
+    /// A request to `url` on the backend at `base`, with the caller's token
+    /// for that backend and no redirect followed. The verbs that send or
+    /// read something other than JSON (a clip's bytes, an event stream)
+    /// build theirs here, so every request carries the token the same way.
+    pub(crate) fn request(
+        &self,
+        method: Method,
+        base: &str,
+        url: &str,
+        timeout: Option<Duration>,
+    ) -> reqwest::RequestBuilder {
+        let mut req = self.http.request(method, url);
+        if let Some(t) = timeout {
+            req = req.timeout(t);
+        }
+        if let Some(token) = self.caller.caller_token(base, None) {
+            req = req.header("x-canopy-token", token);
+        }
+        req
+    }
+
     /// `ask(t, method, path, body)`.
     pub async fn ask(
         &self,
@@ -95,13 +116,7 @@ impl Client {
         let mut tried: Vec<String> = Vec::new();
         for url in &t.urls {
             let full = format!("{url}{path}");
-            let mut req = self
-                .http
-                .request(method.clone(), full.as_str())
-                .timeout(timeout);
-            if let Some(token) = self.caller.caller_token(url, None) {
-                req = req.header("x-canopy-token", token);
-            }
+            let mut req = self.request(method.clone(), url, &full, Some(timeout));
             if let Some(b) = body {
                 req = req
                     .header("content-type", "application/json")
@@ -157,14 +172,15 @@ impl Client {
     }
 }
 
-/// `out.error` as `new Error(out.error ?? fallback)` would read it.
-fn error_of(out: &Value) -> Option<String> {
+/// `out.error` as `new Error(out.error ?? fallback)` would read it: a
+/// string as it is, an array or object as `[object Object]`, anything else
+/// as a template prints it.
+pub(crate) fn error_of(out: &Value) -> Option<String> {
     match out.get("error")? {
         Value::Null => None,
         Value::String(s) => Some(s.clone()),
-        Value::Bool(b) => Some(b.to_string()),
-        Value::Number(n) => Some(n.to_string()),
         Value::Array(_) | Value::Object(_) => Some("[object Object]".into()),
+        other => Some(canopy_core::js::template(Some(other))),
     }
 }
 
@@ -194,6 +210,24 @@ pub(crate) trait Ask {
 
     /// `askText()`: a GET whose answer is text.
     async fn ask_text(&self, t: &Target, path: &str) -> Result<String, AskError>;
+
+    /// `askText(t, path, timeoutMs)`: `ask_text` with a timeout other than
+    /// its 8 seconds (a minute for a page, two for an analysis). A fake has
+    /// no clock, so it answers as `ask_text` does.
+    async fn ask_text_within(
+        &self,
+        t: &Target,
+        path: &str,
+        _timeout: Duration,
+    ) -> Result<String, AskError> {
+        self.ask_text(t, path).await
+    }
+
+    /// The network client behind this, for a request that is not one
+    /// answer (an event stream). A fake has none.
+    fn client(&self) -> Option<&Client> {
+        None
+    }
 }
 
 impl Ask for Client {
@@ -221,6 +255,19 @@ impl Ask for Client {
     async fn ask_text(&self, t: &Target, path: &str) -> Result<String, AskError> {
         Client::ask_text(self, t, path).await
     }
+
+    async fn ask_text_within(
+        &self,
+        t: &Target,
+        path: &str,
+        timeout: Duration,
+    ) -> Result<String, AskError> {
+        Client::ask_text_within(self, t, path, timeout).await
+    }
+
+    fn client(&self) -> Option<&Client> {
+        Some(self)
+    }
 }
 
 /// `body.key` when the body is a JSON object and the key a string.
@@ -233,13 +280,20 @@ impl Client {
     /// answer's body as it is. Its refusals are plain errors, not
     /// `Refused`, and only a string `error` counts.
     pub async fn ask_text(&self, t: &Target, path: &str) -> Result<String, AskError> {
+        self.ask_text_within(t, path, ASK_TIMEOUT).await
+    }
+
+    /// `ask_text` with its timeout given.
+    pub async fn ask_text_within(
+        &self,
+        t: &Target,
+        path: &str,
+        timeout: Duration,
+    ) -> Result<String, AskError> {
         let mut tried: Vec<String> = Vec::new();
         for url in &t.urls {
             let full = format!("{url}{path}");
-            let mut req = self.http.get(full.as_str()).timeout(ASK_TIMEOUT);
-            if let Some(token) = self.caller.caller_token(url, None) {
-                req = req.header("x-canopy-token", token);
-            }
+            let req = self.request(Method::GET, url, &full, Some(timeout));
             let res = match req.send().await {
                 Ok(r) => r,
                 Err(e) => {

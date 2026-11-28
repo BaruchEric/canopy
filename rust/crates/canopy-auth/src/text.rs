@@ -1,11 +1,8 @@
 //! Small string helpers that keep JavaScript's semantics where the TS relied
 //! on them.
 
-/// `String.prototype.trim`: JavaScript's whitespace and line terminators,
-/// which add U+FEFF to Unicode's White_Space and leave out U+0085.
-pub fn js_trim(s: &str) -> &str {
-    s.trim_matches(|c: char| (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}')
-}
+/// `String.prototype.trim` (canopy-core's, the one copy).
+pub use canopy_core::pathx::js_trim;
 
 /// `s.slice(0, n)`: the first `n` UTF-16 code units. A cut through a
 /// surrogate pair drops that character, since a Rust string cannot hold half

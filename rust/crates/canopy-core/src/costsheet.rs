@@ -36,11 +36,7 @@ pub fn tokens_word(n: f64) -> String {
     }
 }
 
-/// `Math.round()`: the nearer whole number, a half toward +∞.
-fn round(x: f64) -> f64 {
-    let f = x.floor();
-    if x - f >= 0.5 { f + 1.0 } else { f }
-}
+use crate::js::round;
 
 /// `usageWords()`: a line's usage in words, "12.3k tokens · 4.2 min".
 pub fn usage_words(tokens: f64, seconds: f64, fmt_tokens: impl Fn(f64) -> String) -> String {

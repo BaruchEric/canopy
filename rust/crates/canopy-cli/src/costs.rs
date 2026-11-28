@@ -25,37 +25,7 @@ use std::cell::Cell;
 pub const COSTS_USAGE: &str =
     "usage: canopy costs [--days 1|7|30] [--share] [--on NAME] [--backend URL]";
 
-/// render.ts's palette, on when stdout is a terminal and NO_COLOR is unset.
-#[derive(Debug, Clone, Copy)]
-struct Palette {
-    color: bool,
-}
-
-impl Palette {
-    fn wrap(&self, code: &str, s: &str) -> String {
-        if self.color {
-            format!("\x1b[{code}m{s}\x1b[0m")
-        } else {
-            s.to_string()
-        }
-    }
-
-    fn moss(&self, s: &str) -> String {
-        self.wrap("38;2;147;201;139", s)
-    }
-
-    fn rust(&self, s: &str) -> String {
-        self.wrap("38;2;201;123;95", s)
-    }
-
-    fn dim(&self, s: &str) -> String {
-        self.wrap("2", s)
-    }
-
-    fn bold(&self, s: &str) -> String {
-        self.wrap("1", s)
-    }
-}
+use crate::render::Paint as Palette;
 
 /// `daysOf()`: 1, 7 or 30 from --days, 7 unset, None for anything else.
 pub fn days_of(arg: Option<&str>) -> Option<usize> {

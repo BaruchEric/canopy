@@ -6,15 +6,11 @@
 //! timeout the TypeScript gives it, which ask.rs's trait does not take yet.
 
 use crate::api::Caller;
-use crate::ask::{
-    Ask, AskError, Client, Target, did_not_answer, every_target, fetch_words, is_origin,
-};
+use crate::ask::{Ask, Target, did_not_answer, every_target, is_origin};
 use canopy_core::js::{field, list_at, str_at};
 use canopy_core::pathx::resolve_from;
-use canopy_core::store::js_number;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use reqwest::{StatusCode, redirect};
 use serde_json::Value;
 use std::time::Duration;
 
@@ -130,24 +126,12 @@ pub(crate) async fn repo_id(
     }
 }
 
+#[cfg(test)]
 const MINUTE: f64 = 60_000.0;
+#[cfg(test)]
 const HOUR: f64 = 60.0 * MINUTE;
-const DAY: f64 = 24.0 * HOUR;
 
-/// `ageWord()`: "now", "5m", "2h", "3d". `Math.max(0, NaN)` is NaN, which
-/// falls through to days.
-pub(crate) fn age_word(ms: f64) -> String {
-    let age = if ms.is_nan() { ms } else { ms.max(0.0) };
-    if age < MINUTE {
-        "now".into()
-    } else if age < HOUR {
-        format!("{}m", js_number((age / MINUTE).floor()))
-    } else if age < DAY {
-        format!("{}h", js_number((age / HOUR).floor()))
-    } else {
-        format!("{}d", js_number((age / DAY).floor()))
-    }
-}
+pub(crate) use crate::worktrees::age_word;
 
 /// The verbs' `ago` for a unix-ms time: "3h ago", or "just now".
 pub(crate) fn ago_ms(now: f64, ms: f64) -> String {
@@ -316,10 +300,7 @@ pub(crate) fn started_line(run: &Value) -> String {
     )
 }
 
-/// `JSON.stringify(v, null, 2)`.
-pub(crate) fn pretty(v: &Value) -> String {
-    serde_json::to_string_pretty(v).unwrap_or_default()
-}
+pub(crate) use canopy_core::js::pretty;
 
 /// `existsSync(file)`, read against the CLI's folder. An empty name is
 /// never there.
@@ -337,129 +318,11 @@ pub(crate) fn write_page(cwd: &str, file: &str, text: &str) -> Result<(), String
     std::fs::write(&path, text).map_err(|e| e.to_string())
 }
 
-/// `askText(t, path, timeoutMs)`: a GET whose answer is text, with the
-/// timeout the TypeScript gives a page (a minute, two for an analysis).
-/// The shared trait's `ask_text` always waits its 8 seconds, so a fake
-/// answers through it and the real client through a private copy.
-pub(crate) trait AskText: Ask {
-    async fn ask_text_within(
-        &self,
-        t: &Target,
-        path: &str,
-        timeout: Duration,
-    ) -> Result<String, AskError> {
-        let _ = timeout;
-        self.ask_text(t, path).await
-    }
-}
-
-impl AskText for Client {
-    async fn ask_text_within(
-        &self,
-        t: &Target,
-        path: &str,
-        timeout: Duration,
-    ) -> Result<String, AskError> {
-        text_within(&self.caller, t, path, timeout).await
-    }
-}
-
-#[cfg(test)]
-impl<F> AskText for crate::ask::tests::Fake<F> where
-    F: Fn(&Target, &str, &str, Option<&Value>) -> Result<Value, AskError>
-{
-}
-
-/// `body.key` when the body is a JSON object and the key a string.
-fn string_in(body: Option<&Value>, key: &str) -> Option<String> {
-    body?.get(key)?.as_str().map(String::from)
-}
-
-/// A private copy of `Client::ask_text` in ask.rs with its timeout given:
-/// the same addresses, sign-in gates and refusals, on a client of its own.
-async fn text_within(
-    caller: &Caller,
-    t: &Target,
-    path: &str,
-    timeout: Duration,
-) -> Result<String, AskError> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let http = reqwest::Client::builder()
-        .redirect(redirect::Policy::none())
-        .build()
-        .map_err(|e| AskError::Denied(e.to_string()))?;
-    let mut tried: Vec<String> = Vec::new();
-    for url in &t.urls {
-        let full = format!("{url}{path}");
-        let mut req = http.get(full.as_str()).timeout(timeout);
-        if let Some(token) = caller.caller_token(url, None) {
-            req = req.header("x-canopy-token", token);
-        }
-        let res = match req.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tried.push(format!("{url}: {}", fetch_words(&e, &full)));
-                continue;
-            }
-        };
-        let status = res.status();
-        if status.is_redirection() {
-            tried.push(format!("{url}: needs a sign-in"));
-            continue;
-        }
-        let text = match res.text().await {
-            Ok(text) => text,
-            Err(e) => {
-                tried.push(format!("{url}: {}", fetch_words(&e, &full)));
-                continue;
-            }
-        };
-        let auth = status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN;
-        let auth_body: Option<Value> = if auth {
-            serde_json::from_str::<Value>(&text)
-                .ok()
-                .filter(Value::is_object)
-        } else {
-            None
-        };
-        if let Some(need) = string_in(auth_body.as_ref(), "need") {
-            return Err(AskError::Denied(
-                string_in(auth_body.as_ref(), "error")
-                    .unwrap_or_else(|| format!("{} refused: it needs the {need} right", t.name)),
-            ));
-        }
-        if status == StatusCode::UNAUTHORIZED {
-            tried.push(format!("{url}: needs a sign-in"));
-            continue;
-        }
-        if !status.is_success() {
-            let answered = format!("{} answered {}", t.name, status.as_u16());
-            if status == StatusCode::FORBIDDEN {
-                return Err(AskError::Denied(
-                    string_in(auth_body.as_ref(), "error").unwrap_or(answered),
-                ));
-            }
-            let parsed = serde_json::from_str::<Value>(&text).ok();
-            let error = string_in(parsed.as_ref(), "error").unwrap_or(text);
-            return Err(AskError::Denied(if error.is_empty() {
-                answered
-            } else {
-                error
-            }));
-        }
-        return Ok(text);
-    }
-    Err(AskError::Unreachable(if tried.is_empty() {
-        "no address".into()
-    } else {
-        tried.join("; ")
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ask::tests::{Fake, Stub};
+    use crate::ask::{AskError, Client};
     use serde_json::json;
 
     #[test]
@@ -636,15 +499,24 @@ mod tests {
         let t = Target::home(&stub.url);
         let long = Duration::from_secs(60);
         assert_eq!(
-            text_within(&caller, &t, "/page", long).await.unwrap(),
+            Client::new(caller.clone())
+                .ask_text_within(&t, "/page", long)
+                .await
+                .unwrap(),
             "<html>hi</html>"
         );
         assert_eq!(
-            text_within(&caller, &t, "/gone", long).await.unwrap_err(),
+            Client::new(caller.clone())
+                .ask_text_within(&t, "/gone", long)
+                .await
+                .unwrap_err(),
             AskError::Denied("there is no diagram x".into())
         );
         assert_eq!(
-            text_within(&caller, &t, "/x", long).await.unwrap_err(),
+            Client::new(caller.clone())
+                .ask_text_within(&t, "/x", long)
+                .await
+                .unwrap_err(),
             AskError::Denied("no".into())
         );
     }

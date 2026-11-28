@@ -42,6 +42,7 @@ mod out;
 mod people;
 mod plugins;
 mod prs;
+mod render;
 mod scenarios;
 mod sweep;
 mod understand;
@@ -55,10 +56,9 @@ use canopy_core::pathx::resolve;
 use canopy_core::scan::{DEFAULT_IGNORE, ScanOptions, scan};
 use canopy_core::stalecopy::newest_stale;
 use canopy_core::store::load_config;
-use canopy_core::treelines::{Seg, Tone, tree_lines};
+use canopy_core::treelines::tree_lines;
 use canopy_core::types::now_ms;
 use canopy_core::version::{canopy_dir, read_build, version_line};
-use std::io::IsTerminal;
 use std::process::{Command, ExitCode};
 
 /// The TypeScript CLI's verbs (`COMMANDS` in src/cli/index.ts). A first
@@ -355,23 +355,7 @@ fn plan(args: &[String]) -> Plan {
     }
 }
 
-/// The palette, as render.ts paints it.
-fn paint(seg: &Seg, color: bool) -> String {
-    let rgb = |r: u8, g: u8, b: u8| format!("\x1b[38;2;{r};{g};{b}m{}\x1b[0m", seg.text);
-    match (color, seg.tone) {
-        (false, _) | (true, None) => seg.text.clone(),
-        (true, Some(Tone::Moss)) => rgb(147, 201, 139),
-        (true, Some(Tone::Lichen)) => rgb(217, 179, 107),
-        (true, Some(Tone::Rust)) => rgb(201, 123, 95),
-        (true, Some(Tone::Sky)) => rgb(127, 180, 201),
-        (true, Some(Tone::Dim)) => format!("\x1b[2m{}\x1b[0m", seg.text),
-        (true, Some(Tone::Bold)) => format!("\x1b[1m{}\x1b[0m", seg.text),
-    }
-}
-
-fn use_color() -> bool {
-    std::io::stdout().is_terminal() && std::env::var("NO_COLOR").map_or(true, |v| v.is_empty())
-}
+use render::use_color;
 
 async fn tree(dir: &str, dirty_only: bool) -> Result<(), String> {
     let root = resolve(dir);
@@ -390,7 +374,11 @@ async fn tree(dir: &str, dirty_only: bool) -> Result<(), String> {
     let color = use_color();
     let text: Vec<String> = tree_lines(&result.root, &result.repos, dirty_only, now_ms())
         .iter()
-        .map(|line| line.iter().map(|s| paint(s, color)).collect())
+        .map(|line| {
+            line.iter()
+                .map(|s| render::Paint { color }.seg(s))
+                .collect()
+        })
         .collect();
     println!("{}", text.join("\n"));
     Ok(())
@@ -464,13 +452,7 @@ fn finish(r: Result<(), String>) -> ExitCode {
     match r {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            let red = std::io::stderr().is_terminal()
-                && std::env::var("NO_COLOR").map_or(true, |v| v.is_empty());
-            if red {
-                eprintln!("\x1b[0m\x1b[31m{e}\x1b[0m");
-            } else {
-                eprintln!("{e}");
-            }
+            render::say_err(&e);
             ExitCode::FAILURE
         }
     }

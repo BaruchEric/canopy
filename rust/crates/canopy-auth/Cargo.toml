@@ -9,6 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+canopy-core = { path = "../canopy-core" }
 base64 = "0.22.1"
 rand = "0.10.4"
 serde = { version = "1.0.229", features = ["derive"] }

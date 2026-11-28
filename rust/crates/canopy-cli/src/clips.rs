@@ -11,8 +11,8 @@
 
 use crate::api::Caller;
 use crate::ask::{
-    Ask, AskError, Target, backend_targets, encode_component, fetch_words, form_query, has,
-    is_origin, take,
+    Ask, AskError, Client, Target, backend_targets, encode_component, error_of, fetch_words,
+    form_query, has, is_origin, take,
 };
 use crate::out::Out;
 use canopy_core::clips::{
@@ -21,7 +21,7 @@ use canopy_core::clips::{
 };
 use canopy_core::js::{field, num_at, truthy};
 use canopy_core::pathx::{basename, pad_end, pad_start};
-use reqwest::{StatusCode, redirect};
+use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::io::IsTerminal;
@@ -289,30 +289,17 @@ pub(crate) trait ClipHost {
     async fn fetch_file(&self, t: &Target, id: &str) -> Result<Vec<u8>, String>;
 }
 
-/// The process's own terminal, stdin, environment and network.
+/// The process's own terminal, stdin, environment and network. A file's
+/// bytes go up and come down on the verbs' shared client.
 pub(crate) struct Real {
-    http: reqwest::Client,
-    caller: Caller,
+    client: Client,
 }
 
 impl Real {
     pub fn new(caller: Caller) -> Self {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let http = reqwest::Client::builder()
-            .redirect(redirect::Policy::none())
-            .build()
-            .expect("an HTTP client with rustls");
-        Real { http, caller }
-    }
-}
-
-/// `out.error` as `new Error(out.error ?? fallback)` reads it.
-fn error_of(out: &Value) -> Option<String> {
-    match out.get("error")? {
-        Value::Null => None,
-        Value::String(s) => Some(s.clone()),
-        Value::Array(_) | Value::Object(_) => Some("[object Object]".into()),
-        other => Some(canopy_core::js::template(Some(other))),
+        Real {
+            client: Client::new(caller),
+        }
     }
 }
 
@@ -360,15 +347,11 @@ impl ClipHost for Real {
     ) -> Result<Value, String> {
         let q = form_query(&[("name", name), ("source", "cli"), ("from", from)]);
         let url = format!("{home}/api/clips/file?{q}");
-        let mut req = self
-            .http
-            .post(url.as_str())
-            .timeout(FILE_TIMEOUT)
+        let req = self
+            .client
+            .request(Method::POST, home, &url, Some(FILE_TIMEOUT))
             .header("content-type", kind)
             .body(bytes.to_vec());
-        if let Some(token) = self.caller.caller_token(home, None) {
-            req = req.header("x-canopy-token", token);
-        }
         let res = req.send().await.map_err(|e| fetch_words(&e, &url))?;
         let status = res.status();
         let text = res.text().await.map_err(|e| fetch_words(&e, &url))?;
@@ -385,10 +368,9 @@ impl ClipHost for Real {
         let mut tried: Vec<String> = Vec::new();
         for url in &t.urls {
             let full = format!("{url}/api/clips/file?id={}", encode_component(id));
-            let mut req = self.http.get(full.as_str()).timeout(FILE_TIMEOUT);
-            if let Some(token) = self.caller.caller_token(url, None) {
-                req = req.header("x-canopy-token", token);
-            }
+            let req = self
+                .client
+                .request(Method::GET, url, &full, Some(FILE_TIMEOUT));
             let res = match req.send().await {
                 Ok(r) => r,
                 Err(e) => {
@@ -421,25 +403,7 @@ fn failed(e: AskError) -> String {
 /// JavaScript's `Number(s)` for `-n`: a whole number, or None when it is
 /// anything else (NaN, a fraction, Infinity).
 fn whole_number(s: &str) -> Option<f64> {
-    let t = canopy_core::pathx::js_trim(s);
-    if t.is_empty() {
-        return Some(0.0);
-    }
-    let n = if let Some(h) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
-        u64::from_str_radix(h, 16).ok().map(|n| n as f64)
-    } else if let Some(o) = t.strip_prefix("0o").or_else(|| t.strip_prefix("0O")) {
-        u64::from_str_radix(o, 8).ok().map(|n| n as f64)
-    } else if let Some(b) = t.strip_prefix("0b").or_else(|| t.strip_prefix("0B")) {
-        u64::from_str_radix(b, 2).ok().map(|n| n as f64)
-    } else if t
-        .bytes()
-        .all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E'))
-    {
-        t.parse::<f64>().ok()
-    } else {
-        None
-    };
-    n.filter(|n| n.is_finite() && n.fract() == 0.0)
+    Some(canopy_core::js::number_of(s)).filter(|n| n.is_finite() && n.fract() == 0.0)
 }
 
 /// `clipCommand()`. A file's bytes printed to stdout go to `raw`, which

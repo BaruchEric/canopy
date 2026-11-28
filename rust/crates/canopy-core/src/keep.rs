@@ -40,14 +40,7 @@ fn is_term_id(v: &str) -> bool {
     v.len() == 32 && v.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// A number as JavaScript prints it: whole ones without a fraction.
-fn js_num(n: f64) -> Value {
-    if n.fract() == 0.0 && n.abs() < 9.0e15 {
-        json!(n as i64)
-    } else {
-        json!(n)
-    }
-}
+use crate::js::num as js_num;
 
 /// One record read back, or None for one that does not check out. The
 /// fields stay JSON in the TS's key order; `savedAt` is kept beside it for

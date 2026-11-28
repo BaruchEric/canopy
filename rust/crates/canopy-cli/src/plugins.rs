@@ -11,7 +11,6 @@ use crate::capacity::js_number_of;
 use crate::out::Out;
 use canopy_core::js::{field, list_at, str_at, template, truthy, truthy_at};
 use canopy_core::pathx::js_trim_end;
-use canopy_core::store::js_number;
 use serde_json::{Map, Value, json};
 
 /// `PLUGINS_USAGE`.
@@ -43,25 +42,7 @@ fn op_text(op: Option<&Value>, what: &str) -> String {
     }
 }
 
-/// `Object.keys()`: keys that read as array indexes first, by number, then
-/// the rest in the order the JSON gave them.
-fn js_keys(o: Option<&Value>) -> Vec<&String> {
-    let Some(map) = o.and_then(Value::as_object) else {
-        return vec![];
-    };
-    let index = |k: &str| -> Option<u32> {
-        let n: u32 = k.parse().ok()?;
-        (n < u32::MAX && n.to_string() == k).then_some(n)
-    };
-    let mut indexed: Vec<(u32, &String)> = map
-        .keys()
-        .filter_map(|k| index(k).map(|n| (n, k)))
-        .collect();
-    indexed.sort_by_key(|(n, _)| *n);
-    let mut keys: Vec<&String> = indexed.into_iter().map(|(_, k)| k).collect();
-    keys.extend(map.keys().filter(|k| index(k).is_none()));
-    keys
-}
+use canopy_core::js::keys as js_keys;
 
 /// `pluginLines()`: a machine's plugins as lines, the machine, then a line
 /// per plugin installed or turned on in settings.json.
@@ -160,25 +141,7 @@ pub fn plugin_lines(m: &Value, agent: Option<&str>) -> Vec<String> {
     out
 }
 
-/// `String(n)`: JavaScript's shortest form, with an exponent past 1e21
-/// and under 1e-6.
-fn js_string(n: f64) -> String {
-    if n.is_nan() {
-        return "NaN".into();
-    }
-    if n.is_infinite() {
-        return if n > 0.0 { "Infinity" } else { "-Infinity" }.into();
-    }
-    if n != 0.0 && (n.abs() >= 1e21 || n.abs() < 1e-6) {
-        let e = format!("{n:e}");
-        return match e.split_once('e') {
-            Some((m, x)) if !x.starts_with('-') => format!("{m}e+{x}"),
-            Some((m, x)) => format!("{m}e{x}"),
-            None => e,
-        };
-    }
-    js_number(n)
-}
+use canopy_core::js::number_string as js_string;
 
 /// `catalogLines()`: a search's entries, then the count.
 pub fn catalog_lines(c: &Value) -> Vec<String> {

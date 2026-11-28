@@ -1,34 +1,71 @@
-//! People, roles and teams (`src/core/people.ts`), the parts `canopy
-//! people` reads: the roles and their words, and finding a person or a team
-//! by id or by name in a roster as the API sends it (a people file's
-//! shape: `owner`, `people`, `teams`). The roles and rights the gate needs
-//! are canopy-auth's `people.rs` (a typed `Role`; the CLI does not depend
-//! on that crate, so the role names are kept here as strings too). The
-//! rules on who may change whom, the invites and the activity log stay in
-//! the TypeScript.
+//! People, roles and teams (`src/core/people.ts`): the roles, the one copy
+//! every crate uses (canopy-auth adds what each role may do), their words,
+//! and finding a person or a team by id or by name in a roster as the API
+//! sends it (a people file's shape: `owner`, `people`, `teams`). The rules
+//! on who may change whom, the invites and the activity log are the
+//! server's (canopy-server's `people.rs` for the reads).
 
 use crate::pathx::js_trim;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::fmt;
 
-/// `ROLES`.
-pub const ROLES: &[&str] = &["owner", "admin", "member", "viewer"];
+/// `Role`: what a person may do, from all of it to reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Owner,
+    Admin,
+    Member,
+    Viewer,
+}
 
-/// `OWNER_ID`: the built-in person.
-pub const OWNER_ID: &str = "owner";
+/// `ROLES`, in that order.
+pub const ROLES: [Role; 4] = [Role::Owner, Role::Admin, Role::Member, Role::Viewer];
 
-/// `ROLE_WORDS`: what each role is, in a line.
-pub fn role_words(role: &str) -> &'static str {
-    match role {
-        "owner" => "everything, and the only one who makes or changes an owner",
-        "admin" => "everything but changing an owner: people, sources, the kit, secrets",
-        "member" => "runs, chats, shells and commits; no settings, people or secrets",
-        _ => "reads the board; starts and changes nothing",
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Owner => "owner",
+            Role::Admin => "admin",
+            Role::Member => "member",
+            Role::Viewer => "viewer",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Role> {
+        ROLES.into_iter().find(|r| r.as_str() == s)
+    }
+
+    /// `ROLE_WORDS[role]`: what the role is, in a line.
+    pub fn words(self) -> &'static str {
+        match self {
+            Role::Owner => "everything, and the only one who makes or changes an owner",
+            Role::Admin => "everything but changing an owner: people, sources, the kit, secrets",
+            Role::Member => "runs, chats, shells and commits; no settings, people or secrets",
+            Role::Viewer => "reads the board; starts and changes nothing",
+        }
     }
 }
 
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// `OWNER_ID`: the built-in person, never in the file's list, never
+/// removed or demoted.
+pub const OWNER_ID: &str = "owner";
+
 /// `isRole()`.
 pub fn is_role(v: &str) -> bool {
-    ROLES.contains(&v)
+    Role::parse(v).is_some()
+}
+
+/// The role names joined, as `ROLES.join(sep)` prints them.
+pub fn role_names(sep: &str) -> String {
+    ROLES.map(Role::as_str).join(sep)
 }
 
 /// `a.toLowerCase() === b.toLowerCase()`.
@@ -128,7 +165,7 @@ mod tests {
         assert!(is_role("viewer"));
         assert!(!is_role("boss"));
         assert_eq!(
-            role_words("viewer"),
+            Role::Viewer.words(),
             "reads the board; starts and changes nothing"
         );
     }

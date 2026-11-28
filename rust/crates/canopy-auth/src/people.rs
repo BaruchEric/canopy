@@ -1,48 +1,14 @@
-//! The slice of `src/core/people.ts` the gate needs: roles, what each holds,
-//! the owner's id and an invite code's shape. A caller's rights are its
-//! kind's and its person's role's, both (FR-074).
-
-use std::fmt;
+//! The slice of `src/core/people.ts` the gate needs: what each role holds
+//! and an invite code's shape. The roles themselves and the owner's id are
+//! canopy-core's (`canopy_core::people`), one copy for every crate. A
+//! caller's rights are its kind's and its person's role's, both (FR-074).
 
 use serde::{Deserialize, Serialize};
 
 use crate::rights::{CallerKind, Need, Right, allows};
 use crate::text::js_trim;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    Owner,
-    Admin,
-    Member,
-    Viewer,
-}
-
-pub const ROLES: [Role; 4] = [Role::Owner, Role::Admin, Role::Member, Role::Viewer];
-
-impl Role {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Role::Owner => "owner",
-            Role::Admin => "admin",
-            Role::Member => "member",
-            Role::Viewer => "viewer",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Role> {
-        ROLES.into_iter().find(|r| r.as_str() == s)
-    }
-}
-
-impl fmt::Display for Role {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// The built-in person: never in the file's list, never removed or demoted.
-pub const OWNER_ID: &str = "owner";
+pub use canopy_core::people::{OWNER_ID, ROLES, Role};
 
 /// What a role may hold. A member works and changes nothing about the
 /// backend; a viewer reads the board.
